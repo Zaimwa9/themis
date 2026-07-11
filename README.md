@@ -190,6 +190,19 @@ bot already posted in are answered automatically, no mention needed.
 - [`docs/configuration.md`](docs/configuration.md): the full env and `.themis/config.yaml` reference.
 - [`docs/security.md`](docs/security.md): the trust model and bot-side guardrails.
 
+## Developing
+
+Working on Themis itself needs [uv](https://docs.astral.sh/uv/) and Python 3.12, no Docker:
+
+```bash
+uv sync --locked        # install deps into .venv
+uv run pytest           # run the test suite
+uv run ruff check .     # lint
+uv run python -m themis # run the server locally (reads THEMIS_* from the environment)
+```
+
+CI runs the same pytest and ruff commands on every push and pull request.
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
