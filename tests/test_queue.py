@@ -37,7 +37,6 @@ async def test_duplicate_id_rejected_while_active():
     release.set()
     await asyncio.sleep(0.05)
     assert queue.enqueue("review:a/b#1", job) is True   # finished: accepted
-    release.set()
     await queue.stop()
 
 

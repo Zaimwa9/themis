@@ -50,6 +50,7 @@ def test_make_app_jwt__valid_key__contains_expected_claims(rsa_pem: str):
 
 async def test_get_installation_token__created__returns_token():
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "api.github.com"
         assert request.url.path == "/app/installations/42/access_tokens"
         assert request.headers["Authorization"] == "Bearer app-jwt"
         return httpx.Response(201, json={"token": "ghs_abc"})
@@ -69,7 +70,6 @@ async def test_get_installation_token__unauthorized__raises():
             await get_installation_token(client, installation_id=42, app_jwt="app-jwt")
 
 
-@pytest.mark.asyncio
 async def test_get_app_slug():
     def handler(request):
         assert request.url.path == "/app"
@@ -81,7 +81,6 @@ async def test_get_app_slug():
     assert slug == "my-reviewer"
 
 
-@pytest.mark.asyncio
 async def test_get_repo_installation_id():
     def handler(request):
         assert request.url.path == "/repos/acme/widgets/installation"
@@ -94,7 +93,6 @@ async def test_get_repo_installation_id():
     assert installation_id == 42
 
 
-@pytest.mark.asyncio
 async def test_get_repo_installation_id_not_installed():
     def handler(request):
         return httpx.Response(404, json={"message": "Not Found"})
@@ -106,7 +104,6 @@ async def test_get_repo_installation_id_not_installed():
     assert installation_id is None
 
 
-@pytest.mark.asyncio
 async def test_update_webhook_url():
     seen = {}
 

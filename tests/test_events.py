@@ -4,12 +4,12 @@ MENTION = "@test-reviewer"
 REPO = "acme/widgets"
 
 
-def _pr_payload(action: str = "opened", draft: bool = False, repo: str = REPO) -> dict:
+def _pr_payload(action: str = "opened", draft: bool = False) -> dict:
     return {
         "action": action,
         "installation": {"id": 42},
         "sender": {"type": "User"},
-        "repository": {"full_name": repo},
+        "repository": {"full_name": REPO},
         "pull_request": {"number": 7, "draft": draft},
     }
 
