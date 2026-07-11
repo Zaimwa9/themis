@@ -1,0 +1,23 @@
+services:
+  themis:
+    build: .
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - codex-home:/data/codex
+    restart: unless-stopped
+
+  # Local story: `docker compose --profile tunnel up -d`.
+  # Set THEMIS_TUNNEL_API=http://ngrok:4040 in .env so Themis discovers the
+  # public URL and registers the GitHub webhook itself.
+  ngrok:
+    image: ngrok/ngrok:3
+    profiles: ["tunnel"]
+    command: ["http", "themis:8000"]
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    restart: unless-stopped
+
+volumes:
+  codex-home:
