@@ -234,3 +234,18 @@ def test_available__auth_json_missing__false(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "nowhere"))
 
     assert CodexEngine().available() is False
+
+
+async def test_run_codex__error_tail__redacts_env_secrets(tmp_path, monkeypatch, workspace):
+    # A hostile prompt can steer the agent into echoing its secrets; the
+    # error tail lands in logs and tracebacks, so it is redacted at source.
+    monkeypatch.setenv("THEMIS_API_TOKEN", "api-token-value")
+    _fake_cli(tmp_path, monkeypatch, 'echo "leak api-token-value"; exit 3')
+
+    with pytest.raises(EngineError) as excinfo:
+        await run_codex(
+            prompt="p", workspace=workspace, model="gpt-5.4", effort="high", timeout=10
+        )
+
+    assert "api-token-value" not in str(excinfo.value)
+    assert "[redacted]" in str(excinfo.value)

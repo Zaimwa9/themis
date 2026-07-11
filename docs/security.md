@@ -51,10 +51,11 @@ Themis posts to GitHub (findings, summaries, replies, status comments)
 passes through an outbound redaction step that removes exact values of
 instance secrets and credential-shaped strings (`sk-ant-*`,
 `gho_/ghp_/ghs_/ghu_*`, `github_pat_*`, JWTs) before leaving the instance.
-The diagnostic output tail logged when the agent's result files can't be
-parsed is redacted the same way; other warning and error logs that embed
-raw agent output (a failed attempt's exit message, the job-failure
-traceback) are not, so treat worker logs as sensitive too.
+Agent output tails are redacted at source: the diagnostic tail logged when
+the agent's result files can't be parsed, and the tails embedded in engine
+error messages (failed attempts, job-failure tracebacks), all pass through
+the same redaction before they can reach a log line. Treat worker logs as
+sensitive anyway; redaction is a backstop, not a license to ship logs.
 
 ## Webhook verification
 
