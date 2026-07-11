@@ -217,3 +217,26 @@ def test_slug_resolution_failure_fails_startup(monkeypatch):
     with pytest.raises(httpx.HTTPStatusError):
         with TestClient(create_app(make_settings())):
             pass
+
+
+# --- default engine availability ---------------------------------------------
+
+
+def test_startup__default_engine_unavailable__warns(quiet_github, caplog, tmp_path):
+    quiet_github.setenv("CODEX_HOME", str(tmp_path / "nonexistent-codex-home"))
+    with caplog.at_level(logging.WARNING, logger="themis.app"):
+        with TestClient(create_app(make_settings())):
+            pass
+    assert "themis_default_engine_unavailable" in caplog.text
+
+
+def test_startup__started_log_includes_engine(quiet_github, caplog, tmp_path):
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "auth.json").write_text("{}")
+    quiet_github.setenv("CODEX_HOME", str(home))
+    with caplog.at_level(logging.INFO, logger="themis.app"):
+        with TestClient(create_app(make_settings())):
+            pass
+    assert "engine=codex" in caplog.text
+    assert "themis_default_engine_unavailable" not in caplog.text

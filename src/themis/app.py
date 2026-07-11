@@ -9,6 +9,7 @@ import httpx
 from fastapi import FastAPI
 
 from themis.config import Settings, load_settings
+from themis.engines import resolve
 from themis.github.auth import get_app_slug, make_app_jwt, update_webhook_url
 from themis.queue import InMemoryJobQueue
 from themis.router import create_router
@@ -73,9 +74,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             slug = await get_app_slug(client, app_jwt)
         app.state.bot_slug = slug
         logger.info(
-            "themis_started slug=%s mention=@%s webhook_enabled=%s api_enabled=%s",
-            slug, slug, settings.webhook_enabled, bool(settings.api_token),
+            "themis_started slug=%s mention=@%s engine=%s webhook_enabled=%s api_enabled=%s",
+            slug, slug, settings.engine, settings.webhook_enabled, bool(settings.api_token),
         )
+        if not resolve(settings.engine, codex_sandbox=settings.codex_sandbox).available():
+            # Not fatal: per-repo overrides or a later-mounted volume may make it work.
+            logger.warning("themis_default_engine_unavailable engine=%s", settings.engine)
         await _register_webhook(settings, app_jwt)
         queue.start()
         yield
