@@ -1,0 +1,160 @@
+"""Themis configuration: env for identity/infrastructure, .themis/ for behavior."""
+
+import base64
+import logging
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, ValidationError
+
+logger = logging.getLogger(__name__)
+
+# Codex --sandbox modes. workspace-write needs kernel namespace support
+# (Landlock/bubblewrap); container runtimes without it need danger-full-access,
+# where the container itself is the isolation boundary.
+VALID_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
+
+REPO_CONFIG_PATH = ".themis/config.yaml"
+
+
+class SettingsError(Exception):
+    """Missing or invalid instance configuration; fail fast at startup."""
+
+
+# --- per-repo behavior (.themis/config.yaml in the target repo) -------------
+
+
+class ModelConfig(BaseModel):
+    name: str = "gpt-5.4"
+    reasoning_effort: str = "high"
+
+
+class LimitsConfig(BaseModel):
+    timeout_seconds: int = 1200
+    max_attempts: int = 2
+    clone_depth: int = 50
+
+
+class TriggersConfig(BaseModel):
+    auto_review: bool = True
+
+
+class RepoConfig(BaseModel):
+    model: ModelConfig = ModelConfig()
+    limits: LimitsConfig = LimitsConfig()
+    triggers: TriggersConfig = TriggersConfig()
+
+
+def parse_repo_config(text: str | None) -> RepoConfig:
+    """RepoConfig from .themis/config.yaml text; full defaults when the file
+    is absent, empty, or malformed. A broken yaml in a target repo must never
+    kill reviews. Partial files deep-merge per key (pydantic nested defaults).
+    """
+    if text is None:
+        return RepoConfig()
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        logger.warning("themis_repo_config_invalid error=%s", str(error)[:200])
+        return RepoConfig()
+    if data is None:
+        return RepoConfig()
+    if not isinstance(data, dict):
+        logger.warning("themis_repo_config_invalid error=not a mapping")
+        return RepoConfig()
+    try:
+        return RepoConfig(**data)
+    except (ValidationError, TypeError) as error:
+        logger.warning("themis_repo_config_invalid error=%s", str(error)[:200])
+        return RepoConfig()
+
+
+# --- instance settings (env) -------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Settings:
+    gh_app_client_id: str
+    gh_app_private_key_pem: str = field(repr=False)
+    gh_webhook_secret: str | None = field(repr=False)
+    webhook_enabled: bool
+    api_token: str | None = field(repr=False)
+    repos: frozenset[str] | None
+    codex_sandbox: str
+    workspace_root: Path
+    public_url: str | None
+    tunnel_api: str | None
+
+    def repo_allowed(self, repo: str) -> bool:
+        return self.repos is None or repo in self.repos
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _decode_private_key(raw: str) -> str:
+    if raw.lstrip().startswith("-----BEGIN"):
+        return raw
+    try:
+        return base64.b64decode(raw, validate=True).decode()
+    except (ValueError, UnicodeDecodeError) as error:
+        raise SettingsError(
+            "THEMIS_GH_APP_PRIVATE_KEY is neither PEM nor valid base64"
+        ) from error
+
+
+def load_settings() -> Settings:
+    missing = [
+        name
+        for name in ("THEMIS_GH_APP_CLIENT_ID", "THEMIS_GH_APP_PRIVATE_KEY")
+        if not os.getenv(name)
+    ]
+    if missing:
+        raise SettingsError(f"missing required environment variables: {', '.join(missing)}")
+
+    webhook_enabled = _env_bool("THEMIS_WEBHOOK_ENABLED", True)
+    webhook_secret = os.getenv("THEMIS_GH_WEBHOOK_SECRET") or None
+    api_token = os.getenv("THEMIS_API_TOKEN") or None
+    if webhook_enabled and not webhook_secret:
+        raise SettingsError(
+            "THEMIS_GH_WEBHOOK_SECRET is required while the webhook is enabled "
+            "(set THEMIS_WEBHOOK_ENABLED=false for headless mode)"
+        )
+    if not webhook_enabled and not api_token:
+        raise SettingsError(
+            "no entrypoint configured: webhook disabled and THEMIS_API_TOKEN unset"
+        )
+
+    sandbox = os.getenv("THEMIS_CODEX_SANDBOX") or "workspace-write"
+    if sandbox not in VALID_SANDBOXES:
+        raise SettingsError(
+            f"invalid codex sandbox {sandbox!r}; expected one of {VALID_SANDBOXES}"
+        )
+
+    repos_raw = os.getenv("THEMIS_REPOS", "")
+    repos = (
+        frozenset(part.strip() for part in repos_raw.split(",") if part.strip()) or None
+        if repos_raw.strip()
+        else None
+    )
+
+    public_url = (os.getenv("THEMIS_PUBLIC_URL") or "").rstrip("/") or None
+
+    return Settings(
+        gh_app_client_id=os.environ["THEMIS_GH_APP_CLIENT_ID"],
+        gh_app_private_key_pem=_decode_private_key(os.environ["THEMIS_GH_APP_PRIVATE_KEY"]),
+        gh_webhook_secret=webhook_secret,
+        webhook_enabled=webhook_enabled,
+        api_token=api_token,
+        repos=repos,
+        codex_sandbox=sandbox,
+        workspace_root=Path(os.getenv("THEMIS_WORKSPACE_ROOT") or "/tmp/themis"),
+        public_url=public_url,
+        tunnel_api=os.getenv("THEMIS_TUNNEL_API") or None,
+    )
