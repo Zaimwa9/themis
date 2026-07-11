@@ -1,0 +1,11 @@
+# Themis per-repo config. Every key is optional; these are the defaults.
+# Drop this directory into your repo root as `.themis/`.
+model:
+  name: gpt-5.4
+  reasoning_effort: high   # low | medium | high
+limits:
+  timeout_seconds: 1200    # per codex attempt
+  max_attempts: 2
+  clone_depth: 50
+triggers:
+  auto_review: true        # false = review only when mentioned
