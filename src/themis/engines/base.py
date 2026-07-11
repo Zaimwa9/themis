@@ -7,6 +7,8 @@ import signal
 from pathlib import Path
 from typing import Protocol
 
+from themis.security import redact_outbound
+
 
 class EngineError(Exception):
     """Agent attempt failed; the caller may retry."""
@@ -89,8 +91,14 @@ async def run_cli(
     output = output_bytes.decode(errors="replace")
     if process.returncode != 0:
         # Only the tail is diagnostic; earlier output may echo the prompt/diff.
+        # Redact at source: these messages end up in logs and tracebacks, and
+        # a hostile prompt can steer the agent into echoing its own secrets.
         lowered = output[-2000:].lower()
         if any(marker in lowered for marker in quota_markers):
-            raise EngineQuotaError(f"{name} usage limit reached: {output[-500:]}")
-        raise EngineError(f"{name} exited {process.returncode}: {output[-2000:]}")
+            raise EngineQuotaError(
+                f"{name} usage limit reached: {redact_outbound(output[-500:])}"
+            )
+        raise EngineError(
+            f"{name} exited {process.returncode}: {redact_outbound(output[-2000:])}"
+        )
     return output
