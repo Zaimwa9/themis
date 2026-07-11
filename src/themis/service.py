@@ -12,13 +12,13 @@ from typing import Any, TypeVar
 
 import httpx
 
-from themis.codex import CodexError, CodexQuotaError, run_codex
 from themis.config import (
     REPO_CONFIG_PATH,
     RepoConfig,
     Settings,
     parse_repo_config,
 )
+from themis.engines import Engine, EngineError, EngineQuotaError, resolve
 from themis.github.auth import get_installation_token, make_app_jwt
 from themis.github.client import GitHubClient, GitHubGraphQLError
 from themis.output import (
@@ -30,6 +30,7 @@ from themis.output import (
     parse_reply,
 )
 from themis.prompts import build_discussion_prompt, build_review_prompt
+from themis.security import redact_outbound
 from themis.workspace import (
     clone_url_for,
     prepare_workspace,
@@ -44,8 +45,10 @@ INPUT_DIR = ".review-input"
 
 T = TypeVar("T")
 
+DEFAULT_MODELS = {"codex": "gpt-5.4", "claude": "claude-opus-4-6[1m]"}
+
 QUOTA_COMMENT = (
-    "Codex subscription usage limit reached, {noun} skipped. "
+    "{engine_title} subscription usage limit reached, {noun} skipped. "
     "Mention me with `review` later to retry."
 )
 FAILURE_COMMENT = (
@@ -55,11 +58,20 @@ CANCELLED_COMMENT = (
     "Review was cancelled before completing (worker timeout or shutdown). "
     "Mention {mention} with `review` to retry."
 )
+ENGINE_UNAVAILABLE_COMMENT = (
+    "This Themis instance has no {engine} credentials configured ({hint}), "
+    "so the {noun} was skipped. Configure it or set a different `engine` in "
+    "`.themis/config.yaml`."
+)
+_ENGINE_AUTH_HINTS = {
+    "codex": "auth.json in CODEX_HOME",
+    "claude": "CLAUDE_CODE_OAUTH_TOKEN",
+}
 
-# One codex run at a time so reviews never monopolize the shared worker.
-# Note: this bounds codex runs per worker process only; running several worker
-# processes yields one concurrent codex run per process.
-_codex_slot = asyncio.Semaphore(1)
+# One agent run at a time so reviews never monopolize the shared worker.
+# Note: this bounds agent runs per worker process only; running several worker
+# processes yields one concurrent agent run per process.
+_agent_slot = asyncio.Semaphore(1)
 
 
 async def api_changed_paths(gh: Any, repo: str, pr_number: int) -> set[str] | None:
@@ -93,7 +105,7 @@ class ReviewService:
     make_client: Callable[[str], Any]
     prepare: Callable[..., Awaitable[Path]]
     cleanup: Callable[[Path], None]
-    agent: Callable[..., Awaitable[str]]
+    resolve_engine: Callable[[str], Engine]
     changed_paths: Callable[..., Awaitable[set[str] | None]] = api_changed_paths
     head_sha: Callable[[Path], Awaitable[str | None]] = git_head_sha
 
@@ -109,6 +121,26 @@ class ReviewService:
             text = None
         return parse_repo_config(text)
 
+    def _engine_for(self, repo_config: RepoConfig) -> Engine:
+        return self.resolve_engine(repo_config.engine or self.settings.engine)
+
+    async def _ensure_engine_available(
+        self, engine: Engine, installation_id: int, repo: str, pr_number: int, noun: str
+    ) -> bool:
+        if engine.available():
+            return True
+        logger.warning(
+            "themis_engine_unavailable engine=%s repo=%s pr=%s",
+            engine.name, repo, pr_number,
+        )
+        await self._post_courtesy_comment(
+            installation_id, repo, pr_number,
+            ENGINE_UNAVAILABLE_COMMENT.format(
+                engine=engine.name, hint=_ENGINE_AUTH_HINTS[engine.name], noun=noun
+            ),
+        )
+        return False
+
     async def review(
         self, repo: str, pr_number: int, installation_id: int, auto: bool
     ) -> None:
@@ -122,6 +154,11 @@ class ReviewService:
             repo_config = await self._fetch_repo_config(gh, repo)
             if auto and not repo_config.triggers.auto_review:
                 logger.info("themis_auto_review_disabled repo=%s pr=%s", repo, pr_number)
+                return
+            engine = self._engine_for(repo_config)
+            if not await self._ensure_engine_available(
+                engine, installation_id, repo, pr_number, "review"
+            ):
                 return
             # 👀 on the trigger = queued (router); 🚀 on the PR = job running.
             try:
@@ -143,7 +180,7 @@ class ReviewService:
                 _write_inputs(workspace, pr, threads)
                 prompt = build_review_prompt(repo, pr_number, pr["base"]["ref"])
                 actions = await self._attempt(
-                    repo, pr_number, installation_id, workspace, repo_config, prompt,
+                    repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
                     parse_output, noun="review",
                 )
                 if actions is None:
@@ -205,6 +242,11 @@ class ReviewService:
                 reply_anchor = thread["comments"]["nodes"][0]["databaseId"]
             pr = await gh.get_pr(repo, pr_number)
             repo_config = await self._fetch_repo_config(gh, repo)
+            engine = self._engine_for(repo_config)
+            if not await self._ensure_engine_available(
+                engine, installation_id, repo, pr_number, "reply"
+            ):
+                return
             workspace = await self.prepare(
                 root=self.settings.workspace_root,
                 clone_url=clone_url_for(repo, token),
@@ -220,11 +262,12 @@ class ReviewService:
                     thread_context=json.dumps(thread, indent=2) if thread else "",
                 )
                 reply = await self._attempt(
-                    repo, pr_number, installation_id, workspace, repo_config, prompt,
+                    repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
                     parse_reply, noun="reply",
                 )
                 if reply is None:
                     return
+                reply = redact_outbound(reply)
                 # Codex runs can outlive the 60-min installation token; post with
                 # a fresh one.
                 post_gh = self.make_client(await self.get_token(installation_id))
@@ -245,43 +288,45 @@ class ReviewService:
         installation_id: int,
         workspace: Path,
         repo_config: RepoConfig,
+        engine: Engine,
         prompt: str,
         parser: Callable[[Path], T],
         noun: str,
     ) -> T | None:
-        """Run codex + parse, with retries. Returns None when the quota is exhausted."""
-        last_error: Exception = CodexError("no attempts ran")
+        """Run the engine + parse, with retries. Returns None when the quota is exhausted."""
+        last_error: Exception = EngineError("no attempts ran")
         for attempt in range(1, repo_config.limits.max_attempts + 1):
             output_dir = workspace / OUTPUT_DIR
             if output_dir.exists():
                 shutil.rmtree(output_dir)
             try:
-                async with _codex_slot:
-                    codex_output = await self.agent(
+                async with _agent_slot:
+                    agent_output = await engine.run(
                         prompt=prompt,
                         workspace=workspace,
-                        model=repo_config.model.name,
+                        model=repo_config.model.name or DEFAULT_MODELS[engine.name],
                         effort=repo_config.model.reasoning_effort,
                         timeout=repo_config.limits.timeout_seconds,
-                        sandbox=self.settings.codex_sandbox,
+                        web_access=repo_config.web_access,
                     )
                 try:
                     return parser(workspace)
                 except OutputError:
-                    # codex exited 0 but its files are missing/invalid; its
+                    # the agent exited 0 but its files are missing/invalid; its
                     # stdout is the only clue to why.
                     logger.warning(
-                        "themis_codex_output_tail repo=%s pr=%s tail=%s",
-                        repo, pr_number, str(codex_output)[-1000:],
+                        "themis_agent_output_tail repo=%s pr=%s tail=%s",
+                        repo, pr_number, redact_outbound(str(agent_output)[-1000:]),
                     )
                     raise
-            except CodexQuotaError:
+            except EngineQuotaError:
                 logger.warning("themis_quota_reached repo=%s pr=%s", repo, pr_number)
                 await self._post_courtesy_comment(
-                    installation_id, repo, pr_number, QUOTA_COMMENT.format(noun=noun)
+                    installation_id, repo, pr_number,
+                    QUOTA_COMMENT.format(engine_title=engine.name.capitalize(), noun=noun),
                 )
                 return None
-            except (CodexError, OutputError) as error:
+            except (EngineError, OutputError) as error:
                 last_error = error
                 logger.warning(
                     "themis_attempt_failed repo=%s pr=%s attempt=%d error=%s",
@@ -306,6 +351,7 @@ class ReviewService:
         the original client is likely dead. A failed courtesy comment must never
         mask the real outcome (quota returns None; failure re-raises last_error).
         """
+        body = redact_outbound(body)
         try:
             gh = self.make_client(await self.get_token(installation_id))
             async with gh:
@@ -342,6 +388,11 @@ class ReviewService:
     async def _post_review_results(
         self, gh: Any, repo: str, pr_number: int, commit_sha: str, actions: ReviewActions
     ) -> None:
+        actions.summary = redact_outbound(actions.summary)
+        for finding in actions.findings:
+            finding["body"] = redact_outbound(finding["body"])
+        for reply in actions.replies:
+            reply["body"] = redact_outbound(reply["body"])
         summary = actions.summary
         if actions.findings:
             try:
@@ -495,7 +546,7 @@ def build_service(settings: Settings, bot_slug: str) -> ReviewService:
         make_client=GitHubClient,
         prepare=prepare_workspace,
         cleanup=remove_workspace,
-        agent=run_codex,
+        resolve_engine=lambda name: resolve(name, codex_sandbox=settings.codex_sandbox),
     )
 
 

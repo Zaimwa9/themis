@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from themis.codex import CodexError, CodexQuotaError
 from themis.config import Settings
+from themis.engines import EngineError, EngineQuotaError
 from themis.github.client import GitHubGraphQLError
 from themis.service import (
     ReviewService,
@@ -19,6 +19,28 @@ from themis.service import (
 from themis.output import MAX_BODY_LEN, OUTPUT_DIR, OutputError
 
 pytestmark = pytest.mark.asyncio
+
+
+class FakeEngine:
+    def __init__(self, run_fn, available: bool = True, name: str = "codex"):
+        self.name = name
+        self._run_fn = run_fn
+        self._available = available
+
+    def available(self) -> bool:
+        return self._available
+
+    async def run(self, **kwargs) -> str:
+        return await self._run_fn(**kwargs)
+
+
+def _resolver(run_fn, available: bool = True, seen: list | None = None):
+    def resolve_engine(name: str):
+        if seen is not None:
+            seen.append(name)
+        return FakeEngine(run_fn, available=available, name=name)
+    return resolve_engine
+
 
 REPO = "acme/widgets"
 BOT_LOGIN = "test-reviewer[bot]"
@@ -62,7 +84,7 @@ def cleanup_calls() -> list[Path]:
 
 
 def _review_agent():
-    async def agent(*, prompt, workspace, model, effort, timeout, sandbox) -> str:
+    async def agent(*, prompt, workspace, model, effort, timeout, web_access) -> str:
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
         (out / "summary.md").write_text("#### AI Review\nfine")
@@ -76,7 +98,7 @@ def _review_agent():
 
 
 def _reply_agent(text: str = "here is the answer"):
-    async def agent(*, prompt, workspace, model, effort, timeout, sandbox) -> str:
+    async def agent(*, prompt, workspace, model, effort, timeout, web_access) -> str:
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
         (out / "reply.md").write_text(text)
@@ -105,25 +127,10 @@ def service(gh: AsyncMock, tmp_path: Path, cleanup_calls: list[Path]) -> ReviewS
         make_client=lambda token: gh,
         prepare=prepare,
         cleanup=cleanup_calls.append,
-        agent=_review_agent(),
+        resolve_engine=_resolver(_review_agent()),
         changed_paths=changed_paths,
         head_sha=head_sha,
     )
-
-
-async def test_review__agent_receives_configured_sandbox(service, gh):
-    seen: dict = {}
-    inner = _review_agent()
-
-    async def spy(**kwargs):
-        seen.update(kwargs)
-        return await inner(**kwargs)
-
-    service.agent = spy
-
-    await service.review(REPO, 7, 42, auto=True)
-
-    assert seen["sandbox"] == "workspace-write"
 
 
 async def test_review__no_output_written__codex_stdout_tail_logged(service, gh, caplog):
@@ -131,7 +138,7 @@ async def test_review__no_output_written__codex_stdout_tail_logged(service, gh, 
     async def chatty(**kwargs):
         return "bwrap: Creating new namespace failed: Permission denied"
 
-    service.agent = chatty
+    service.resolve_engine = _resolver(chatty)
 
     with pytest.raises(OutputError):
         await service.review(REPO, 7, 42, auto=True)
@@ -223,10 +230,10 @@ async def test_review__workspace_always_cleaned_up(service, gh, cleanup_calls):
 
 async def test_review__agent_raises__workspace_still_cleaned_up(service, gh, cleanup_calls):
     async def dead(**kwargs):
-        raise CodexError("dead")
-    service.agent = dead
+        raise EngineError("dead")
+    service.resolve_engine = _resolver(dead)
 
-    with pytest.raises(CodexError):
+    with pytest.raises(EngineError):
         await service.review(REPO, 7, 42, auto=True)
 
     assert len(cleanup_calls) == 1
@@ -235,7 +242,7 @@ async def test_review__agent_raises__workspace_still_cleaned_up(service, gh, cle
 async def test_review__unexpected_error__propagates_and_cleans_up(service, gh, cleanup_calls):
     async def broken(**kwargs):
         raise RuntimeError("boom")
-    service.agent = broken
+    service.resolve_engine = _resolver(broken)
 
     with pytest.raises(RuntimeError):
         await service.review(REPO, 7, 42, auto=True)
@@ -246,8 +253,8 @@ async def test_review__unexpected_error__propagates_and_cleans_up(service, gh, c
 
 async def test_review__quota_error__posts_quota_comment_and_stops(service, gh):
     async def quota_agent(**kwargs):
-        raise CodexQuotaError("usage limit reached")
-    service.agent = quota_agent
+        raise EngineQuotaError("usage limit reached")
+    service.resolve_engine = _resolver(quota_agent)
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -261,15 +268,15 @@ async def test_review__quota_error__posts_quota_comment_and_stops(service, gh):
 
 async def test_review__flaky_agent__retries_then_succeeds(service, gh):
     calls = {"n": 0}
-    good_agent = service.agent
+    good_agent = _review_agent()
 
     async def flaky(**kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise CodexError("transient")
+            raise EngineError("transient")
         return await good_agent(**kwargs)
 
-    service.agent = flaky
+    service.resolve_engine = _resolver(flaky)
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -279,10 +286,10 @@ async def test_review__flaky_agent__retries_then_succeeds(service, gh):
 
 async def test_review__agent_always_fails__failure_comment_and_raises(service, gh):
     async def dead(**kwargs):
-        raise CodexError("dead")
-    service.agent = dead
+        raise EngineError("dead")
+    service.resolve_engine = _resolver(dead)
 
-    with pytest.raises(CodexError):
+    with pytest.raises(EngineError):
         await service.review(REPO, 7, 42, auto=True)
 
     gh.post_issue_comment.assert_awaited_once()
@@ -296,7 +303,7 @@ async def test_review__no_findings__summary_only(service, gh):
         out.mkdir(exist_ok=True)
         (out / "summary.md").write_text("#### AI Review\nclean")
         return "ok"
-    service.agent = clean_agent
+    service.resolve_engine = _resolver(clean_agent)
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -316,7 +323,7 @@ async def test_review__finding_outside_diff__dropped_and_noted_in_summary(servic
             ],
         }))
         return "ok"
-    service.agent = agent
+    service.resolve_engine = _resolver(agent)
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -336,7 +343,7 @@ async def test_review__all_findings_outside_diff__no_inline_review(service, gh):
             "findings": [{"path": "b.py", "line": 9, "body": "stale anchor"}],
         }))
         return "ok"
-    service.agent = agent
+    service.resolve_engine = _resolver(agent)
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -366,7 +373,7 @@ async def test_review__resolve_only_bot_authored_threads(service, gh):
             "resolve_thread_ids": ["T_1", "T_2", "T_unknown"],
         }))
         return "ok"
-    service.agent = agent
+    service.resolve_engine = _resolver(agent)
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -408,7 +415,7 @@ async def test_review__oversized_summary_with_422_fallback__truncated_before_ups
             "findings": [{"path": "a.py", "line": 3, "body": "b" * 600}],
         }))
         return "ok"
-    service.agent = agent
+    service.resolve_engine = _resolver(agent)
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -490,8 +497,8 @@ async def test_review__quota_comment_uses_fresh_token(service):
     service.make_client = make_client
 
     async def quota_agent(**kwargs):
-        raise CodexQuotaError("usage limit reached")
-    service.agent = quota_agent
+        raise EngineQuotaError("usage limit reached")
+    service.resolve_engine = _resolver(quota_agent)
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -503,12 +510,12 @@ async def test_review__quota_comment_uses_fresh_token(service):
 
 async def test_review__failure_comment_post_fails__still_raises_last_error(service, gh):
     async def dead(**kwargs):
-        raise CodexError("real failure")
-    service.agent = dead
+        raise EngineError("real failure")
+    service.resolve_engine = _resolver(dead)
     # a 401 on the courtesy comment must not mask the real failure
     gh.post_issue_comment.side_effect = _http_error(401)
 
-    with pytest.raises(CodexError):
+    with pytest.raises(EngineError):
         await service.review(REPO, 7, 42, auto=True)
 
 
@@ -544,10 +551,10 @@ async def test_review__stale_output_from_failed_attempt_not_reused(service, gh):
             (out / "actions.json").write_text(json.dumps({
                 "findings": [{"path": "a.py", "line": 3, "body": "stale"}],
             }))
-            raise CodexError("died after writing output")
+            raise EngineError("died after writing output")
         return "ok"  # attempt 2 writes nothing
 
-    service.agent = agent
+    service.resolve_engine = _resolver(agent)
 
     with pytest.raises(OutputError):
         await service.review(REPO, 7, 42, auto=True)
@@ -571,7 +578,7 @@ async def test_review__inputs_written_for_agent(service, gh, tmp_path):
         return "ok"
 
     gh.list_review_threads.return_value = [_bot_thread()]
-    service.agent = spy_agent
+    service.resolve_engine = _resolver(spy_agent)
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -638,7 +645,7 @@ async def test_repo_config_fetch_failure__review_completes_on_defaults(service, 
 async def test_discuss__repo_config_drives_clone_depth(service, gh):
     """clone_depth from .themis/config.yaml reaches prepare_workspace in discuss()."""
     gh.get_file_text.return_value = "limits:\n  clone_depth: 7\n"
-    service.agent = _reply_agent()
+    service.resolve_engine = _resolver(_reply_agent())
     original_prepare = service.prepare
     prepare_calls: list[dict] = []
 
@@ -657,7 +664,7 @@ async def test_discuss__repo_config_drives_clone_depth(service, gh):
 
 
 async def test_discuss__conversation__posts_issue_comment(service, gh):
-    service.agent = _reply_agent()
+    service.resolve_engine = _resolver(_reply_agent())
 
     await service.discuss(
         repo=REPO, pr_number=7, installation_id=42, comment_id=501,
@@ -673,7 +680,7 @@ async def test_discuss__reply_in_bot_thread_without_mention__adds_reaction_and_r
     service, gh
 ):
     gh.list_review_threads.return_value = [_bot_thread()]
-    service.agent = _reply_agent()
+    service.resolve_engine = _resolver(_reply_agent())
 
     await service.discuss(
         repo=REPO, pr_number=7, installation_id=42, comment_id=12,
@@ -691,7 +698,7 @@ async def test_discuss__reply_in_human_thread_without_mention__skipped(service, 
     async def recording_agent(**kwargs):
         agent_calls.append(kwargs)
         raise AssertionError("agent must not run")
-    service.agent = recording_agent
+    service.resolve_engine = _resolver(recording_agent)
 
     await service.discuss(
         repo=REPO, pr_number=7, installation_id=42, comment_id=22,
@@ -705,7 +712,7 @@ async def test_discuss__reply_in_human_thread_without_mention__skipped(service, 
 
 async def test_discuss__mentioned_in_human_thread__answers(service, gh):
     gh.list_review_threads.return_value = [_human_thread()]
-    service.agent = _reply_agent()
+    service.resolve_engine = _resolver(_reply_agent())
 
     await service.discuss(
         repo=REPO, pr_number=7, installation_id=42, comment_id=22,
@@ -720,7 +727,7 @@ async def test_discuss__mentioned_in_human_thread__answers(service, gh):
 async def test_discuss__reaction_fails__reply_still_posted(service, gh):
     gh.list_review_threads.return_value = [_bot_thread()]
     gh.add_reaction.side_effect = _http_error(500)
-    service.agent = _reply_agent()
+    service.resolve_engine = _resolver(_reply_agent())
 
     await service.discuss(
         repo=REPO, pr_number=7, installation_id=42, comment_id=12,
@@ -769,7 +776,7 @@ async def test_discuss__long_thread_bot_root_outside_tail__proceeds(service):
     service.make_client = lambda token: GitHubClient(
         token, transport=httpx.MockTransport(handler)
     )
-    service.agent = _reply_agent()
+    service.resolve_engine = _resolver(_reply_agent())
 
     await service.discuss(
         repo=REPO, pr_number=7, installation_id=42, comment_id=149,
@@ -789,10 +796,10 @@ async def test_find_thread__matches_by_root_comment_id():
 
 async def test_discuss__agent_raises__workspace_still_cleaned_up(service, gh, cleanup_calls):
     async def dead(**kwargs):
-        raise CodexError("dead")
-    service.agent = dead
+        raise EngineError("dead")
+    service.resolve_engine = _resolver(dead)
 
-    with pytest.raises(CodexError):
+    with pytest.raises(EngineError):
         await service.discuss(
             repo=REPO, pr_number=7, installation_id=42, comment_id=501,
             body="@test-reviewer why?", kind="conversation",
@@ -804,8 +811,8 @@ async def test_discuss__agent_raises__workspace_still_cleaned_up(service, gh, cl
 
 async def test_discuss__quota_error__posts_reply_skipped_comment(service, gh):
     async def quota_agent(**kwargs):
-        raise CodexQuotaError("usage limit reached")
-    service.agent = quota_agent
+        raise EngineQuotaError("usage limit reached")
+    service.resolve_engine = _resolver(quota_agent)
 
     await service.discuss(
         repo=REPO, pr_number=7, installation_id=42, comment_id=501,
@@ -880,7 +887,7 @@ def _cancelling_service(tmp_path: Path, gh: AsyncMock) -> ReviewService:
         make_client=lambda token: gh,
         prepare=AsyncMock(),
         cleanup=lambda p: None,
-        agent=AsyncMock(),
+        resolve_engine=_resolver(AsyncMock()),
     )
 
 
@@ -943,3 +950,160 @@ async def test_run_review_job__cancelled__comment_failure_still_reraises(
 
     with pytest.raises(asyncio.CancelledError):
         await run_review_job(make_settings(), "test-reviewer", REPO, 7, 42, True)
+
+
+# --- engine resolution, availability gate, redaction --------------------------
+
+
+async def test_review__repo_engine_override_wins(service, gh):
+    gh.get_file_text.return_value = "engine: claude\n"
+    seen: list[str] = []
+    service.resolve_engine = _resolver(_review_agent(), seen=seen)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert seen == ["claude"]
+
+
+async def test_review__instance_default_engine_when_repo_silent(service, gh):
+    seen: list[str] = []
+    service.resolve_engine = _resolver(_review_agent(), seen=seen)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert seen == ["codex"]
+
+
+async def test_review__engine_unavailable__courtesy_comment_no_clone(service, gh):
+    original_prepare = service.prepare
+    prepare_calls: list[dict] = []
+
+    async def recording_prepare(**kwargs):
+        prepare_calls.append(kwargs)
+        return await original_prepare(**kwargs)
+    service.prepare = recording_prepare
+    service.resolve_engine = _resolver(_review_agent(), available=False)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert prepare_calls == []  # never cloned
+    gh.add_reaction.assert_not_awaited()
+    gh.post_issue_comment.assert_awaited_once()
+    body = gh.post_issue_comment.await_args.args[2]
+    assert "credentials" in body
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__model_default_per_engine(service, gh):
+    gh.get_file_text.return_value = "engine: claude\n"
+    seen_model: dict = {}
+
+    async def spy(**kwargs):
+        seen_model.update(kwargs)
+        return await _review_agent()(**kwargs)
+
+    service.resolve_engine = _resolver(spy)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert seen_model["model"] == "claude-opus-4-6[1m]"
+
+
+async def test_review__explicit_model_passthrough(service, gh):
+    gh.get_file_text.return_value = "engine: claude\nmodel:\n  name: claude-sonnet-5\n"
+    seen_model: dict = {}
+
+    async def spy(**kwargs):
+        seen_model.update(kwargs)
+        return await _review_agent()(**kwargs)
+
+    service.resolve_engine = _resolver(spy)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert seen_model["model"] == "claude-sonnet-5"
+
+
+async def test_review__web_access_flows_to_engine(service, gh):
+    gh.get_file_text.return_value = "web_access: true\n"
+    seen: dict = {}
+
+    async def spy(**kwargs):
+        seen.update(kwargs)
+        return await _review_agent()(**kwargs)
+
+    service.resolve_engine = _resolver(spy)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert seen["web_access"] is True
+
+
+async def test_review__default__web_access_false_flows_to_engine(service, gh):
+    seen: dict = {}
+
+    async def spy(**kwargs):
+        seen.update(kwargs)
+        return await _review_agent()(**kwargs)
+
+    service.resolve_engine = _resolver(spy)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert seen["web_access"] is False
+
+
+async def test_review__secret_in_summary_redacted(service, gh, monkeypatch):
+    monkeypatch.setenv("THEMIS_API_TOKEN", "api-token-value")
+
+    async def leaky(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nleak api-token-value here")
+        return "ok"
+
+    service.resolve_engine = _resolver(leaky)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    body = gh.post_summary_comment.await_args.args[2]
+    assert "api-token-value" not in body
+    assert "[redacted]" in body
+
+
+async def test_discuss__reply_redacted(service, gh, monkeypatch):
+    monkeypatch.setenv("THEMIS_API_TOKEN", "api-token-value")
+    service.resolve_engine = _resolver(_reply_agent("answer with api-token-value"))
+
+    await service.discuss(
+        repo=REPO, pr_number=7, installation_id=42, comment_id=7,
+        body="question", kind="conversation", in_reply_to_id=None, mentions_bot=True,
+    )
+
+    gh.post_issue_comment.assert_awaited_once()
+    body = gh.post_issue_comment.await_args.args[2]
+    assert "api-token-value" not in body
+    assert "[redacted]" in body
+
+
+async def test_discuss__engine_unavailable__courtesy_comment_no_clone(service, gh):
+    original_prepare = service.prepare
+    prepare_calls: list[dict] = []
+
+    async def recording_prepare(**kwargs):
+        prepare_calls.append(kwargs)
+        return await original_prepare(**kwargs)
+    service.prepare = recording_prepare
+    service.resolve_engine = _resolver(_reply_agent(), available=False)
+
+    await service.discuss(
+        repo=REPO, pr_number=7, installation_id=42, comment_id=501,
+        body="@test-reviewer why?", kind="conversation",
+        in_reply_to_id=None, mentions_bot=True,
+    )
+
+    assert prepare_calls == []
+    gh.post_issue_comment.assert_awaited_once()
+    body = gh.post_issue_comment.await_args.args[2]
+    assert "credentials" in body
+    gh.post_reply.assert_not_awaited()
