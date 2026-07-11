@@ -23,6 +23,7 @@ def make_settings(**overrides) -> Settings:
         api_token=None,
         repos=None,
         codex_sandbox="workspace-write",
+        engine="codex",
         workspace_root=Path("/tmp/themis-test"),
         public_url=None,
         tunnel_api=None,

@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
+
+from themis.engines import ENGINE_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,7 @@ class SettingsError(Exception):
 
 
 class ModelConfig(BaseModel):
-    name: str = "gpt-5.4"
+    name: str | None = None   # None = engine default, resolved in the service
     reasoning_effort: str = "high"
 
 
@@ -42,9 +44,21 @@ class TriggersConfig(BaseModel):
 
 
 class RepoConfig(BaseModel):
+    engine: str | None = None
+    web_access: bool = False
     model: ModelConfig = ModelConfig()
     limits: LimitsConfig = LimitsConfig()
     triggers: TriggersConfig = TriggersConfig()
+
+    @field_validator("engine", mode="before")
+    @classmethod
+    def _engine_or_instance_default(cls, value: object) -> object:
+        """A typo'd engine must not reject the rest of the repo's config;
+        fall back to the instance default (None) with a warning."""
+        if value is None or value in ENGINE_NAMES:
+            return value
+        logger.warning("themis_invalid_repo_engine value=%s", str(value)[:50])
+        return None
 
 
 def parse_repo_config(text: str | None) -> RepoConfig:
@@ -83,6 +97,7 @@ class Settings:
     api_token: str | None = field(repr=False)
     repos: frozenset[str] | None
     codex_sandbox: str
+    engine: str
     workspace_root: Path
     public_url: str | None
     tunnel_api: str | None
@@ -137,6 +152,12 @@ def load_settings() -> Settings:
             f"invalid codex sandbox {sandbox!r}; expected one of {VALID_SANDBOXES}"
         )
 
+    engine = os.getenv("THEMIS_ENGINE") or "codex"
+    if engine not in ENGINE_NAMES:
+        raise SettingsError(
+            f"invalid engine {engine!r}; expected one of {ENGINE_NAMES}"
+        )
+
     repos_raw = os.getenv("THEMIS_REPOS", "")
     repos = (
         frozenset(part.strip() for part in repos_raw.split(",") if part.strip()) or None
@@ -154,6 +175,7 @@ def load_settings() -> Settings:
         api_token=api_token,
         repos=repos,
         codex_sandbox=sandbox,
+        engine=engine,
         workspace_root=Path(os.getenv("THEMIS_WORKSPACE_ROOT") or "/tmp/themis"),
         public_url=public_url,
         tunnel_api=os.getenv("THEMIS_TUNNEL_API") or None,

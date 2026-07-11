@@ -1,6 +1,7 @@
 """Instance Settings (env) and per-repo RepoConfig parsing."""
 
 import base64
+import logging
 
 import pytest
 
@@ -22,7 +23,7 @@ def _set_env(monkeypatch, extra=None, omit=()):
     for key in (
         "THEMIS_GH_APP_CLIENT_ID", "THEMIS_GH_APP_PRIVATE_KEY", "THEMIS_GH_WEBHOOK_SECRET",
         "THEMIS_CODEX_SANDBOX", "THEMIS_REPOS", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
-        "THEMIS_WEBHOOK_ENABLED", "THEMIS_API_TOKEN", "THEMIS_WORKSPACE_ROOT",
+        "THEMIS_WEBHOOK_ENABLED", "THEMIS_API_TOKEN", "THEMIS_WORKSPACE_ROOT", "THEMIS_ENGINE",
     ):
         monkeypatch.delenv(key, raising=False)
     for key, value in {**REQUIRED, **(extra or {})}.items():
@@ -110,7 +111,7 @@ def test_public_url_trailing_slash_stripped(monkeypatch):
 
 def test_repo_config_defaults():
     config = parse_repo_config(None)
-    assert config.model.name == "gpt-5.4"
+    assert config.model.name is None
     assert config.model.reasoning_effort == "high"
     assert config.limits.timeout_seconds == 1200
     assert config.limits.max_attempts == 2
@@ -137,3 +138,58 @@ def test_repo_config_wrong_shape_falls_back_to_defaults():
 
 def test_repo_config_empty_file_is_defaults():
     assert parse_repo_config("") == RepoConfig()
+
+
+# --- engine settings ----------------------------------------------------------
+
+
+def test_load_settings__engine_default_codex(monkeypatch):
+    _set_env(monkeypatch)
+
+    assert load_settings().engine == "codex"
+
+
+def test_load_settings__engine_claude(monkeypatch):
+    _set_env(monkeypatch)
+    monkeypatch.setenv("THEMIS_ENGINE", "claude")
+
+    assert load_settings().engine == "claude"
+
+
+def test_load_settings__engine_unknown__raises(monkeypatch):
+    _set_env(monkeypatch)
+    monkeypatch.setenv("THEMIS_ENGINE", "gemini")
+
+    with pytest.raises(SettingsError, match="invalid engine"):
+        load_settings()
+
+
+# --- repo engine + web_access -------------------------------------------------
+
+
+def test_repo_config__engine_default_none():
+    config = parse_repo_config("model:\n  reasoning_effort: low\n")
+    assert config.engine is None
+    assert config.web_access is False
+
+
+def test_repo_config__engine_claude():
+    assert parse_repo_config("engine: claude\n").engine == "claude"
+
+
+def test_repo_config__engine_invalid__coerces_to_none_and_keeps_rest(caplog):
+    text = "engine: caude\nlimits:\n  max_attempts: 5\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.engine is None
+    assert config.limits.max_attempts == 5  # rest of the config preserved
+    assert "themis_invalid_repo_engine" in caplog.text
+
+
+def test_repo_config__web_access_true():
+    assert parse_repo_config("web_access: true\n").web_access is True
+
+
+def test_repo_config__model_name_default_is_none():
+    # Engine-aware defaults resolve in the service, not here.
+    assert parse_repo_config(None).model.name is None
