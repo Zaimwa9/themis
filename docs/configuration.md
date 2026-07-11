@@ -15,8 +15,10 @@ Two planes:
 | `THEMIS_GH_APP_CLIENT_ID` | yes | none | GitHub App client id |
 | `THEMIS_GH_APP_PRIVATE_KEY` | yes | none | App private key, PEM text or base64 of it |
 | `THEMIS_GH_WEBHOOK_SECRET` | yes, unless `THEMIS_WEBHOOK_ENABLED=false` | none | webhook HMAC secret, shared with the App settings |
+| `THEMIS_ENGINE` | no | `codex` | instance default review engine; `codex` or `claude` |
 | `CODEX_HOME` | no | `/data/codex` | codex auth/state directory |
 | `THEMIS_CODEX_SANDBOX` | no | `workspace-write` | codex sandbox mode; `danger-full-access` for runtimes without Landlock |
+| `CLAUDE_CODE_OAUTH_TOKEN` | no | unset | Claude subscription token from `claude setup-token`; required only for the claude engine |
 | `THEMIS_REPOS` | no | unset (all installed repos) | comma-separated `owner/name` allowlist |
 | `THEMIS_PUBLIC_URL` | no | unset | enables webhook self-registration at `<url>/webhook` |
 | `THEMIS_TUNNEL_API` | no | unset | ngrok agent API URL for tunnel discovery |
@@ -27,8 +29,10 @@ Two planes:
 | `NGROK_AUTHTOKEN` | only with the `tunnel` compose profile | none | used only by the compose tunnel profile's ngrok sidecar |
 
 Names and defaults come straight from `../src/themis/config.py`, except
-`PORT` (read in `__main__.py`) and `CODEX_HOME` (set in the Dockerfile).
-There is no model, limit, or mention configuration in the environment; the
+`PORT` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and
+`CLAUDE_CODE_OAUTH_TOKEN` (read directly by `../src/themis/engines/claude.py`,
+not part of `Settings`). There is no model, limit, or mention configuration
+in the environment; the
 mention handle is derived at startup from `GET /app` (the App's slug), so it
 can never drift from the App's actual name.
 
@@ -39,9 +43,11 @@ in as `.themis/`, see the README's Quickstart). Every key is optional; a
 repo with no `.themis/` directory at all gets full defaults.
 
 ```yaml
+# engine: codex            # codex | claude; unset = instance default (THEMIS_ENGINE)
+# web_access: false        # true gives the agent network access
 model:
-  name: gpt-5.4
-  reasoning_effort: high
+  # name: gpt-5.4          # unset = engine default (codex: gpt-5.4, claude: claude-opus-4-6[1m])
+  reasoning_effort: high   # low | medium | high (codex only; claude ignores it)
 limits:
   timeout_seconds: 1200
   max_attempts: 2
@@ -52,9 +58,11 @@ triggers:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `model.name` | `gpt-5.4` | codex model passed to `codex exec -m` |
-| `model.reasoning_effort` | `high` | `low`, `medium`, or `high` |
-| `limits.timeout_seconds` | `1200` | wall-clock budget per codex attempt, in seconds |
+| `engine` | unset (instance `THEMIS_ENGINE`) | `codex` or `claude`; an invalid value warns and falls back to the instance default |
+| `web_access` | `false` | `true` re-enables network for the agent: codex gets `sandbox_workspace_write.network_access=true`, claude drops `--disallowedTools WebFetch,WebSearch`; only the repo's default branch controls this |
+| `model.name` | unset (engine default) | `gpt-5.4` for codex, `claude-opus-4-6[1m]` for claude |
+| `model.reasoning_effort` | `high` | `low`, `medium`, or `high`; codex only, ignored by claude |
+| `limits.timeout_seconds` | `1200` | wall-clock budget per agent attempt, in seconds |
 | `limits.max_attempts` | `2` | attempts before Themis gives up and posts a failure comment |
 | `limits.clone_depth` | `50` | git fetch depth for the shallow PR clone |
 | `triggers.auto_review` | `true` | `false` = mention-only, no automatic review on PR open or ready-for-review |

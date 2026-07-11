@@ -521,7 +521,7 @@ async def _post_cancelled_comment(
         async with gh:
             await gh.post_issue_comment(
                 repo, pr_number,
-                CANCELLED_COMMENT.format(mention=service.mention),
+                redact_outbound(CANCELLED_COMMENT.format(mention=service.mention)),
             )
 
     post_task = asyncio.ensure_future(_post())

@@ -1,7 +1,7 @@
 # Themis
 
-Themis is a self-hosted GitHub PR review bot that runs on your own Codex
-subscription. It reviews pull requests with inline findings and a structured
+Themis is a self-hosted GitHub PR review bot that runs on your own Codex or
+Claude subscription. It reviews pull requests with inline findings and a structured
 summary (verdict, scoring table, severity-ordered sections), answers
 questions in review threads and PR conversation, and takes its review
 doctrine from your own repository, under `.themis/`.
@@ -12,14 +12,15 @@ doctrine from your own repository, under `.themis/`.
 
 A GitHub App webhook delivers PR and comment events to Themis. Each event
 becomes a job on an in-memory queue, processed one at a time. The worker
-shallow-clones the PR head, runs `codex exec` against your repo's review
-doctrine, and posts findings and a summary back to GitHub as the App. One
-container, no external services: no database, no Redis, no message broker.
+shallow-clones the PR head, runs the configured engine (`codex exec` or
+`claude -p`) against your repo's review doctrine, and posts findings and a
+summary back to GitHub as the App. One container, no external services: no
+database, no Redis, no message broker.
 
 ## Prerequisites
 
 - Docker with the Compose plugin (Docker Desktop, or Docker Engine + `docker compose`)
-- A Codex subscription, with the CLI installed (`npm install -g @openai/codex`, Node 22+) and `codex login` working on your machine
+- An OpenAI account with Codex access, or a Claude Pro/Max subscription (pick your engine): the matching CLI installed (`npm install -g @openai/codex` or `npm install -g @anthropic-ai/claude-code`, Node 22+) and `codex login` or `claude setup-token` working on your machine
 - A GitHub account that can create a GitHub App (personal account or an org)
 
 ## Quickstart
@@ -50,6 +51,11 @@ Then, on the App's page: **Generate a private key** (downloads a `.pem`
 file), and **Install App** on the repositories you want reviewed.
 
 ### 2. Log in to Codex
+
+Using the claude engine instead? Skip this step and the auth.json seeding in
+step 4: run `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` plus
+`THEMIS_ENGINE=claude` in `.env` during step 3. Details in
+[Engines](#engines).
 
 Install the CLI if you haven't already (Node 22+):
 
@@ -157,9 +163,11 @@ cp -r examples/themis .themis
 
 | Key | Default | Meaning |
 |---|---|---|
-| `model.name` | `gpt-5.4` | codex model |
-| `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` |
-| `limits.timeout_seconds` | `1200` | per codex attempt |
+| `engine` | instance `THEMIS_ENGINE` | `codex` or `claude`, overrides the instance's default engine for this repo |
+| `web_access` | `false` | `true` gives the agent network access; enable for doctrines that verify external API contracts |
+| `model.name` | engine default | `gpt-5.4` (codex) or `claude-opus-4-6[1m]` (claude) |
+| `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` (codex only) |
+| `limits.timeout_seconds` | `1200` | per agent attempt |
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
 | `limits.clone_depth` | `50` | shallow clone depth |
 | `triggers.auto_review` | `true` | `false` = mention-only, no auto-review when a PR opens or is marked ready for review |
@@ -168,6 +176,20 @@ Talk to the bot in a PR: `@<app-slug> review` re-reviews on demand,
 `@<app-slug> <question>` asks a question, and replies inside a thread the
 bot already posted in are answered automatically, no mention needed.
 
+## Engines
+
+Themis runs reviews through one of two agent CLIs, both on your own subscription:
+
+| Engine | Auth | Setup |
+|---|---|---|
+| `codex` (default) | `auth.json` volume (`CODEX_HOME`) | `codex login` locally (quickstart step 2), copy `auth.json` into the volume (quickstart step 4) |
+| `claude` | one env var | run `claude setup-token` locally, set `CLAUDE_CODE_OAUTH_TOKEN` in `.env` |
+
+Pick the instance default with `THEMIS_ENGINE` in `.env`. A repo can override it
+in `.themis/config.yaml` with `engine: claude` or `engine: codex`; if that engine
+has no credentials on the instance, Themis posts a comment saying so instead of
+failing silently. The claude path needs no volume: token in `.env`, done.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -175,8 +197,9 @@ bot already posted in are answered automatically, no mention needed.
 | Crashes at startup naming an env var | Set that variable; Themis fails fast on missing or invalid required config. |
 | Crashes at startup on a `GET /app` call | Wrong `THEMIS_GH_APP_CLIENT_ID` or malformed `THEMIS_GH_APP_PRIVATE_KEY`. |
 | Codex sandbox errors | Set `THEMIS_CODEX_SANDBOX=danger-full-access`; the container is the sandbox boundary on runtimes without Landlock. |
-| PR comment says the usage limit was reached | Your Codex subscription's usage window is exhausted. Mention the bot again once it resets. |
+| PR comment says the usage limit was reached | Your Codex or Claude subscription (whichever engine ran the job) has hit its usage window. Mention the bot again once it resets. |
 | Auth that worked starts failing months later | Re-seed `auth.json` (`codex login` locally, then repeat the seeding step from Quickstart step 4). |
+| Review comment says engine credentials missing | Set `CLAUDE_CODE_OAUTH_TOKEN` (claude) or seed the codex auth volume (codex), or change `THEMIS_ENGINE` / the repo's `engine:` key. |
 | Webhook deliveries show 401 in the App's settings | `THEMIS_GH_WEBHOOK_SECRET` doesn't match the App's webhook secret. |
 | Where are the logs | `docker compose logs -f themis` |
 | A job queued right before a restart never ran | The in-memory queue doesn't survive restarts; mention the bot again to re-trigger. |
@@ -184,7 +207,7 @@ bot already posted in are answered automatically, no mention needed.
 
 ## Documentation
 
-- [`docs/server-deploy.md`](docs/server-deploy.md): deploying to any Docker host or PaaS, the full env var reference, upgrades.
+- [`docs/server-deploy.md`](docs/server-deploy.md): deploying to any Docker host or PaaS, upgrades.
 - [`docs/local-tunnel.md`](docs/local-tunnel.md): the ngrok tunnel profile in depth.
 - [`docs/headless.md`](docs/headless.md): bring your own webhook handler, the `/api/review` and `/api/discuss` contracts.
 - [`docs/configuration.md`](docs/configuration.md): the full env and `.themis/config.yaml` reference.
