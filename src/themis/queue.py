@@ -44,6 +44,7 @@ class InMemoryJobQueue:
     def enqueue(self, job_id: str, run: JobFactory) -> bool:
         """True when queued, False when a job with this id is already active."""
         if job_id in self._active_ids:
+            logger.info("themis_job_duplicate id=%s", job_id)
             return False
         self._active_ids.add(job_id)
         self._queue.put_nowait(_Job(job_id, run))
@@ -70,7 +71,7 @@ class InMemoryJobQueue:
             except TimeoutError:
                 # wait_for cancelled the job; its CancelledError handlers
                 # (cancelled-comment) already ran inside.
-                logger.warning("themis_job_timeout id=%s", job.id)
+                logger.warning("themis_job_timeout id=%s", job.id, exc_info=True)
             except asyncio.CancelledError:
                 raise  # shutdown
             except Exception:

@@ -341,34 +341,26 @@ async def test_add_reaction__http_error__raises():
 
 
 async def test_get_file_text_returns_raw_content():
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/repos/acme/widgets/contents/.themis/config.yaml"
         assert request.headers["Accept"] == "application/vnd.github.raw+json"
         return httpx.Response(200, text="model:\n  name: gpt-5.4\n")
 
-    client = GitHubClient("tok", api_url="https://api.test",
-                          transport=httpx.MockTransport(handler))
-    async with client:
-        text = await client.get_file_text("acme/widgets", ".themis/config.yaml")
+    text = await _client(handler).get_file_text("acme/widgets", ".themis/config.yaml")
+
     assert text == "model:\n  name: gpt-5.4\n"
 
 
 async def test_get_file_text_missing_file_returns_none():
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"message": "Not Found"})
 
-    client = GitHubClient("tok", api_url="https://api.test",
-                          transport=httpx.MockTransport(handler))
-    async with client:
-        assert await client.get_file_text("acme/widgets", ".themis/config.yaml") is None
+    assert await _client(handler).get_file_text("acme/widgets", ".themis/config.yaml") is None
 
 
 async def test_get_file_text_server_error_raises():
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"message": "boom"})
 
-    client = GitHubClient("tok", api_url="https://api.test",
-                          transport=httpx.MockTransport(handler))
-    async with client:
-        with pytest.raises(httpx.HTTPStatusError):
-            await client.get_file_text("acme/widgets", ".themis/config.yaml")
+    with pytest.raises(httpx.HTTPStatusError):
+        await _client(handler).get_file_text("acme/widgets", ".themis/config.yaml")
