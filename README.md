@@ -14,8 +14,8 @@ A GitHub App webhook delivers PR and comment events to Themis. Each event
 becomes a job on an in-memory queue, processed one at a time. The worker
 shallow-clones the PR head, runs the configured engine (`codex exec` or
 `claude -p`) against your repo's review doctrine, and posts findings and a
-summary back to GitHub as the App. One container, no external services: no
-database, no Redis, no message broker.
+summary back to GitHub as the App. One image runs as an isolated controller
+and agent; there is still no database, Redis, or message broker.
 
 ## Prerequisites
 
@@ -79,17 +79,47 @@ This writes credentials to `~/.codex/auth.json`. Themis reuses this file
 
 ### 3. Configure
 
-Create a directory for the deployment with two files. `docker-compose.yml`:
+Create a directory for the deployment with two files. Both services use the
+same image, but only the agent receives model credentials:
 
 ```yaml
 services:
   themis:
     image: ghcr.io/zaimwa9/themis:latest
-    env_file: .env
+    command: ["python", "-m", "themis", "controller"]
+    environment:
+      THEMIS_GH_APP_CLIENT_ID: ${THEMIS_GH_APP_CLIENT_ID}
+      THEMIS_GH_APP_PRIVATE_KEY: ${THEMIS_GH_APP_PRIVATE_KEY}
+      THEMIS_GH_WEBHOOK_SECRET: ${THEMIS_GH_WEBHOOK_SECRET}
+      THEMIS_AGENT_TOKEN: ${THEMIS_AGENT_TOKEN}
+      THEMIS_AGENT_URL: http://agent:8001
+      THEMIS_ENGINE: ${THEMIS_ENGINE:-codex}
+      THEMIS_PUBLIC_URL: ${THEMIS_PUBLIC_URL:-}
+      THEMIS_TUNNEL_API: ${THEMIS_TUNNEL_API:-}
     ports:
       - "8000:8000"
     volumes:
+      - workspaces:/tmp/themis
+    depends_on:
+      agent:
+        condition: service_healthy
+    restart: unless-stopped
+
+  agent:
+    image: ghcr.io/zaimwa9/themis:latest
+    command: ["python", "-m", "themis", "agent"]
+    environment:
+      THEMIS_AGENT_TOKEN: ${THEMIS_AGENT_TOKEN}
+      THEMIS_WORKSPACE_ROOT: /tmp/themis
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    volumes:
+      - workspaces:/tmp/themis
       - codex-home:/data/codex
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   # Optional: local tunnel for hosts without a public URL (step 5).
@@ -102,16 +132,18 @@ services:
     restart: unless-stopped
 
 volumes:
+  workspaces:
   codex-home:
 ```
 
-And `.env` with the three required variables (full reference:
+And `.env` with the required variables (full reference:
 [`docs/configuration.md`](docs/configuration.md)):
 
 ```bash
 THEMIS_GH_APP_CLIENT_ID=
 THEMIS_GH_APP_PRIVATE_KEY=
 THEMIS_GH_WEBHOOK_SECRET=
+THEMIS_AGENT_TOKEN=
 ```
 
 - `THEMIS_GH_APP_CLIENT_ID`: the App's Client ID, from the App's settings page
@@ -120,6 +152,8 @@ THEMIS_GH_WEBHOOK_SECRET=
   - macOS: `base64 -i key.pem | tr -d '\n'`
   - Linux: `base64 -w0 key.pem`
 - `THEMIS_GH_WEBHOOK_SECRET`: the same secret you generated in step 1
+- `THEMIS_AGENT_TOKEN`: generate with `openssl rand -hex 32`; it only
+  authenticates the controller to the isolated agent service
 
 ### 4. Run it
 
@@ -127,7 +161,7 @@ Server (VPS, always-on host, PaaS):
 
 ```bash
 docker compose up -d
-cat ~/.codex/auth.json | docker compose exec -T themis sh -c 'cat > /data/codex/auth.json'
+cat ~/.codex/auth.json | docker compose exec -T agent sh -c 'cat > /data/codex/auth.json'
 ```
 
 The second command seeds Codex's login into the container's volume once;
@@ -138,7 +172,7 @@ create `docker-compose.override.yml` next to `docker-compose.yml`:
 
 ```yaml
 services:
-  themis:
+  agent:
     volumes:
       - ~/.codex:/data/codex
 ```

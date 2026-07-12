@@ -15,20 +15,23 @@ Two planes:
 | `THEMIS_GH_APP_CLIENT_ID` | yes | none | GitHub App client id |
 | `THEMIS_GH_APP_PRIVATE_KEY` | yes | none | App private key, PEM text or base64 of it |
 | `THEMIS_GH_WEBHOOK_SECRET` | yes, unless `THEMIS_WEBHOOK_ENABLED=false` | none | webhook HMAC secret, shared with the App settings |
+| `THEMIS_AGENT_TOKEN` | yes | none | controller-to-agent bearer token; use the same random value in both containers |
+| `THEMIS_AGENT_URL` | no | `http://agent:8001` | internal URL of the isolated agent service |
 | `THEMIS_ENGINE` | no | `codex` | instance default review engine; `codex` or `claude` |
 | `CODEX_HOME` | no | `/data/codex` | codex auth/state directory |
 | `THEMIS_CODEX_SANDBOX` | no | `workspace-write` | codex sandbox mode; `danger-full-access` for runtimes without Landlock |
-| `CLAUDE_CODE_OAUTH_TOKEN` | no | unset | Claude Max subscription token from `claude setup-token`; required only for the claude engine |
+| `CLAUDE_CODE_OAUTH_TOKEN` | agent only | unset | Claude Max token from `claude setup-token`; never set it on the controller |
 | `THEMIS_PUBLIC_URL` | no | unset | enables webhook self-registration at `<url>/webhook` |
 | `THEMIS_TUNNEL_API` | no | unset | ngrok agent API URL for tunnel discovery |
 | `THEMIS_WEBHOOK_ENABLED` | no | `true` | set `false` for headless mode |
 | `THEMIS_API_TOKEN` | no | unset | enables `/api/review` and `/api/discuss` |
 | `THEMIS_WORKSPACE_ROOT` | no | `/tmp/themis` | scratch root for PR clones |
-| `PORT` | no | `8000` | listen port |
+| `THEMIS_ROLE` | no | `controller` | role when `python -m themis` gets no argument; `controller` or `agent` |
+| `PORT` | no | role default | listen port (`8000` controller, `8001` agent) |
 | `NGROK_AUTHTOKEN` | only with the `tunnel` compose profile | none | used only by the compose tunnel profile's ngrok sidecar |
 
 Names and defaults come straight from `../src/themis/config.py`, except
-`PORT` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and
+`PORT` and `THEMIS_ROLE` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and
 `CLAUDE_CODE_OAUTH_TOKEN` (read directly by `../src/themis/engines/claude.py`,
 not part of `Settings`). There is no model, limit, or mention configuration
 in the environment; the

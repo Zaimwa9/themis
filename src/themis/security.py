@@ -20,6 +20,7 @@ _SECRET_ENV_VARS = (
     "THEMIS_GH_WEBHOOK_SECRET",
     "THEMIS_API_TOKEN",
     "THEMIS_GH_APP_PRIVATE_KEY",
+    "THEMIS_AGENT_TOKEN",
 )
 
 # Credential shapes that never occur in legitimate review prose.

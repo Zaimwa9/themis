@@ -54,6 +54,9 @@ def test_build_review_prompt__token_budget_rules__nit_brevity_cap_and_unanchorab
     assert "at most one sentence" in prompt
     assert "at most 5 inline nits" in prompt
     assert "smaller nits" in prompt
+    assert "Every Nit that can be anchored" in prompt
+    assert "Severity is never a reason" in prompt
+    assert "Prefer a commit-ready suggestion" in prompt
     assert "cannot anchor" in prompt
     assert "never drop it silently" in prompt
 
