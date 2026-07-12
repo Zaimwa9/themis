@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from themis.agent import create_agent_app
@@ -26,6 +27,14 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("THEMIS_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setattr("themis.agent.resolve", lambda *args, **kwargs: FakeEngine())
     return TestClient(create_agent_app())
+
+
+def test_invalid_codex_sandbox_fails_at_startup(monkeypatch, tmp_path):
+    monkeypatch.setenv("THEMIS_AGENT_TOKEN", "agent-secret")
+    monkeypatch.setenv("THEMIS_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("THEMIS_CODEX_SANDBOX", "workspce-write")
+    with pytest.raises(RuntimeError, match="invalid THEMIS_CODEX_SANDBOX"):
+        create_agent_app()
 
 
 def test_run_requires_agent_token(monkeypatch, tmp_path):

@@ -26,7 +26,7 @@ Two planes:
 | `THEMIS_WEBHOOK_ENABLED` | no | `true` | set `false` for headless mode |
 | `THEMIS_API_TOKEN` | no | unset | enables `/api/review` and `/api/discuss` |
 | `THEMIS_WORKSPACE_ROOT` | no | `/tmp/themis` | scratch root for PR clones |
-| `PORT` | no | `8000` | listen port |
+| `PORT` | no | role default | listen port (`8000` controller, `8001` agent) |
 | `NGROK_AUTHTOKEN` | only with the `tunnel` compose profile | none | used only by the compose tunnel profile's ngrok sidecar |
 
 Names and defaults come straight from `../src/themis/config.py`, except

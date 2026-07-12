@@ -8,10 +8,14 @@ from themis.engines.base import EngineError, EngineQuotaError, EngineUnavailable
 
 
 class RemoteEngine:
-    def __init__(self, name: str, base_url: str, token: str) -> None:
+    def __init__(
+        self, name: str, base_url: str, token: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self.name = name
         self._base_url = base_url.rstrip("/")
         self._token = token
+        self._transport = transport
 
     def available(self) -> bool:
         # Credential presence is known only inside the isolated agent container.
@@ -31,7 +35,9 @@ class RemoteEngine:
             "web_access": web_access,
         }
         try:
-            async with httpx.AsyncClient(timeout=timeout + 30) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout + 30, transport=self._transport
+            ) as client:
                 response = await client.post(
                     f"{self._base_url}/run",
                     json=payload,
@@ -39,7 +45,13 @@ class RemoteEngine:
                 )
         except httpx.HTTPError as error:
             raise EngineError(f"agent service unavailable: {error}") from error
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            detail = response.text.strip()[:500] or f"HTTP {response.status_code}"
+            raise EngineError(f"agent returned a non-JSON response: {detail}") from None
+        if not isinstance(data, dict):
+            raise EngineError("agent returned an invalid JSON response")
         if response.is_success:
             return str(data.get("output", ""))
         message = str(data.get("detail", "agent execution failed"))
