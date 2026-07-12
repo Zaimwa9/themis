@@ -26,38 +26,11 @@ database, no Redis, no message broker.
 No clone or build needed: Themis ships as a prebuilt multi-arch image,
 `ghcr.io/zaimwa9/themis`.
 
-## Set it up with your AI agent
-
-Most of the setup below is mechanical; the fastest path is to hand it to the
-coding agent you already run (Claude Code, Codex, ...) on the machine that will
-host Themis. Paste this:
-
-```text
-Set up Themis (https://github.com/Zaimwa9/themis), a self-hosted GitHub PR
-review bot, on this machine using the prebuilt image ghcr.io/zaimwa9/themis.
-Follow the README Quickstart. Concretely:
-
-1. Walk me through creating the GitHub App (README step 1); I will do the
-   browser clicks. Ask me for the App's Client ID, the downloaded .pem path,
-   and the webhook secret I chose.
-2. Create a working directory with the docker-compose.yml and .env from
-   README step 3 (image, not build). Base64-encode the .pem into
-   THEMIS_GH_APP_PRIVATE_KEY yourself.
-3. I use <codex | claude> as engine: seed codex auth from ~/.codex/auth.json
-   per step 4, or ask me to run `claude setup-token` and set
-   CLAUDE_CODE_OAUTH_TOKEN plus THEMIS_ENGINE=claude.
-4. Wire the webhook (step 5): use THEMIS_PUBLIC_URL if this host is public,
-   otherwise the ngrok tunnel profile (ask me for an ngrok authtoken).
-5. Verify (step 6): healthz returns ok and the logs show
-   themis_webhook_registered. Then remind me to install the App on the repos
-   I want reviewed, and to add a .themis/ directory to them per the README's
-   "Customize reviews" section.
-
-Never print the private key, the webhook secret, or any token back to me, and
-never commit the .env anywhere.
-```
-
 ## Quickstart
+
+Setting this up is mostly mechanical; feel free to hand this README to the
+coding agent you already run (Claude Code, Codex, ...) on the machine that
+will host Themis, and only do the GitHub App clicks yourself.
 
 ### 1. Create the GitHub App
 
