@@ -1,0 +1,9 @@
+# Themis reviewing itself. Every key is optional; see examples/themis/config.yaml
+# for the full reference.
+model:
+  reasoning_effort: high
+limits:
+  timeout_seconds: 1200
+  max_attempts: 2
+triggers:
+  auto_review: true
