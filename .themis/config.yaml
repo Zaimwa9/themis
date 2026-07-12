@@ -1,6 +1,7 @@
 # Themis reviewing itself. Every key is optional; see examples/themis/config.yaml
 # for the full reference.
 model:
+  name: gpt-5.6-terra
   reasoning_effort: high
 limits:
   timeout_seconds: 1200
