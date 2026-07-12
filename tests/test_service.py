@@ -146,6 +146,31 @@ async def test_review__no_output_written__codex_stdout_tail_logged(service, gh, 
     assert "bwrap: Creating new namespace failed" in caplog.text
 
 
+async def test_review__malformed_output_secret_redacted_from_logs_and_error(
+    service, gh, caplog, monkeypatch
+):
+    secret = "sk-ant-oat01-output-secret-value"
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", secret)
+
+    async def malformed(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nsummary")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"body": secret}],
+        }))
+        return "agent completed"
+
+    service.resolve_engine = _resolver(malformed)
+
+    with pytest.raises(OutputError) as exc_info:
+        await service.review(REPO, 7, 42, auto=True)
+
+    assert secret not in caplog.text
+    assert secret not in str(exc_info.value)
+    assert "[redacted]" in str(exc_info.value)
+
+
 def _http_error(status: int) -> httpx.HTTPStatusError:
     request = httpx.Request("POST", "https://api.github.com/x")
     return httpx.HTTPStatusError(

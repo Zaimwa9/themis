@@ -44,7 +44,7 @@ repo with no `.themis/` directory at all gets full defaults.
 
 ```yaml
 # engine: codex            # codex | claude; unset = instance default (THEMIS_ENGINE)
-# web_access: false        # true gives the agent network access
+# web_access: false        # toggles engine web tools; see the table below
 model:
   # name: gpt-5.4          # unset = engine default (codex: gpt-5.4, claude: claude-opus-4-6[1m])
   reasoning_effort: high   # low | medium | high (codex only; claude ignores it)
@@ -59,7 +59,7 @@ triggers:
 | Key | Default | Meaning |
 |---|---|---|
 | `engine` | unset (instance `THEMIS_ENGINE`) | `codex` or `claude`; an invalid value warns and falls back to the instance default |
-| `web_access` | `false` | `true` re-enables network for the agent: codex gets `sandbox_workspace_write.network_access=true`, claude drops `--disallowedTools WebFetch,WebSearch`; only the repo's default branch controls this |
+| `web_access` | `false` | toggles engine web tooling: codex enables sandbox network access; claude enables `WebFetch`/`WebSearch`. Claude's unsandboxed Bash may still egress unless the deployment enforces an external network policy. Only the repo's default branch controls this |
 | `model.name` | unset (engine default) | `gpt-5.4` for codex, `claude-opus-4-6[1m]` for claude |
 | `model.reasoning_effort` | `high` | `low`, `medium`, or `high`; codex only, ignored by claude |
 | `limits.timeout_seconds` | `1200` | wall-clock budget per agent attempt, in seconds |

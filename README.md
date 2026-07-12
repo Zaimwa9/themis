@@ -164,7 +164,7 @@ cp -r examples/themis .themis
 | Key | Default | Meaning |
 |---|---|---|
 | `engine` | instance `THEMIS_ENGINE` | `codex` or `claude`, overrides the instance's default engine for this repo |
-| `web_access` | `false` | `true` gives the agent network access; enable for doctrines that verify external API contracts |
+| `web_access` | `false` | toggles engine web tooling; Claude's Bash may still egress unless the deployment enforces an external network policy |
 | `model.name` | engine default | `gpt-5.4` (codex) or `claude-opus-4-6[1m]` (claude) |
 | `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` (codex only) |
 | `limits.timeout_seconds` | `1200` | per agent attempt |
