@@ -205,6 +205,13 @@ https://dashboard.ngrok.com/get-started/your-authtoken. Themis discovers the
 ngrok URL and self-registers the webhook. Details:
 [`docs/local-tunnel.md`](docs/local-tunnel.md).
 
+Or skip the webhook entirely — headless mode: set
+`THEMIS_WEBHOOK_ENABLED=false` and `THEMIS_API_TOKEN=<long random token>` in
+`.env` (both already wired through `docker-compose.yml`), and trigger reviews
+yourself with `POST /api/review` and `POST /api/discuss`. No public URL, no
+tunnel, no webhook secret. Contracts and curl examples:
+[`docs/headless.md`](docs/headless.md).
+
 ### 6. Verify
 
 ```bash
