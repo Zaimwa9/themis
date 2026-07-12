@@ -268,7 +268,7 @@ def test_webhook_mention_review_command_enqueues_review_and_acks_issue_comment(m
     )
     assert response.status_code == 200
     assert response.json() == {"status": "queued"}
-    assert queue.enqueued == ["review:acme/widgets#5"]
+    assert queue.enqueued == ["review:acme/widgets#5:comment:501"]
     ack.assert_awaited_once()
     assert ack.await_args.kwargs == {"issue_comment_id": 501}
 
@@ -304,6 +304,28 @@ def test_webhook_duplicate_enqueue_returns_duplicate(monkeypatch):
     second = client.post("/webhook", content=payload, headers=headers)
     assert first.json() == {"status": "queued"}
     assert second.json() == {"status": "duplicate"}
+
+
+def test_webhook_distinct_review_commands_each_queue_a_review(monkeypatch):
+    monkeypatch.setattr("themis.router._ack", AsyncMock())
+    client, queue = make_client()
+    headers = {"x-github-event": "issue_comment"}
+
+    for comment_id in (501, 502):
+        payload = json.dumps(
+            issue_comment_payload(comment_id=comment_id, body="@test-reviewer review")
+        ).encode()
+        response = client.post(
+            "/webhook",
+            content=payload,
+            headers={**headers, "x-hub-signature-256": sign("hush", payload)},
+        )
+        assert response.json() == {"status": "queued"}
+
+    assert queue.enqueued == [
+        "review:acme/widgets#5:comment:501",
+        "review:acme/widgets#5:comment:502",
+    ]
 
 
 def test_webhook_route_absent_when_disabled():
