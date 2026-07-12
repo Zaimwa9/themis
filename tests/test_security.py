@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 import logging
 
 from themis.security import redact_outbound, verify_signature
@@ -97,6 +98,26 @@ def test_redact__credential_patterns():
     for leaked in ("sk-ant-", "gho_", "ghs_", "github_pat_", "eyJ"):
         assert leaked not in out
     assert out.count("[redacted]") == 5
+
+
+def test_redact__codex_auth_file_values_and_base64(tmp_path, monkeypatch):
+    import base64
+
+    home = tmp_path / "codex"
+    home.mkdir()
+    access_token = "opaque-access-token-with-unknown-shape"
+    refresh_token = "opaque-refresh-token-with-unknown-shape"
+    (home / "auth.json").write_text(json.dumps({
+        "tokens": {"access_token": access_token, "refresh_token": refresh_token},
+    }))
+    monkeypatch.setenv("CODEX_HOME", str(home))
+
+    encoded = base64.b64encode(refresh_token.encode()).decode()
+    out = redact_outbound(f"raw {access_token}; encoded {encoded}")
+
+    assert access_token not in out
+    assert encoded not in out
+    assert out.count("[redacted]") == 2
 
 
 def test_redact__clean_text_untouched_no_log(caplog):
