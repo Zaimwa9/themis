@@ -23,7 +23,7 @@ database, no Redis, no message broker.
 - An OpenAI account with Codex access, or a Claude Pro/Max subscription (pick your engine): the matching CLI installed (`npm install -g @openai/codex` or `npm install -g @anthropic-ai/claude-code`, Node 22+) and `codex login` or `claude setup-token` working on your machine
 - A GitHub account that can create a GitHub App (personal account or an org)
 
-No clone or build needed: Themis ships as a prebuilt multi-arch image,
+No clone or build needed: Themis ships as a prebuilt image,
 `ghcr.io/zaimwa9/themis`.
 
 ## Quickstart
@@ -185,10 +185,13 @@ review starts, then the review itself.
 
 ## Customize reviews
 
-Copy the starter kit into the target repo:
+Copy the starter kit into the target repo. This needs a temporary shallow
+checkout of Themis (the deployment itself does not):
 
 ```bash
-cp -r examples/themis .themis
+starter="$(mktemp -d)"
+git clone --depth 1 https://github.com/Zaimwa9/themis.git "$starter"
+cp -r "$starter/examples/themis" .themis
 ```
 
 - `.themis/review.md`: the review doctrine, philosophy, severity
