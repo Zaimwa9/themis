@@ -73,8 +73,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             slug = await get_app_slug(client, app_jwt)
         app.state.bot_slug = slug
         logger.info(
-            "themis_started slug=%s mention=@%s webhook_enabled=%s api_enabled=%s",
-            slug, slug, settings.webhook_enabled, bool(settings.api_token),
+            "themis_started slug=%s mention=@%s engine=%s webhook_enabled=%s api_enabled=%s",
+            slug, slug, settings.engine, settings.webhook_enabled, bool(settings.api_token),
         )
         await _register_webhook(settings, app_jwt)
         queue.start()

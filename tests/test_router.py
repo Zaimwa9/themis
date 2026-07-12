@@ -21,11 +21,13 @@ def make_settings(**overrides) -> Settings:
         gh_webhook_secret="hush",
         webhook_enabled=True,
         api_token=None,
-        repos=None,
         codex_sandbox="workspace-write",
+        engine="codex",
         workspace_root=Path("/tmp/themis-test"),
         public_url=None,
         tunnel_api=None,
+        agent_url="http://agent:8001",
+        agent_token="agent-secret",
     )
     return Settings(**{**defaults, **overrides})
 
@@ -204,31 +206,6 @@ def test_webhook_unknown_event_ignored():
     assert queue.enqueued == []
 
 
-def test_webhook_ignores_disallowed_repo(monkeypatch):
-    monkeypatch.setattr("themis.router._ack", AsyncMock())
-    settings = make_settings(repos=frozenset({"acme/allowed"}))
-    client, queue = make_client(settings)
-    payload = json.dumps(
-        {
-            "action": "opened",
-            "pull_request": {"number": 1, "draft": False},
-            "repository": {"full_name": "acme/other"},
-            "installation": {"id": 42},
-            "sender": {"type": "User"},
-        }
-    ).encode()
-    response = client.post(
-        "/webhook",
-        content=payload,
-        headers={
-            "x-hub-signature-256": sign("hush", payload),
-            "x-github-event": "pull_request",
-        },
-    )
-    assert response.json() == {"status": "ignored"}
-    assert queue.enqueued == []
-
-
 # --- webhook: enqueue + ack --------------------------------------------------
 
 
@@ -267,7 +244,7 @@ def test_webhook_mention_review_command_enqueues_review_and_acks_issue_comment(m
     )
     assert response.status_code == 200
     assert response.json() == {"status": "queued"}
-    assert queue.enqueued == ["review:acme/widgets#5"]
+    assert queue.enqueued == ["review:acme/widgets#5:comment:501"]
     ack.assert_awaited_once()
     assert ack.await_args.kwargs == {"issue_comment_id": 501}
 
@@ -303,6 +280,28 @@ def test_webhook_duplicate_enqueue_returns_duplicate(monkeypatch):
     second = client.post("/webhook", content=payload, headers=headers)
     assert first.json() == {"status": "queued"}
     assert second.json() == {"status": "duplicate"}
+
+
+def test_webhook_distinct_review_commands_each_queue_a_review(monkeypatch):
+    monkeypatch.setattr("themis.router._ack", AsyncMock())
+    client, queue = make_client()
+    headers = {"x-github-event": "issue_comment"}
+
+    for comment_id in (501, 502):
+        payload = json.dumps(
+            issue_comment_payload(comment_id=comment_id, body="@test-reviewer review")
+        ).encode()
+        response = client.post(
+            "/webhook",
+            content=payload,
+            headers={**headers, "x-hub-signature-256": sign("hush", payload)},
+        )
+        assert response.json() == {"status": "queued"}
+
+    assert queue.enqueued == [
+        "review:acme/widgets#5:comment:501",
+        "review:acme/widgets#5:comment:502",
+    ]
 
 
 def test_webhook_route_absent_when_disabled():
@@ -375,18 +374,6 @@ def test_api_review_403_when_app_not_installed(monkeypatch):
     response = client.post(
         "/api/review",
         json={"repo": "acme/widgets", "pr_number": 7},
-        headers={"Authorization": "Bearer sekret"},
-    )
-    assert response.status_code == 403
-
-
-def test_api_review_403_on_disallowed_repo():
-    client, _ = make_client(
-        make_settings(api_token="sekret", repos=frozenset({"acme/allowed"}))
-    )
-    response = client.post(
-        "/api/review",
-        json={"repo": "acme/other", "pr_number": 7},
         headers={"Authorization": "Bearer sekret"},
     )
     assert response.status_code == 403

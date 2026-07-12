@@ -1,7 +1,7 @@
 # Themis
 
-Themis is a self-hosted GitHub PR review bot that runs on your own Codex
-subscription. It reviews pull requests with inline findings and a structured
+Themis is a self-hosted GitHub PR review bot that runs on your own Codex or
+Claude Max subscription. It reviews pull requests with inline findings and a structured
 summary (verdict, scoring table, severity-ordered sections), answers
 questions in review threads and PR conversation, and takes its review
 doctrine from your own repository, under `.themis/`.
@@ -12,17 +12,25 @@ doctrine from your own repository, under `.themis/`.
 
 A GitHub App webhook delivers PR and comment events to Themis. Each event
 becomes a job on an in-memory queue, processed one at a time. The worker
-shallow-clones the PR head, runs `codex exec` against your repo's review
-doctrine, and posts findings and a summary back to GitHub as the App. One
-container, no external services: no database, no Redis, no message broker.
+shallow-clones the PR head, runs the configured engine (`codex exec` or
+`claude -p`) against your repo's review doctrine, and posts findings and a
+summary back to GitHub as the App. One image runs as an isolated controller
+and agent; there is still no database, Redis, or message broker.
 
 ## Prerequisites
 
 - Docker with the Compose plugin (Docker Desktop, or Docker Engine + `docker compose`)
-- A Codex subscription, with the CLI installed (`npm install -g @openai/codex`, Node 22+) and `codex login` working on your machine
+- An OpenAI account with Codex access, or a Claude Max subscription (pick your engine): the matching CLI installed (`npm install -g @openai/codex` or `npm install -g @anthropic-ai/claude-code`, Node 22+) and `codex login` or `claude setup-token` working on your machine. Claude Pro is not supported because Themis defaults to Opus.
 - A GitHub account that can create a GitHub App (personal account or an org)
 
+No clone or build needed: Themis ships as a prebuilt image,
+`ghcr.io/zaimwa9/themis`.
+
 ## Quickstart
+
+Setting this up is mostly mechanical; feel free to hand this README to the
+coding agent you already run (Claude Code, Codex, ...) on the machine that
+will host Themis, and only do the GitHub App clicks yourself.
 
 ### 1. Create the GitHub App
 
@@ -51,6 +59,11 @@ file), and **Install App** on the repositories you want reviewed.
 
 ### 2. Log in to Codex
 
+Using the claude engine instead? Skip this step and the auth.json seeding in
+step 4: run `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` plus
+`THEMIS_ENGINE=claude` in `.env` during step 3. Details in
+[Engines](#engines).
+
 Install the CLI if you haven't already (Node 22+):
 
 ```bash
@@ -64,14 +77,74 @@ codex login
 This writes credentials to `~/.codex/auth.json`. Themis reuses this file
 (step 4).
 
-### 3. Clone and configure
+### 3. Configure
 
-```bash
-git clone <this-repo-url> && cd themis
-cp .env.example .env
+Create a directory for the deployment with two files. Both services use the
+same image, but only the agent receives model credentials:
+
+```yaml
+services:
+  themis:
+    image: ghcr.io/zaimwa9/themis:latest
+    command: ["python", "-m", "themis", "controller"]
+    environment:
+      THEMIS_GH_APP_CLIENT_ID: ${THEMIS_GH_APP_CLIENT_ID}
+      THEMIS_GH_APP_PRIVATE_KEY: ${THEMIS_GH_APP_PRIVATE_KEY}
+      THEMIS_GH_WEBHOOK_SECRET: ${THEMIS_GH_WEBHOOK_SECRET}
+      THEMIS_AGENT_TOKEN: ${THEMIS_AGENT_TOKEN}
+      THEMIS_AGENT_URL: http://agent:8001
+      THEMIS_ENGINE: ${THEMIS_ENGINE:-codex}
+      THEMIS_PUBLIC_URL: ${THEMIS_PUBLIC_URL:-}
+      THEMIS_TUNNEL_API: ${THEMIS_TUNNEL_API:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - workspaces:/tmp/themis
+    depends_on:
+      agent:
+        condition: service_healthy
+    restart: unless-stopped
+
+  agent:
+    image: ghcr.io/zaimwa9/themis:latest
+    command: ["python", "-m", "themis", "agent"]
+    environment:
+      THEMIS_AGENT_TOKEN: ${THEMIS_AGENT_TOKEN}
+      THEMIS_WORKSPACE_ROOT: /tmp/themis
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    volumes:
+      - workspaces:/tmp/themis
+      - codex-home:/data/codex
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Optional: local tunnel for hosts without a public URL (step 5).
+  ngrok:
+    image: ngrok/ngrok:3
+    profiles: ["tunnel"]
+    command: ["http", "themis:8000"]
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    restart: unless-stopped
+
+volumes:
+  workspaces:
+  codex-home:
 ```
 
-Fill in the three required variables in `.env`:
+And `.env` with the required variables (full reference:
+[`docs/configuration.md`](docs/configuration.md)):
+
+```bash
+THEMIS_GH_APP_CLIENT_ID=
+THEMIS_GH_APP_PRIVATE_KEY=
+THEMIS_GH_WEBHOOK_SECRET=
+THEMIS_AGENT_TOKEN=
+```
 
 - `THEMIS_GH_APP_CLIENT_ID`: the App's Client ID, from the App's settings page
 - `THEMIS_GH_APP_PRIVATE_KEY`: the private key from step 1, base64-encoded,
@@ -79,6 +152,8 @@ Fill in the three required variables in `.env`:
   - macOS: `base64 -i key.pem | tr -d '\n'`
   - Linux: `base64 -w0 key.pem`
 - `THEMIS_GH_WEBHOOK_SECRET`: the same secret you generated in step 1
+- `THEMIS_AGENT_TOKEN`: generate with `openssl rand -hex 32`; it only
+  authenticates the controller to the isolated agent service
 
 ### 4. Run it
 
@@ -86,7 +161,7 @@ Server (VPS, always-on host, PaaS):
 
 ```bash
 docker compose up -d
-cat ~/.codex/auth.json | docker compose exec -T themis sh -c 'cat > /data/codex/auth.json'
+cat ~/.codex/auth.json | docker compose exec -T agent sh -c 'cat > /data/codex/auth.json'
 ```
 
 The second command seeds Codex's login into the container's volume once;
@@ -97,7 +172,7 @@ create `docker-compose.override.yml` next to `docker-compose.yml`:
 
 ```yaml
 services:
-  themis:
+  agent:
     volumes:
       - ~/.codex:/data/codex
 ```
@@ -144,10 +219,13 @@ review starts, then the review itself.
 
 ## Customize reviews
 
-Copy the starter kit into the target repo:
+Copy the starter kit into the target repo. This needs a temporary shallow
+checkout of Themis (the deployment itself does not):
 
 ```bash
-cp -r examples/themis .themis
+starter="$(mktemp -d)"
+git clone --depth 1 https://github.com/Zaimwa9/themis.git "$starter"
+cp -r "$starter/examples/themis" .themis
 ```
 
 - `.themis/review.md`: the review doctrine, philosophy, severity
@@ -155,11 +233,17 @@ cp -r examples/themis .themis
   straight from the PR branch on every review.
 - `.themis/config.yaml`: behavior knobs, every key optional.
 
+How the doctrine is consumed and how to write one that works:
+[`docs/doctrine.md`](docs/doctrine.md). This repo reviews itself with its own
+[`.themis/review.md`](.themis/review.md).
+
 | Key | Default | Meaning |
 |---|---|---|
-| `model.name` | `gpt-5.4` | codex model |
-| `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` |
-| `limits.timeout_seconds` | `1200` | per codex attempt |
+| `engine` | instance `THEMIS_ENGINE` | `codex` or `claude`, overrides the instance's default engine for this repo |
+| `web_access` | `false` | toggles engine web tooling; Claude's Bash may still egress unless the deployment enforces an external network policy |
+| `model.name` | engine default | `gpt-5.4` (codex) or `claude-opus-4-6[1m]` (claude) |
+| `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` (codex only) |
+| `limits.timeout_seconds` | `1200` | per agent attempt |
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
 | `limits.clone_depth` | `50` | shallow clone depth |
 | `triggers.auto_review` | `true` | `false` = mention-only, no auto-review when a PR opens or is marked ready for review |
@@ -168,6 +252,20 @@ Talk to the bot in a PR: `@<app-slug> review` re-reviews on demand,
 `@<app-slug> <question>` asks a question, and replies inside a thread the
 bot already posted in are answered automatically, no mention needed.
 
+## Engines
+
+Themis runs reviews through one of two agent CLIs, using your Codex or Claude Max subscription:
+
+| Engine | Auth | Setup |
+|---|---|---|
+| `codex` (default) | `auth.json` volume (`CODEX_HOME`) | `codex login` locally (quickstart step 2), copy `auth.json` into the volume (quickstart step 4) |
+| `claude` | one env var | run `claude setup-token` locally, set `CLAUDE_CODE_OAUTH_TOKEN` in `.env` |
+
+Pick the instance default with `THEMIS_ENGINE` in `.env`. A repo can override it
+in `.themis/config.yaml` with `engine: claude` or `engine: codex`; if that engine
+has no credentials on the instance, Themis posts a comment saying so instead of
+failing silently. The claude path needs no volume: token in `.env`, done.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -175,8 +273,9 @@ bot already posted in are answered automatically, no mention needed.
 | Crashes at startup naming an env var | Set that variable; Themis fails fast on missing or invalid required config. |
 | Crashes at startup on a `GET /app` call | Wrong `THEMIS_GH_APP_CLIENT_ID` or malformed `THEMIS_GH_APP_PRIVATE_KEY`. |
 | Codex sandbox errors | Set `THEMIS_CODEX_SANDBOX=danger-full-access`; the container is the sandbox boundary on runtimes without Landlock. |
-| PR comment says the usage limit was reached | Your Codex subscription's usage window is exhausted. Mention the bot again once it resets. |
+| PR comment says the usage limit was reached | Your Codex or Claude subscription (whichever engine ran the job) has hit its usage window. Mention the bot again once it resets. |
 | Auth that worked starts failing months later | Re-seed `auth.json` (`codex login` locally, then repeat the seeding step from Quickstart step 4). |
+| Review comment says engine credentials missing | Set `CLAUDE_CODE_OAUTH_TOKEN` (claude) or seed the codex auth volume (codex), or change `THEMIS_ENGINE` / the repo's `engine:` key. |
 | Webhook deliveries show 401 in the App's settings | `THEMIS_GH_WEBHOOK_SECRET` doesn't match the App's webhook secret. |
 | Where are the logs | `docker compose logs -f themis` |
 | A job queued right before a restart never ran | The in-memory queue doesn't survive restarts; mention the bot again to re-trigger. |
@@ -184,9 +283,10 @@ bot already posted in are answered automatically, no mention needed.
 
 ## Documentation
 
-- [`docs/server-deploy.md`](docs/server-deploy.md): deploying to any Docker host or PaaS, the full env var reference, upgrades.
+- [`docs/server-deploy.md`](docs/server-deploy.md): deploying to any Docker host or PaaS, upgrades.
 - [`docs/local-tunnel.md`](docs/local-tunnel.md): the ngrok tunnel profile in depth.
 - [`docs/headless.md`](docs/headless.md): bring your own webhook handler, the `/api/review` and `/api/discuss` contracts.
+- [`docs/doctrine.md`](docs/doctrine.md): the review doctrine, how it works and how to write a good one.
 - [`docs/configuration.md`](docs/configuration.md): the full env and `.themis/config.yaml` reference.
 - [`docs/security.md`](docs/security.md): the trust model and bot-side guardrails.
 

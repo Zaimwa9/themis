@@ -6,7 +6,19 @@ from pathlib import Path
 
 import pytest
 
-from themis.codex import CodexError, CodexQuotaError, run_codex
+from themis.engines.base import EngineError, EngineQuotaError
+from themis.engines.codex import CodexEngine
+
+
+async def run_codex(
+    *, prompt, workspace, model, effort, timeout,
+    sandbox="workspace-write", web_access=False,
+):
+    # Local adapter so the ported test bodies below stay unchanged.
+    return await CodexEngine(sandbox=sandbox).run(
+        prompt=prompt, workspace=workspace, model=model, effort=effort,
+        timeout=timeout, web_access=web_access,
+    )
 
 pytestmark = pytest.mark.asyncio
 
@@ -51,6 +63,8 @@ async def test_run_codex__argv__contains_exec_model_effort_and_prompt(
     assert "gpt-5.4" in args
     assert "model_reasoning_effort=high" in args
     assert "workspace-write" in args
+    assert "--ignore-user-config" in args
+    assert "--ignore-rules" in args
     assert "review this" in args
 
 
@@ -68,7 +82,7 @@ async def test_run_codex__sandbox_override__lands_in_argv(tmp_path, monkeypatch,
 async def test_run_codex__nonzero_exit__raises_codex_error(tmp_path, monkeypatch, workspace):
     _fake_cli(tmp_path, monkeypatch, "echo broken >&2; exit 3")
 
-    with pytest.raises(CodexError, match="exited 3"):
+    with pytest.raises(EngineError, match="exited 3"):
         await run_codex(
             prompt="p", workspace=workspace, model="gpt-5.4", effort="high", timeout=10
         )
@@ -79,7 +93,7 @@ async def test_run_codex__usage_limit_message__raises_quota_error(
 ):
     _fake_cli(tmp_path, monkeypatch, 'echo "You have hit your usage limit."; exit 1')
 
-    with pytest.raises(CodexQuotaError):
+    with pytest.raises(EngineQuotaError):
         await run_codex(
             prompt="p", workspace=workspace, model="gpt-5.4", effort="high", timeout=10
         )
@@ -91,11 +105,11 @@ async def test_run_codex__rate_limit_message__raises_plain_codex_error(
     # A per-minute rate limit is transient and must be retried, not treated as quota exhaustion.
     _fake_cli(tmp_path, monkeypatch, 'echo "you hit a rate limit, please retry"; exit 1')
 
-    with pytest.raises(CodexError, match="exited 1") as excinfo:
+    with pytest.raises(EngineError, match="exited 1") as excinfo:
         await run_codex(
             prompt="p", workspace=workspace, model="gpt-5.4", effort="high", timeout=10
         )
-    assert not isinstance(excinfo.value, CodexQuotaError)
+    assert not isinstance(excinfo.value, EngineQuotaError)
 
 
 async def test_run_codex__quota_marker_only_in_early_output__raises_plain_codex_error(
@@ -105,7 +119,7 @@ async def test_run_codex__quota_marker_only_in_early_output__raises_plain_codex_
     script = 'echo "the diff mentions rate limit handling"; head -c 3000 /dev/zero | tr "\\0" x; exit 7'
     _fake_cli(tmp_path, monkeypatch, script)
 
-    with pytest.raises(CodexError, match="exited 7"):
+    with pytest.raises(EngineError, match="exited 7"):
         await run_codex(
             prompt="p", workspace=workspace, model="gpt-5.4", effort="high", timeout=10
         )
@@ -150,7 +164,7 @@ async def test_run_codex__timeout__kills_process_group_promptly(
     _fake_cli(tmp_path, monkeypatch, "sleep 5 & sleep 5")
 
     start = time.monotonic()
-    with pytest.raises(CodexError, match="timed out"):
+    with pytest.raises(EngineError, match="timed out"):
         await run_codex(
             prompt="p", workspace=workspace, model="gpt-5.4", effort="high", timeout=1
         )
@@ -186,3 +200,54 @@ async def test_run_codex__cancelled__kills_process_group(tmp_path, monkeypatch, 
     else:
         os.kill(child_pid, 9)
         pytest.fail("background child survived cancellation")
+
+
+async def test_run_codex__web_access__adds_network_config_flag(
+    tmp_path, monkeypatch, workspace
+):
+    _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt')
+
+    await run_codex(
+        prompt="p", workspace=workspace, model="gpt-5.4", effort="high",
+        timeout=10, web_access=True,
+    )
+
+    assert "sandbox_workspace_write.network_access=true" in (workspace / "args.txt").read_text()
+
+
+async def test_run_codex__default__no_network_config_flag(tmp_path, monkeypatch, workspace):
+    _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt')
+
+    await run_codex(prompt="p", workspace=workspace, model="gpt-5.4", effort="high", timeout=10)
+
+    assert "network_access" not in (workspace / "args.txt").read_text()
+
+
+def test_available__auth_json_present__true(tmp_path, monkeypatch):
+    home = tmp_path / "codex_home"
+    home.mkdir()
+    (home / "auth.json").write_text("{}")
+    monkeypatch.setenv("CODEX_HOME", str(home))
+
+    assert CodexEngine().available() is True
+
+
+def test_available__auth_json_missing__false(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "nowhere"))
+
+    assert CodexEngine().available() is False
+
+
+async def test_run_codex__error_tail__redacts_env_secrets(tmp_path, monkeypatch, workspace):
+    # A hostile prompt can steer the agent into echoing its secrets; the
+    # error tail lands in logs and tracebacks, so it is redacted at source.
+    monkeypatch.setenv("THEMIS_API_TOKEN", "api-token-value")
+    _fake_cli(tmp_path, monkeypatch, 'echo "leak api-token-value"; exit 3')
+
+    with pytest.raises(EngineError) as excinfo:
+        await run_codex(
+            prompt="p", workspace=workspace, model="gpt-5.4", effort="high", timeout=10
+        )
+
+    assert "api-token-value" not in str(excinfo.value)
+    assert "[redacted]" in str(excinfo.value)

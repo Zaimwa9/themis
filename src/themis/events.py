@@ -13,6 +13,10 @@ class ReviewJob:
     pr_number: int
     installation_id: int
     auto: bool
+    # Issue comment that asked for the review; None for auto-reviews.
+    trigger_comment_id: int | None = None
+    # Optional request text supplied after the `review` command.
+    extra_context: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,9 +94,13 @@ def _parse_issue_comment(
     repo = payload["repository"]["full_name"]
     pr_number = issue["number"]
     installation_id = payload["installation"]["id"]
-    if rest.lower().strip(" .!?") == "review":
+    command, *remainder = rest.split(maxsplit=1)
+    if command.lower().strip(".!?") == "review":
+        extra_context = remainder[0].strip() if remainder else ""
         return ReviewJob(
-            repo=repo, pr_number=pr_number, installation_id=installation_id, auto=False
+            repo=repo, pr_number=pr_number, installation_id=installation_id,
+            auto=False, trigger_comment_id=payload["comment"]["id"],
+            extra_context=extra_context if len(extra_context) > 20 else None,
         )
     return DiscussJob(
         repo=repo,

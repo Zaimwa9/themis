@@ -1,10 +1,10 @@
 FROM python:3.12-slim
 
-# git for PR workspaces; node for the codex CLI (version pinned on purpose)
+# git for PR workspaces; node for the codex and claude CLIs (versions pinned on purpose)
 RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @openai/codex@0.144.0 \
+    && npm install -g @openai/codex@0.144.0 @anthropic-ai/claude-code@2.1.207 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
