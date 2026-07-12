@@ -126,9 +126,6 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             if job is None:
                 logger.debug("themis_event_ignored event=%s action=%s", event, payload.get("action"))
                 return {"status": "ignored"}
-            if not settings.repo_allowed(job.repo):
-                logger.info("themis_repo_not_allowed repo=%s", job.repo)
-                return {"status": "ignored"}
             enqueued = _enqueue(settings, queue, slug, job)
             logger.info(
                 "themis_enqueued job=%s repo=%s pr=%s duplicate=%s",
@@ -149,8 +146,6 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             raise HTTPException(status_code=401, detail="invalid token")
 
     async def _resolve_installation(repo: str) -> int:
-        if not settings.repo_allowed(repo):
-            raise HTTPException(status_code=403, detail="repo not allowed")
         app_jwt = make_app_jwt(settings.gh_app_client_id, settings.gh_app_private_key_pem)
         async with httpx.AsyncClient(timeout=30) as client:
             installation_id = await get_repo_installation_id(client, repo, app_jwt)

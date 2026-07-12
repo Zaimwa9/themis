@@ -16,7 +16,7 @@ from themis.config import Settings, SettingsError
 
 THEMIS_ENV_KEYS = (
     "THEMIS_GH_APP_CLIENT_ID", "THEMIS_GH_APP_PRIVATE_KEY", "THEMIS_GH_WEBHOOK_SECRET",
-    "THEMIS_CODEX_SANDBOX", "THEMIS_REPOS", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
+    "THEMIS_CODEX_SANDBOX", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
     "THEMIS_WEBHOOK_ENABLED", "THEMIS_API_TOKEN", "THEMIS_WORKSPACE_ROOT",
 )
 
@@ -40,7 +40,6 @@ def make_settings(**overrides) -> Settings:
         gh_webhook_secret="hush",
         webhook_enabled=True,
         api_token=None,
-        repos=None,
         codex_sandbox="workspace-write",
         engine="codex",
         workspace_root=Path("/tmp/themis-test"),
