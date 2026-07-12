@@ -63,6 +63,8 @@ async def test_run_codex__argv__contains_exec_model_effort_and_prompt(
     assert "gpt-5.4" in args
     assert "model_reasoning_effort=high" in args
     assert "workspace-write" in args
+    assert "--ignore-user-config" in args
+    assert "--ignore-rules" in args
     assert "review this" in args
 
 
