@@ -88,15 +88,18 @@ $THEMIS_API_TOKEN`, also compared constant-time. Missing or wrong token:
 The codex engine runs under codex's own kernel sandbox (`workspace-write`
 by default, network denied). The claude engine has no kernel sandbox: it
 runs with permissions skipped, and the container is the isolation boundary
-(non-root user, allowlisted env, scrubbed clone). By default it also has no
-web reach (`WebFetch`/`WebSearch` disallowed), but Bash remains available,
-so a prompt-injected job could in principle exfiltrate over the network.
+(non-root user, allowlisted env, scrubbed clone). Claude runs in safe mode,
+with filesystem setting sources disabled, a strict empty MCP configuration,
+auto-memory off, and an isolated config directory, so repo-controlled
+`CLAUDE.md`, hooks, plugins, skills, agents, and MCP servers are not loaded. By default its
+`WebFetch`/`WebSearch` tools are also disabled, but Bash remains available,
+so a prompt-injected job could still exfiltrate over the network.
 The only secret in its reach is your own Claude token; it's on the
 outbound-redaction list above so it never reaches a GitHub-facing body, and
-it's rotatable with `claude setup-token`. Repos opt into web reach per repo
-with `web_access: true` (default-branch controlled); deployments with
-strict requirements should add egress filtering at the container or
-network layer.
+it's rotatable with `claude setup-token`. Repos opt into Claude's built-in
+web tools per repo with `web_access: true` (default-branch controlled);
+deployments with strict requirements should add egress filtering at the
+container or network layer.
 
 ## Single-tenant by design
 
