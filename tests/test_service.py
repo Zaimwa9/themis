@@ -153,10 +153,18 @@ def _http_error(status: int) -> httpx.HTTPStatusError:
     )
 
 
-async def test_review__start__adds_rocket_reaction_on_pr(service, gh):
+async def test_review__auto__adds_rocket_reaction_on_pr(service, gh):
     await service.review(REPO, 7, 42, auto=True)
 
     gh.add_reaction.assert_awaited_once_with(REPO, issue_number=7, content="rocket")
+
+
+async def test_review__comment_triggered__adds_rocket_on_trigger_comment(service, gh):
+    await service.review(REPO, 7, 42, auto=False, trigger_comment_id=501)
+
+    gh.add_reaction.assert_awaited_once_with(
+        REPO, issue_comment_id=501, content="rocket"
+    )
 
 
 async def test_review__skipped_pr__no_rocket_reaction(service, gh):
