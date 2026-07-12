@@ -13,6 +13,8 @@ class ReviewJob:
     pr_number: int
     installation_id: int
     auto: bool
+    # Issue comment that asked for the review; None for auto-reviews.
+    trigger_comment_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -92,7 +94,8 @@ def _parse_issue_comment(
     installation_id = payload["installation"]["id"]
     if rest.lower().strip(" .!?") == "review":
         return ReviewJob(
-            repo=repo, pr_number=pr_number, installation_id=installation_id, auto=False
+            repo=repo, pr_number=pr_number, installation_id=installation_id,
+            auto=False, trigger_comment_id=payload["comment"]["id"],
         )
     return DiscussJob(
         repo=repo,
