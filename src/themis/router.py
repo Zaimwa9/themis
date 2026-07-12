@@ -58,6 +58,7 @@ def _enqueue(
             await run_review_job(
                 settings, slug, job.repo, job.pr_number, job.installation_id, job.auto,
                 trigger_comment_id=job.trigger_comment_id,
+                extra_context=job.extra_context,
             )
     else:
         async def run() -> None:
