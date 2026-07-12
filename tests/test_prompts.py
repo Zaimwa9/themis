@@ -85,6 +85,15 @@ def test_build_review_prompt__assumptions_section():
     assert "Omit the section only when you verified everything" in prompt
 
 
+def test_build_review_prompt__unverified_findings_keep_severity():
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+
+    assert "Verification gates confidence, never reporting" in prompt
+    assert "still a finding at its full severity" in prompt
+    assert "`(unverified)`" in prompt
+    assert "Never demote a suspected defect" in prompt
+
+
 def test_build_discussion_prompt__thread__includes_history_and_reply_file():
     prompt = build_discussion_prompt(
         question="why is this safe?", kind="thread", thread_context='{"id": "T_1"}'
