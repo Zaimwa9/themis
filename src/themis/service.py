@@ -144,6 +144,7 @@ class ReviewService:
     async def review(
         self, repo: str, pr_number: int, installation_id: int, auto: bool,
         trigger_comment_id: int | None = None,
+        extra_context: str | None = None,
     ) -> None:
         token = await self.get_token(installation_id)
         gh = self.make_client(token)
@@ -185,7 +186,9 @@ class ReviewService:
             )
             try:
                 _write_inputs(workspace, pr, threads)
-                prompt = build_review_prompt(repo, pr_number, pr["base"]["ref"])
+                prompt = build_review_prompt(
+                    repo, pr_number, pr["base"]["ref"], extra_context=extra_context
+                )
                 actions = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
                     parse_output, noun="review",
@@ -560,6 +563,7 @@ def build_service(settings: Settings, bot_slug: str) -> ReviewService:
 async def run_review_job(
     settings: Settings, bot_slug: str, repo: str, pr_number: int,
     installation_id: int, auto: bool, trigger_comment_id: int | None = None,
+    extra_context: str | None = None,
 ) -> None:
     service = build_service(settings, bot_slug)
     await asyncio.to_thread(sweep_stale, settings.workspace_root)
@@ -567,6 +571,7 @@ async def run_review_job(
         await service.review(
             repo, pr_number, installation_id, auto,
             trigger_comment_id=trigger_comment_id,
+            extra_context=extra_context,
         )
     except asyncio.CancelledError:
         # The queue timeout also covers time spent behind the codex semaphore;

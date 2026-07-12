@@ -103,9 +103,23 @@ def test_parse_event__mention_wrapped_in_parens__still_recognized():
     assert job.mentions_bot is True
 
 
-def test_parse_event__review_with_extra_text__discuss_job():
-    payload = _issue_comment_payload(f"{MENTION} review the auth changes")
-    assert isinstance(parse_event("issue_comment", payload, MENTION), DiscussJob)
+def test_parse_event__review_with_extra_text__review_job_with_context():
+    context = "focus on authorization boundaries and token handling"
+    payload = _issue_comment_payload(f"{MENTION} review {context}")
+
+    job = parse_event("issue_comment", payload, MENTION)
+
+    assert isinstance(job, ReviewJob)
+    assert job.extra_context == context
+
+
+def test_parse_event__review_with_short_extra_text__review_job_without_context():
+    payload = _issue_comment_payload(f"{MENTION} review auth")
+
+    job = parse_event("issue_comment", payload, MENTION)
+
+    assert isinstance(job, ReviewJob)
+    assert job.extra_context is None
 
 
 def test_parse_event__bare_mention__none():
