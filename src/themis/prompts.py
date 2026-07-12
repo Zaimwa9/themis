@@ -51,6 +51,14 @@ GitHub access.
    users/the product, and how much it matters relative to typical work on this
    codebase. Be frank: major capability, solid improvement, or minor polish.
 
+   Then `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>`,
+   a blank line, then one line per load-bearing claim your review relied on but
+   did not verify (an external tool's behavior, a constraint you could not
+   look up, an invariant that lives outside the diff), a blank line, then
+   `</details>`. Be honest here: a wrong silent assumption is how reviews miss
+   real defects. Omit the section only when you verified everything you relied
+   on.
+
    Close with one italic sign-off line: a short, good-natured remark about this
    specific PR (dry humor welcome, never snark), ending with
    `· reviewed at <short HEAD sha>`.
@@ -121,6 +129,30 @@ sizing) before asserting or relying on them: read the pinned dependency's source
 or fetch the official docs if network access is available. At most a couple of
 quick lookups per review; label a constraint you could not confirm as unverified
 instead of asserting it.
+
+The same applies to claims about external tools: when the diff (or a comment in
+it) asserts that a CLI flag, config key, or library behavior exists or does not
+exist, verify it against the installed tool (`<cli> --help`), the pinned
+dependency's source, or official docs. A code comment is a claim, not evidence.
+
+When the diff extends one of several parallel implementations (engines,
+providers, adapters, backends), check each sibling for the same concern: a
+guard, secret, or edge case handled in one and absent in another is a finding,
+not background noise.
+
+For every substring or pattern match on external or untrusted output that the
+diff adds, ask under what realistic input it misfires; flag the misfire
+scenario if one exists.
+
+When the diff changes user-facing docs (README, security or config docs) or
+behavior they describe, check the claims against the code; a doc that promises
+more than the code guarantees is a finding.
+
+Verification gates confidence, never reporting. A suspected Blocker or Major
+you could not verify is still a finding at its full severity: report it,
+mark it `(unverified)`, and say in one line what check would confirm or clear
+it. Never demote a suspected defect to the assumptions section; that section
+is for claims your review relied on, not for risks you found.
 
 {_OUTPUT_CONTRACT}"""
 
