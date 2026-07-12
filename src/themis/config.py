@@ -100,6 +100,8 @@ class Settings:
     workspace_root: Path
     public_url: str | None
     tunnel_api: str | None
+    agent_url: str
+    agent_token: str = field(repr=False)
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -122,7 +124,9 @@ def _decode_private_key(raw: str) -> str:
 def load_settings() -> Settings:
     missing = [
         name
-        for name in ("THEMIS_GH_APP_CLIENT_ID", "THEMIS_GH_APP_PRIVATE_KEY")
+        for name in (
+            "THEMIS_GH_APP_CLIENT_ID", "THEMIS_GH_APP_PRIVATE_KEY", "THEMIS_AGENT_TOKEN"
+        )
         if not os.getenv(name)
     ]
     if missing:
@@ -166,4 +170,6 @@ def load_settings() -> Settings:
         workspace_root=Path(os.getenv("THEMIS_WORKSPACE_ROOT") or "/tmp/themis"),
         public_url=public_url,
         tunnel_api=os.getenv("THEMIS_TUNNEL_API") or None,
+        agent_url=os.getenv("THEMIS_AGENT_URL") or "http://agent:8001",
+        agent_token=os.environ["THEMIS_AGENT_TOKEN"],
     )

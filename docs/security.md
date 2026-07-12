@@ -14,9 +14,9 @@ adversarial doctrine.
 These hold regardless of what `review.md` says, because they sit outside
 the agent's reach:
 
-- **No GitHub access from the agent.** The `codex exec` / `claude -p`
-  subprocess never sees a GitHub token. Cloning and posting happen in
-  Themis's own process, before and after the agent run.
+- **No GitHub credentials in the agent container.** The controller clones and
+  posts. The separate agent container receives only the shared temporary
+  workspace, prompt, and engine credential, and has its own PID namespace.
 - **Env allowlist.** Each engine runs with an explicit allowlist of
   environment variables (`PATH`, `HOME`, locale and proxy variables, plus
   `CODEX_HOME` for codex or `CLAUDE_CODE_OAUTH_TOKEN` for claude); none of
@@ -39,12 +39,13 @@ the agent's reach:
 
 ## Engine secret reachability and outbound redaction
 
-The agent subprocess runs on untrusted PR content. Its environment is
+The agent subprocess runs on untrusted PR content inside the agent container. Its environment is
 allowlisted per engine: codex sees only `CODEX_HOME` beyond the base set and
 runs with `--ignore-user-config --ignore-rules`, so it authenticates from
 `auth.json` without loading worker config or repo `.rules` files; claude sees
-`CLAUDE_CODE_OAUTH_TOKEN` plus non-secret hygiene flags. Neither ever sees a
-GitHub token or any `THEMIS_*` secret.
+`CLAUDE_CODE_OAUTH_TOKEN` plus non-secret hygiene flags. The agent container
+never receives the GitHub App key, webhook secret, or API token. It receives
+only `THEMIS_AGENT_TOKEN`, which grants execution access but no GitHub access.
 
 A hostile PR can still instruct the agent to print secrets it legitimately
 holds (its own subscription credential) into the review output. Every body
@@ -88,7 +89,7 @@ $THEMIS_API_TOKEN`, also compared constant-time. Missing or wrong token:
 
 The codex engine runs under codex's own kernel sandbox (`workspace-write`
 by default, network denied). The claude engine has no kernel sandbox: it
-runs with permissions skipped, and the container is the isolation boundary
+runs with permissions skipped, and its dedicated container is the isolation boundary
 (non-root user, allowlisted env, scrubbed clone). Claude runs in safe mode,
 with filesystem setting sources disabled, a strict empty MCP configuration,
 auto-memory off, and an isolated config directory, so repo-controlled
@@ -99,8 +100,9 @@ The only secret in its reach is your own Claude token; it's on the
 outbound-redaction list above so it never reaches a GitHub-facing body, and
 it's rotatable with `claude setup-token`. Repos opt into Claude's built-in
 web tools per repo with `web_access: true` (default-branch controlled);
-deployments with strict requirements should add egress filtering at the
-container or network layer.
+deployments with strict requirements should route the agent through an egress
+proxy allowlisting Anthropic's required endpoints. Container separation
+protects GitHub credentials but does not itself restrict outbound networking.
 
 ## Single-tenant by design
 
