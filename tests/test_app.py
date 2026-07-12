@@ -16,8 +16,9 @@ from themis.config import Settings, SettingsError
 
 THEMIS_ENV_KEYS = (
     "THEMIS_GH_APP_CLIENT_ID", "THEMIS_GH_APP_PRIVATE_KEY", "THEMIS_GH_WEBHOOK_SECRET",
-    "THEMIS_CODEX_SANDBOX", "THEMIS_REPOS", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
+    "THEMIS_CODEX_SANDBOX", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
     "THEMIS_WEBHOOK_ENABLED", "THEMIS_API_TOKEN", "THEMIS_WORKSPACE_ROOT",
+    "THEMIS_AGENT_URL", "THEMIS_AGENT_TOKEN",
 )
 
 
@@ -40,11 +41,13 @@ def make_settings(**overrides) -> Settings:
         gh_webhook_secret="hush",
         webhook_enabled=True,
         api_token=None,
-        repos=None,
         codex_sandbox="workspace-write",
+        engine="codex",
         workspace_root=Path("/tmp/themis-test"),
         public_url=None,
         tunnel_api=None,
+        agent_url="http://agent:8001",
+        agent_token="agent-secret",
     )
     return Settings(**{**defaults, **overrides})
 
@@ -216,3 +219,18 @@ def test_slug_resolution_failure_fails_startup(monkeypatch):
     with pytest.raises(httpx.HTTPStatusError):
         with TestClient(create_app(make_settings())):
             pass
+
+
+# --- default engine availability ---------------------------------------------
+
+
+def test_startup__started_log_includes_engine(quiet_github, caplog, tmp_path):
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "auth.json").write_text("{}")
+    quiet_github.setenv("CODEX_HOME", str(home))
+    with caplog.at_level(logging.INFO, logger="themis.app"):
+        with TestClient(create_app(make_settings())):
+            pass
+    assert "engine=codex" in caplog.text
+    assert "themis_default_engine_unavailable" not in caplog.text

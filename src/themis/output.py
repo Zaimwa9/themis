@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any
 
 OUTPUT_DIR = ".review-output"
+# Every file the engine may write under OUTPUT_DIR. The agent service redacts
+# exactly this set before results cross back to the controller; extend it in
+# lockstep with any new parsed file.
+OUTPUT_FILES = ("summary.md", "actions.json", "reply.md")
 MAX_BODY_LEN = 65000
 MAX_FILE_SIZE = 1_000_000
 VALID_SIDES = ("LEFT", "RIGHT")

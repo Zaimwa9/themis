@@ -93,7 +93,7 @@ curl -X POST https://your-themis-host/api/discuss \
 | `202 {"status": "queued"}` | enqueued |
 | `202 {"status": "duplicate"}` | a job with the same id is already queued or running |
 | `401` | missing or wrong bearer token |
-| `403` | repo outside `THEMIS_REPOS`, or the App isn't installed on it |
+| `403` | the App isn't installed on the repository |
 | `404` | the trigger API is disabled (`THEMIS_API_TOKEN` unset) |
 
 ## Forwarding from an existing handler

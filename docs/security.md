@@ -14,13 +14,15 @@ adversarial doctrine.
 These hold regardless of what `review.md` says, because they sit outside
 the agent's reach:
 
-- **No GitHub access from codex.** The `codex exec` subprocess never sees a
-  GitHub token. Cloning and posting happen in Themis's own process, before
-  and after the codex run.
-- **Env allowlist.** codex runs with an explicit allowlist of environment
-  variables (`PATH`, `HOME`, `CODEX_HOME`, locale and proxy variables);
-  none of Themis's own secrets, GitHub App key, webhook secret, API token,
-  are in its environment. See `../src/themis/codex.py`.
+- **No GitHub credentials in the agent container.** The controller clones and
+  posts. The separate agent container receives only the shared temporary
+  workspace, prompt, and engine credential, and has its own PID namespace.
+- **Env allowlist.** Each engine runs with an explicit allowlist of
+  environment variables (`PATH`, `HOME`, locale and proxy variables, plus
+  `CODEX_HOME` for codex or `CLAUDE_CODE_OAUTH_TOKEN` for claude); none of
+  Themis's own secrets, GitHub App key, webhook secret, API token, are in
+  its environment. See `../src/themis/engines/base.py` and "Engine secret
+  reachability and outbound redaction" below.
 - **Findings filtered to the diff.** Inline findings that land outside the
   PR's actual changed files are dropped before posting, and folded into the
   summary as unposted instead of silently discarded.
@@ -34,6 +36,28 @@ the agent's reach:
 - **Workspaces don't persist.** Each job's clone is deleted when the job
   ends, success or failure, and a stale-workspace sweep runs at the start
   of every job as a crash safety net.
+
+## Engine secret reachability and outbound redaction
+
+The agent subprocess runs on untrusted PR content inside the agent container. Its environment is
+allowlisted per engine: codex sees only `CODEX_HOME` beyond the base set and
+runs with `--ignore-user-config --ignore-rules`, so it authenticates from
+`auth.json` without loading worker config or repo `.rules` files; claude sees
+`CLAUDE_CODE_OAUTH_TOKEN` plus non-secret hygiene flags. The agent container
+never receives the GitHub App key, webhook secret, or API token. It receives
+only `THEMIS_AGENT_TOKEN`, which grants execution access but no GitHub access.
+
+A hostile PR can still instruct the agent to print secrets it legitimately
+holds (its own subscription credential) into the review output. Every body
+Themis posts to GitHub (findings, summaries, replies, status comments)
+passes through an outbound redaction step that removes exact values of
+instance secrets and credential-shaped strings (`sk-ant-*`,
+`gho_/ghp_/ghs_/ghu_*`, `github_pat_*`, JWTs) before leaving the instance.
+Agent output tails are redacted at source: the diagnostic tail logged when
+the agent's result files can't be parsed, and the tails embedded in engine
+error messages (failed attempts, job-failure tracebacks), all pass through
+the same redaction before they can reach a log line. Treat worker logs as
+sensitive anyway; redaction is a backstop, not a license to ship logs.
 
 ## Webhook verification
 
@@ -61,10 +85,31 @@ $THEMIS_API_TOKEN`, also compared constant-time. Missing or wrong token:
   codex, so run Themis in its own container with nothing sensitive mounted
   alongside it.
 
+## Claude engine sandbox posture
+
+The codex engine runs under codex's own kernel sandbox (`workspace-write`
+by default, network denied). The claude engine has no kernel sandbox: it
+runs with permissions skipped, and its dedicated container is the isolation boundary
+(non-root user, allowlisted env, scrubbed clone). Claude runs in safe mode,
+with filesystem setting sources disabled, a strict empty MCP configuration,
+auto-memory off, and an isolated config directory, so repo-controlled
+`CLAUDE.md`, hooks, plugins, skills, agents, and MCP servers are not loaded. By default its
+`WebFetch`/`WebSearch` tools are also disabled, but Bash remains available,
+so a prompt-injected job could still exfiltrate over the network.
+The only secret in its reach is your own Claude token; it's on the
+outbound-redaction list above so it never reaches a GitHub-facing body, and
+it's rotatable with `claude setup-token`. Repos opt into Claude's built-in
+web tools per repo with `web_access: true` (default-branch controlled);
+deployments with strict requirements should route the agent through an egress
+proxy allowlisting Anthropic's required endpoints. Container separation
+protects GitHub credentials but does not itself restrict outbound networking.
+
 ## Single-tenant by design
 
-One `CODEX_HOME` volume holds one `auth.json`, which is one Codex
-subscription. Themis is built for one instance per person or team: its own
-GitHub App, its own subscription. Running multiple unrelated teams against
-a shared instance isn't supported: usage quota and credential blast radius
-aren't isolated between them. Run one instance per subscription.
+One `CODEX_HOME` volume holds one `auth.json`, and one
+`CLAUDE_CODE_OAUTH_TOKEN` value is one Claude token: either engine ties the
+instance to one subscription. Themis is built for one instance per person
+or team: its own GitHub App, its own subscription. Running multiple
+unrelated teams against a shared instance isn't supported: usage quota and
+credential blast radius aren't isolated between them. Run one instance per
+subscription.

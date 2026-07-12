@@ -41,6 +41,11 @@ class DiscussRequest(BaseModel):
 
 def _job_id(job: ReviewJob | DiscussJob) -> str:
     if isinstance(job, ReviewJob):
+        # A manual request needs its own job so that its running-status
+        # reaction lands on the comment that triggered it. Re-deliveries of
+        # the same webhook still share this key and remain deduplicated.
+        if job.trigger_comment_id is not None:
+            return f"review:{job.repo}#{job.pr_number}:comment:{job.trigger_comment_id}"
         return f"review:{job.repo}#{job.pr_number}"
     return f"discuss:{job.comment_id}"
 
@@ -51,7 +56,9 @@ def _enqueue(
     if isinstance(job, ReviewJob):
         async def run() -> None:
             await run_review_job(
-                settings, slug, job.repo, job.pr_number, job.installation_id, job.auto
+                settings, slug, job.repo, job.pr_number, job.installation_id, job.auto,
+                trigger_comment_id=job.trigger_comment_id,
+                extra_context=job.extra_context,
             )
     else:
         async def run() -> None:
@@ -119,9 +126,6 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             if job is None:
                 logger.debug("themis_event_ignored event=%s action=%s", event, payload.get("action"))
                 return {"status": "ignored"}
-            if not settings.repo_allowed(job.repo):
-                logger.info("themis_repo_not_allowed repo=%s", job.repo)
-                return {"status": "ignored"}
             enqueued = _enqueue(settings, queue, slug, job)
             logger.info(
                 "themis_enqueued job=%s repo=%s pr=%s duplicate=%s",
@@ -142,8 +146,6 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             raise HTTPException(status_code=401, detail="invalid token")
 
     async def _resolve_installation(repo: str) -> int:
-        if not settings.repo_allowed(repo):
-            raise HTTPException(status_code=403, detail="repo not allowed")
         app_jwt = make_app_jwt(settings.gh_app_client_id, settings.gh_app_private_key_pem)
         async with httpx.AsyncClient(timeout=30) as client:
             installation_id = await get_repo_installation_id(client, repo, app_jwt)
