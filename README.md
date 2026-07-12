@@ -1,7 +1,7 @@
 # Themis
 
 Themis is a self-hosted GitHub PR review bot that runs on your own Codex or
-Claude subscription. It reviews pull requests with inline findings and a structured
+Claude Max subscription. It reviews pull requests with inline findings and a structured
 summary (verdict, scoring table, severity-ordered sections), answers
 questions in review threads and PR conversation, and takes its review
 doctrine from your own repository, under `.themis/`.
@@ -20,7 +20,7 @@ database, no Redis, no message broker.
 ## Prerequisites
 
 - Docker with the Compose plugin (Docker Desktop, or Docker Engine + `docker compose`)
-- An OpenAI account with Codex access, or a Claude Pro/Max subscription (pick your engine): the matching CLI installed (`npm install -g @openai/codex` or `npm install -g @anthropic-ai/claude-code`, Node 22+) and `codex login` or `claude setup-token` working on your machine
+- An OpenAI account with Codex access, or a Claude Max subscription (pick your engine): the matching CLI installed (`npm install -g @openai/codex` or `npm install -g @anthropic-ai/claude-code`, Node 22+) and `codex login` or `claude setup-token` working on your machine. Claude Pro is not supported because Themis defaults to Opus.
 - A GitHub account that can create a GitHub App (personal account or an org)
 
 No clone or build needed: Themis ships as a prebuilt image,
@@ -220,7 +220,7 @@ bot already posted in are answered automatically, no mention needed.
 
 ## Engines
 
-Themis runs reviews through one of two agent CLIs, both on your own subscription:
+Themis runs reviews through one of two agent CLIs, using your Codex or Claude Max subscription:
 
 | Engine | Auth | Setup |
 |---|---|---|
