@@ -1,10 +1,18 @@
 """Parse GitHub webhook payloads into themis jobs."""
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+logger = logging.getLogger(__name__)
+
 _PR_ACTIONS = {"opened", "ready_for_review"}
+
+# Comment authors whose `review <context>` text may steer the review prompt.
+# Anyone allowed to comment can still trigger a review; only these roles can
+# shape it — the context text becomes engine instructions.
+_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 @dataclass(frozen=True)
@@ -97,6 +105,12 @@ def _parse_issue_comment(
     command, *remainder = rest.split(maxsplit=1)
     if command.lower().strip(".!?") == "review":
         extra_context = remainder[0].strip() if remainder else ""
+        association = payload["comment"].get("author_association", "")
+        if extra_context and association not in _TRUSTED_ASSOCIATIONS:
+            logger.info(
+                "themis_extra_context_dropped association=%s", association or "unknown"
+            )
+            extra_context = ""
         return ReviewJob(
             repo=repo, pr_number=pr_number, installation_id=installation_id,
             auto=False, trigger_comment_id=payload["comment"]["id"],

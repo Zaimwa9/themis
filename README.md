@@ -256,8 +256,11 @@ How the doctrine is consumed and how to write one that works:
 | `triggers.auto_review` | `true` | `false` = mention-only, no auto-review when a PR opens or is marked ready for review |
 
 Talk to the bot in a PR: `@<app-slug> review` re-reviews on demand,
-`@<app-slug> <question>` asks a question, and replies inside a thread the
-bot already posted in are answered automatically, no mention needed.
+`@<app-slug> review <focus>` steers the review toward a given area (the
+focus text is honored only from repo owners, org members, and
+collaborators — anyone else gets a plain review), `@<app-slug> <question>`
+asks a question, and replies inside a thread the bot already posted in are
+answered automatically, no mention needed.
 
 ## Engines
 
