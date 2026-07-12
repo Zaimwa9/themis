@@ -10,15 +10,14 @@ from pydantic import BaseModel
 
 from themis.config import VALID_SANDBOXES
 from themis.engines import ENGINE_NAMES, EngineError, EngineQuotaError, resolve
+from themis.output import OUTPUT_DIR, OUTPUT_FILES
 from themis.security import redact_outbound
-
-_OUTPUT_FILES = ("summary.md", "actions.json", "reply.md")
 
 
 def _redact_agent_outputs(workspace: Path) -> None:
     """Remove exact engine credentials before files cross to the controller."""
-    output = workspace / ".review-output"
-    for name in _OUTPUT_FILES:
+    output = workspace / OUTPUT_DIR
+    for name in OUTPUT_FILES:
         path = output / name
         if not path.exists():
             continue
@@ -53,7 +52,11 @@ def create_agent_app() -> FastAPI:
 
     def authorize(authorization: str | None) -> None:
         scheme, _, supplied = (authorization or "").partition(" ")
-        if scheme != "Bearer" or not secrets.compare_digest(supplied, token):
+        # Compare bytes: compare_digest raises TypeError on non-ASCII str,
+        # which would turn a garbage token into a 500 instead of a 401.
+        if scheme != "Bearer" or not secrets.compare_digest(
+            supplied.encode(), token.encode()
+        ):
             raise HTTPException(status_code=401, detail="invalid agent token")
 
     @app.get("/healthz")
@@ -72,7 +75,13 @@ def create_agent_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="workspace not found")
         engine = resolve(request.engine, codex_sandbox=sandbox)
         if not engine.available():
-            raise HTTPException(status_code=503, detail=f"{request.engine} credentials unavailable")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "engine_credentials_unavailable",
+                    "message": f"{request.engine} credentials unavailable",
+                },
+            )
         try:
             async with slot:
                 output = await engine.run(
