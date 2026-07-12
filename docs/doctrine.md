@@ -28,10 +28,13 @@ env allowlist, outbound redaction) hold regardless; see
 
 ## Starting point
 
-Copy the starter kit into the target repo and edit from there:
+Copy the starter kit into the target repo and edit from there. This needs a
+temporary shallow checkout of Themis:
 
 ```bash
-cp -r examples/themis .themis
+starter="$(mktemp -d)"
+git clone --depth 1 https://github.com/Zaimwa9/themis.git "$starter"
+cp -r "$starter/examples/themis" .themis
 ```
 
 For a working example, see this repository's own
