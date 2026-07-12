@@ -84,6 +84,9 @@ GitHub access.
 
 - `findings` = genuinely new issues only, one per issue, anchored to a line that
   appears in the diff. Never repeat a finding that already has a review thread.
+- Every Nit that can be anchored to the diff must be included in `findings` and
+  posted inline. Severity is never a reason to leave an anchorable issue only
+  in the summary.
 - Each finding `body` has this shape:
   - First line: `*<severity> · <effort>*` where severity is `🔴 Blocker` /
     `🟠 Major` / `🧹 Nit` (match the summary section) and effort is
@@ -92,10 +95,11 @@ GitHub access.
     the failure mechanism and its impact.
   - Blockers and Majors must state a concrete fix direction; never just name
     the problem.
-  - When the exact replacement is small and you are certain of it, end with a
+  - When the exact replacement is small, deterministic, and you are certain of it, end with a
     ```suggestion block that replaces precisely the commented lines (set
     `line`/`start_line` to cover them). No preamble around it; skip it when
-    unsure rather than guessing.
+    unsure rather than guessing. Prefer a commit-ready suggestion over prose
+    that merely describes the same mechanical edit.
   - Keep bodies proportional to severity. Nits get the label, the bold title,
     and at most one sentence; add a ```suggestion block only when the fix is a
     single line. Save longer prose for Blockers and Majors.

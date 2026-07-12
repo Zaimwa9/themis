@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
+from themis.config import VALID_SANDBOXES
 from themis.engines import ENGINE_NAMES, EngineError, EngineQuotaError, resolve
 from themis.security import redact_outbound
 
@@ -43,6 +44,10 @@ def create_agent_app() -> FastAPI:
         raise RuntimeError("THEMIS_AGENT_TOKEN is required for the agent role")
     root = Path(os.getenv("THEMIS_WORKSPACE_ROOT") or "/tmp/themis").resolve()
     sandbox = os.getenv("THEMIS_CODEX_SANDBOX") or "workspace-write"
+    if sandbox not in VALID_SANDBOXES:
+        raise RuntimeError(
+            f"invalid THEMIS_CODEX_SANDBOX {sandbox!r}; expected one of {VALID_SANDBOXES}"
+        )
     slot = asyncio.Semaphore(1)
     app = FastAPI(title="themis-agent")
 

@@ -15,9 +15,10 @@ The vars needed to boot the quickstart:
 | `THEMIS_GH_APP_CLIENT_ID` | yes | none | GitHub App client id |
 | `THEMIS_GH_APP_PRIVATE_KEY` | yes | none | App private key, PEM text or base64 of it |
 | `THEMIS_GH_WEBHOOK_SECRET` | yes, unless `THEMIS_WEBHOOK_ENABLED=false` | none | webhook HMAC secret, shared with the App settings |
+| `THEMIS_AGENT_TOKEN` | yes | none | random bearer token shared only by controller and agent |
 | `CODEX_HOME` | no | `/data/codex` | codex auth/state directory; mount a persistent volume here |
 | `THEMIS_PUBLIC_URL` | no | unset | enables webhook self-registration at `<url>/webhook` |
-| `PORT` | no | `8000` | listen port |
+| `PORT` | no | role default | listen port (`8000` controller, `8001` agent) |
 
 Names and defaults come straight from `src/themis/config.py`, except `PORT`
 (read in `__main__.py`) and `CODEX_HOME` (set in the Dockerfile). Full
