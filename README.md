@@ -23,7 +23,14 @@ database, no Redis, no message broker.
 - An OpenAI account with Codex access, or a Claude Pro/Max subscription (pick your engine): the matching CLI installed (`npm install -g @openai/codex` or `npm install -g @anthropic-ai/claude-code`, Node 22+) and `codex login` or `claude setup-token` working on your machine
 - A GitHub account that can create a GitHub App (personal account or an org)
 
+No clone or build needed: Themis ships as a prebuilt image,
+`ghcr.io/zaimwa9/themis`.
+
 ## Quickstart
+
+Setting this up is mostly mechanical; feel free to hand this README to the
+coding agent you already run (Claude Code, Codex, ...) on the machine that
+will host Themis, and only do the GitHub App clicks yourself.
 
 ### 1. Create the GitHub App
 
@@ -70,14 +77,42 @@ codex login
 This writes credentials to `~/.codex/auth.json`. Themis reuses this file
 (step 4).
 
-### 3. Clone and configure
+### 3. Configure
 
-```bash
-git clone <this-repo-url> && cd themis
-cp .env.example .env
+Create a directory for the deployment with two files. `docker-compose.yml`:
+
+```yaml
+services:
+  themis:
+    image: ghcr.io/zaimwa9/themis:latest
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - codex-home:/data/codex
+    restart: unless-stopped
+
+  # Optional: local tunnel for hosts without a public URL (step 5).
+  ngrok:
+    image: ngrok/ngrok:3
+    profiles: ["tunnel"]
+    command: ["http", "themis:8000"]
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+    restart: unless-stopped
+
+volumes:
+  codex-home:
 ```
 
-Fill in the three required variables in `.env`:
+And `.env` with the three required variables (full reference:
+[`docs/configuration.md`](docs/configuration.md)):
+
+```bash
+THEMIS_GH_APP_CLIENT_ID=
+THEMIS_GH_APP_PRIVATE_KEY=
+THEMIS_GH_WEBHOOK_SECRET=
+```
 
 - `THEMIS_GH_APP_CLIENT_ID`: the App's Client ID, from the App's settings page
 - `THEMIS_GH_APP_PRIVATE_KEY`: the private key from step 1, base64-encoded,
@@ -150,16 +185,23 @@ review starts, then the review itself.
 
 ## Customize reviews
 
-Copy the starter kit into the target repo:
+Copy the starter kit into the target repo. This needs a temporary shallow
+checkout of Themis (the deployment itself does not):
 
 ```bash
-cp -r examples/themis .themis
+starter="$(mktemp -d)"
+git clone --depth 1 https://github.com/Zaimwa9/themis.git "$starter"
+cp -r "$starter/examples/themis" .themis
 ```
 
 - `.themis/review.md`: the review doctrine, philosophy, severity
   calibration, a map of your codebase, house rules. Edit this; it is read
   straight from the PR branch on every review.
 - `.themis/config.yaml`: behavior knobs, every key optional.
+
+How the doctrine is consumed and how to write one that works:
+[`docs/doctrine.md`](docs/doctrine.md). This repo reviews itself with its own
+[`.themis/review.md`](.themis/review.md).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -210,6 +252,7 @@ failing silently. The claude path needs no volume: token in `.env`, done.
 - [`docs/server-deploy.md`](docs/server-deploy.md): deploying to any Docker host or PaaS, upgrades.
 - [`docs/local-tunnel.md`](docs/local-tunnel.md): the ngrok tunnel profile in depth.
 - [`docs/headless.md`](docs/headless.md): bring your own webhook handler, the `/api/review` and `/api/discuss` contracts.
+- [`docs/doctrine.md`](docs/doctrine.md): the review doctrine, how it works and how to write a good one.
 - [`docs/configuration.md`](docs/configuration.md): the full env and `.themis/config.yaml` reference.
 - [`docs/security.md`](docs/security.md): the trust model and bot-side guardrails.
 
