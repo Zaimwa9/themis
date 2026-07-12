@@ -41,6 +41,11 @@ class DiscussRequest(BaseModel):
 
 def _job_id(job: ReviewJob | DiscussJob) -> str:
     if isinstance(job, ReviewJob):
+        # A manual request needs its own job so that its running-status
+        # reaction lands on the comment that triggered it. Re-deliveries of
+        # the same webhook still share this key and remain deduplicated.
+        if job.trigger_comment_id is not None:
+            return f"review:{job.repo}#{job.pr_number}:comment:{job.trigger_comment_id}"
         return f"review:{job.repo}#{job.pr_number}"
     return f"discuss:{job.comment_id}"
 
