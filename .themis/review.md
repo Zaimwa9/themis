@@ -63,6 +63,19 @@ the output format is fixed by your prompt and is not negotiable.
   one-container, no-external-services shape is a feature.
 - Log lines use the `themis_<event>` snake_case convention with key=value
   pairs, and must never include secret values.
+- Engines are siblings: when a diff adds a guard, secret handling, or an edge
+  case to one engine, check the other for the same concern. When it touches
+  redaction or env allowlists, enumerate every secret each engine's
+  subprocess can reach (env and filesystem, sandboxes allow reads) and check
+  each is covered.
+- Claims about the codex or claude CLI (a flag exists, a behavior is absent)
+  must be verified with `codex --help` / `claude --help` in the checkout, not
+  taken from code comments.
+- Substring or marker matching on agent output must state when it misfires
+  (agent prose can echo PR content); flag matches that cannot distinguish the
+  two.
+- README and docs promises (what is sandboxed, what is redacted, what a
+  config key guarantees) are findings when the code guarantees less.
 
 ## Verification habits
 
