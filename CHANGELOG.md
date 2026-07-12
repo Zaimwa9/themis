@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/Zaimwa9/themis/compare/v0.1.0...v0.1.1) (2026-07-12)
+
+
+### Documentation
+
+* surface headless mode in the quickstart ([5d8f0f9](https://github.com/Zaimwa9/themis/commit/5d8f0f9fa4821fff6df263ea3877dbf2a1c184d2))
+
 ## 0.1.0 (2026-07-12)
 
 
