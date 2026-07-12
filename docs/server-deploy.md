@@ -1,8 +1,10 @@
 # Server deployment
 
-Themis runs as a single container. Any Docker host works: a VPS, a managed
-container PaaS, a Kubernetes cluster with one replica, anything that can run
-an image and mount a volume.
+Themis ships as one image run in two roles: a GitHub-facing controller and a
+credential-isolated agent. Any Docker host that supports two services and a
+shared temporary volume works. The controller receives GitHub credentials;
+the agent receives Codex or Claude credentials. Never put both credential
+sets in the same service environment.
 
 ## Environment variables
 
@@ -24,7 +26,7 @@ tunnel profile: [`docs/configuration.md`](configuration.md).
 
 ## Volume and codex auth
 
-Mount a persistent volume at `/data/codex` (`CODEX_HOME`). Codex stores its
+Mount a persistent volume on the **agent** at `/data/codex` (`CODEX_HOME`). Codex stores its
 login there and refreshes tokens in place. Without a persistent volume
 you'd need to re-authenticate on every restart.
 
@@ -33,7 +35,7 @@ Seed it once, after the container is up, from wherever you already ran
 
 ```bash
 # docker compose
-docker compose cp ~/.codex/auth.json themis:/data/codex/auth.json
+docker compose cp ~/.codex/auth.json agent:/data/codex/auth.json
 
 # plain docker
 docker cp ~/.codex/auth.json <container>:/data/codex/auth.json

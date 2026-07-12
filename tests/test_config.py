@@ -16,6 +16,7 @@ REQUIRED = {
     "THEMIS_GH_APP_CLIENT_ID": "Iv1.abc",
     "THEMIS_GH_APP_PRIVATE_KEY": "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----",
     "THEMIS_GH_WEBHOOK_SECRET": "hush",
+    "THEMIS_AGENT_TOKEN": "agent-secret",
 }
 
 
@@ -24,6 +25,7 @@ def _set_env(monkeypatch, extra=None, omit=()):
         "THEMIS_GH_APP_CLIENT_ID", "THEMIS_GH_APP_PRIVATE_KEY", "THEMIS_GH_WEBHOOK_SECRET",
         "THEMIS_CODEX_SANDBOX", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
         "THEMIS_WEBHOOK_ENABLED", "THEMIS_API_TOKEN", "THEMIS_WORKSPACE_ROOT", "THEMIS_ENGINE",
+        "THEMIS_AGENT_URL", "THEMIS_AGENT_TOKEN",
     ):
         monkeypatch.delenv(key, raising=False)
     for key, value in {**REQUIRED, **(extra or {})}.items():
@@ -40,6 +42,7 @@ def test_load_settings_happy_path(monkeypatch):
     assert settings.api_token is None
     assert settings.codex_sandbox == "workspace-write"
     assert str(settings.workspace_root) == "/tmp/themis"
+    assert settings.agent_url == "http://agent:8001"
 
 
 def test_load_settings_missing_required_names_them(monkeypatch):

@@ -15,10 +15,12 @@ Two planes:
 | `THEMIS_GH_APP_CLIENT_ID` | yes | none | GitHub App client id |
 | `THEMIS_GH_APP_PRIVATE_KEY` | yes | none | App private key, PEM text or base64 of it |
 | `THEMIS_GH_WEBHOOK_SECRET` | yes, unless `THEMIS_WEBHOOK_ENABLED=false` | none | webhook HMAC secret, shared with the App settings |
+| `THEMIS_AGENT_TOKEN` | yes | none | controller-to-agent bearer token; use the same random value in both containers |
+| `THEMIS_AGENT_URL` | no | `http://agent:8001` | internal URL of the isolated agent service |
 | `THEMIS_ENGINE` | no | `codex` | instance default review engine; `codex` or `claude` |
 | `CODEX_HOME` | no | `/data/codex` | codex auth/state directory |
 | `THEMIS_CODEX_SANDBOX` | no | `workspace-write` | codex sandbox mode; `danger-full-access` for runtimes without Landlock |
-| `CLAUDE_CODE_OAUTH_TOKEN` | no | unset | Claude Max subscription token from `claude setup-token`; required only for the claude engine |
+| `CLAUDE_CODE_OAUTH_TOKEN` | agent only | unset | Claude Max token from `claude setup-token`; never set it on the controller |
 | `THEMIS_PUBLIC_URL` | no | unset | enables webhook self-registration at `<url>/webhook` |
 | `THEMIS_TUNNEL_API` | no | unset | ngrok agent API URL for tunnel discovery |
 | `THEMIS_WEBHOOK_ENABLED` | no | `true` | set `false` for headless mode |

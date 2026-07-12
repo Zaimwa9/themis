@@ -18,6 +18,10 @@ class EngineQuotaError(EngineError):
     """The subscription usage window is exhausted; do not retry."""
 
 
+class EngineUnavailableError(EngineError):
+    """The isolated agent does not have credentials for this engine."""
+
+
 class Engine(Protocol):
     name: str
 
