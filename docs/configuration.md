@@ -26,11 +26,12 @@ Two planes:
 | `THEMIS_WEBHOOK_ENABLED` | no | `true` | set `false` for headless mode |
 | `THEMIS_API_TOKEN` | no | unset | enables `/api/review` and `/api/discuss` |
 | `THEMIS_WORKSPACE_ROOT` | no | `/tmp/themis` | scratch root for PR clones |
+| `THEMIS_ROLE` | no | `controller` | role when `python -m themis` gets no argument; `controller` or `agent` |
 | `PORT` | no | role default | listen port (`8000` controller, `8001` agent) |
 | `NGROK_AUTHTOKEN` | only with the `tunnel` compose profile | none | used only by the compose tunnel profile's ngrok sidecar |
 
 Names and defaults come straight from `../src/themis/config.py`, except
-`PORT` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and
+`PORT` and `THEMIS_ROLE` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and
 `CLAUDE_CODE_OAUTH_TOKEN` (read directly by `../src/themis/engines/claude.py`,
 not part of `Settings`). There is no model, limit, or mention configuration
 in the environment; the

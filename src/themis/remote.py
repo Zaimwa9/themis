@@ -54,9 +54,15 @@ class RemoteEngine:
             raise EngineError("agent returned an invalid JSON response")
         if response.is_success:
             return str(data.get("output", ""))
-        message = str(data.get("detail", "agent execution failed"))
+        detail = data.get("detail", "agent execution failed")
+        code = detail.get("code") if isinstance(detail, dict) else None
+        message = (
+            str(detail.get("message", "agent execution failed"))
+            if isinstance(detail, dict)
+            else str(detail)
+        )
         if response.status_code == 429:
             raise EngineQuotaError(message)
-        if response.status_code == 503:
+        if code == "engine_credentials_unavailable":
             raise EngineUnavailableError(message)
         raise EngineError(message)
