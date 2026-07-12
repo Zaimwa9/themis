@@ -321,14 +321,16 @@ class ReviewService:
                     )
                 try:
                     return parser(workspace)
-                except OutputError:
+                except OutputError as error:
                     # the agent exited 0 but its files are missing/invalid; its
                     # stdout is the only clue to why.
                     logger.warning(
                         "themis_agent_output_tail repo=%s pr=%s tail=%s",
                         repo, pr_number, redact_outbound(str(agent_output)[-1000:]),
                     )
-                    raise
+                    # OutputError can embed malformed agent-controlled JSON.
+                    # Replace it so the final queue traceback is safe too.
+                    raise OutputError(redact_outbound(str(error))) from None
             except EngineQuotaError:
                 logger.warning("themis_quota_reached repo=%s pr=%s", repo, pr_number)
                 await self._post_courtesy_comment(
@@ -340,7 +342,7 @@ class ReviewService:
                 last_error = error
                 logger.warning(
                     "themis_attempt_failed repo=%s pr=%s attempt=%d error=%s",
-                    repo, pr_number, attempt, str(error)[:200],
+                    repo, pr_number, attempt, redact_outbound(str(error))[:200],
                 )
         await self._post_courtesy_comment(
             installation_id, repo, pr_number,

@@ -3,9 +3,11 @@
 import base64
 import hashlib
 import hmac
+import json
 import logging
 import os
 import re
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +43,38 @@ def verify_signature(payload: bytes, secret: str, signature_header: str | None) 
 
 
 def _secret_values() -> list[str]:
-    values = []
+    raw_values = []
     for var in _SECRET_ENV_VARS:
         value = os.environ.get(var) or ""
         if len(value) < _MIN_SECRET_LEN:
             continue
+        raw_values.append(value)
+
+    # Codex authenticates from a file rather than an env var. Treat every
+    # sufficiently long string in this dedicated auth document as sensitive;
+    # its exact schema and token shapes can change across CLI versions.
+    codex_home = Path(os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"))
+    try:
+        auth = json.loads((codex_home / "auth.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        auth = None
+
+    def collect_strings(value: object) -> None:
+        if isinstance(value, str) and len(value) >= _MIN_SECRET_LEN:
+            raw_values.append(value)
+        elif isinstance(value, dict):
+            for child in value.values():
+                collect_strings(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_strings(child)
+
+    collect_strings(auth)
+
+    values = []
+    for value in dict.fromkeys(raw_values):
         values.append(value)
-        # The private key may circulate in its single-line base64 form too.
+        # Secrets may circulate in their single-line base64 form too.
         values.append(base64.b64encode(value.encode()).decode())
     return values
 
