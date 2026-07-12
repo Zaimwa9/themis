@@ -18,7 +18,7 @@ from themis.config import (
     Settings,
     parse_repo_config,
 )
-from themis.engines import Engine, EngineError, EngineQuotaError, resolve
+from themis.engines import Engine, EngineError, EngineQuotaError, EngineUnavailableError
 from themis.github.auth import get_installation_token, make_app_jwt
 from themis.github.client import GitHubClient, GitHubGraphQLError
 from themis.output import (
@@ -31,6 +31,7 @@ from themis.output import (
 )
 from themis.prompts import build_discussion_prompt, build_review_prompt
 from themis.security import redact_outbound
+from themis.remote import RemoteEngine
 from themis.workspace import (
     clone_url_for,
     prepare_workspace,
@@ -338,6 +339,14 @@ class ReviewService:
                     QUOTA_COMMENT.format(engine_title=engine.name.capitalize(), noun=noun),
                 )
                 return None
+            except EngineUnavailableError:
+                await self._post_courtesy_comment(
+                    installation_id, repo, pr_number,
+                    ENGINE_UNAVAILABLE_COMMENT.format(
+                        engine=engine.name, hint=_ENGINE_AUTH_HINTS[engine.name], noun=noun
+                    ),
+                )
+                return None
             except (EngineError, OutputError) as error:
                 last_error = error
                 logger.warning(
@@ -558,7 +567,7 @@ def build_service(settings: Settings, bot_slug: str) -> ReviewService:
         make_client=GitHubClient,
         prepare=prepare_workspace,
         cleanup=remove_workspace,
-        resolve_engine=lambda name: resolve(name, codex_sandbox=settings.codex_sandbox),
+        resolve_engine=lambda name: RemoteEngine(name, settings.agent_url, settings.agent_token),
     )
 
 

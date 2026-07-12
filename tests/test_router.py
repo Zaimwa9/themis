@@ -26,6 +26,8 @@ def make_settings(**overrides) -> Settings:
         workspace_root=Path("/tmp/themis-test"),
         public_url=None,
         tunnel_api=None,
+        agent_url="http://agent:8001",
+        agent_token="agent-secret",
     )
     return Settings(**{**defaults, **overrides})
 

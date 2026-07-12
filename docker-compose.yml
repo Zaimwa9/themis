@@ -1,11 +1,45 @@
 services:
   themis:
     build: .
-    env_file: .env
+    command: ["python", "-m", "themis", "controller"]
+    environment:
+      THEMIS_GH_APP_CLIENT_ID: ${THEMIS_GH_APP_CLIENT_ID}
+      THEMIS_GH_APP_PRIVATE_KEY: ${THEMIS_GH_APP_PRIVATE_KEY}
+      THEMIS_GH_WEBHOOK_SECRET: ${THEMIS_GH_WEBHOOK_SECRET}
+      THEMIS_AGENT_TOKEN: ${THEMIS_AGENT_TOKEN}
+      THEMIS_AGENT_URL: http://agent:8001
+      THEMIS_ENGINE: ${THEMIS_ENGINE:-codex}
+      THEMIS_PUBLIC_URL: ${THEMIS_PUBLIC_URL:-}
+      THEMIS_TUNNEL_API: ${THEMIS_TUNNEL_API:-}
+      THEMIS_WEBHOOK_ENABLED: ${THEMIS_WEBHOOK_ENABLED:-true}
+      THEMIS_API_TOKEN: ${THEMIS_API_TOKEN:-}
     ports:
       - "8000:8000"
     volumes:
+      - workspaces:/tmp/themis
+    depends_on:
+      agent:
+        condition: service_healthy
+    restart: unless-stopped
+
+  agent:
+    build: .
+    command: ["python", "-m", "themis", "agent"]
+    environment:
+      THEMIS_AGENT_TOKEN: ${THEMIS_AGENT_TOKEN}
+      THEMIS_WORKSPACE_ROOT: /tmp/themis
+      THEMIS_CODEX_SANDBOX: ${THEMIS_CODEX_SANDBOX:-workspace-write}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+    volumes:
+      - workspaces:/tmp/themis
       - codex-home:/data/codex
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   # Local story: `docker compose --profile tunnel up -d`.
@@ -20,4 +54,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  workspaces:
   codex-home:
