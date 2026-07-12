@@ -51,7 +51,8 @@ def _enqueue(
     if isinstance(job, ReviewJob):
         async def run() -> None:
             await run_review_job(
-                settings, slug, job.repo, job.pr_number, job.installation_id, job.auto
+                settings, slug, job.repo, job.pr_number, job.installation_id, job.auto,
+                trigger_comment_id=job.trigger_comment_id,
             )
     else:
         async def run() -> None:

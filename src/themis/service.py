@@ -142,7 +142,8 @@ class ReviewService:
         return False
 
     async def review(
-        self, repo: str, pr_number: int, installation_id: int, auto: bool
+        self, repo: str, pr_number: int, installation_id: int, auto: bool,
+        trigger_comment_id: int | None = None,
     ) -> None:
         token = await self.get_token(installation_id)
         gh = self.make_client(token)
@@ -160,9 +161,15 @@ class ReviewService:
                 engine, installation_id, repo, pr_number, "review"
             ):
                 return
-            # 👀 on the trigger = queued (router); 🚀 on the PR = job running.
+            # 👀 on the trigger = queued (router); 🚀 = job running, on the
+            # trigger comment when there is one, else on the PR body.
+            rocket_target = (
+                {"issue_comment_id": trigger_comment_id}
+                if trigger_comment_id is not None
+                else {"issue_number": pr_number}
+            )
             try:
-                await gh.add_reaction(repo, issue_number=pr_number, content="rocket")
+                await gh.add_reaction(repo, content="rocket", **rocket_target)
             except httpx.HTTPError as error:
                 logger.warning(
                     "themis_rocket_reaction_failed repo=%s pr=%s error=%s",
@@ -552,12 +559,15 @@ def build_service(settings: Settings, bot_slug: str) -> ReviewService:
 
 async def run_review_job(
     settings: Settings, bot_slug: str, repo: str, pr_number: int,
-    installation_id: int, auto: bool,
+    installation_id: int, auto: bool, trigger_comment_id: int | None = None,
 ) -> None:
     service = build_service(settings, bot_slug)
     await asyncio.to_thread(sweep_stale, settings.workspace_root)
     try:
-        await service.review(repo, pr_number, installation_id, auto)
+        await service.review(
+            repo, pr_number, installation_id, auto,
+            trigger_comment_id=trigger_comment_id,
+        )
     except asyncio.CancelledError:
         # The queue timeout also covers time spent behind the codex semaphore;
         # a cancelled review must not vanish with no PR comment.
