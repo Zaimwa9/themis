@@ -148,6 +148,12 @@ When the diff changes user-facing docs (README, security or config docs) or
 behavior they describe, check the claims against the code; a doc that promises
 more than the code guarantees is a finding.
 
+Verification gates confidence, never reporting. A suspected Blocker or Major
+you could not verify is still a finding at its full severity: report it,
+mark it `(unverified)`, and say in one line what check would confirm or clear
+it. Never demote a suspected defect to the assumptions section; that section
+is for claims your review relied on, not for risks you found.
+
 {_OUTPUT_CONTRACT}"""
 
 
