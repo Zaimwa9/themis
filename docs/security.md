@@ -40,9 +40,10 @@ the agent's reach:
 ## Engine secret reachability and outbound redaction
 
 The agent subprocess runs on untrusted PR content. Its environment is
-allowlisted per engine: codex sees only `CODEX_HOME` beyond the base set;
-claude sees `CLAUDE_CODE_OAUTH_TOKEN` plus three non-secret hygiene flags
-(autoupdate, telemetry, and error reporting disabled). Neither ever sees a
+allowlisted per engine: codex sees only `CODEX_HOME` beyond the base set and
+runs with `--ignore-user-config --ignore-rules`, so it authenticates from
+`auth.json` without loading worker config or repo `.rules` files; claude sees
+`CLAUDE_CODE_OAUTH_TOKEN` plus non-secret hygiene flags. Neither ever sees a
 GitHub token or any `THEMIS_*` secret.
 
 A hostile PR can still instruct the agent to print secrets it legitimately

@@ -15,6 +15,10 @@ def build_command(
     command = [
         "codex", "exec",
         "--sandbox", sandbox,
+        # Reviews run in untrusted PR workspaces. Keep authentication from
+        # CODEX_HOME, but never load repo rules or worker user configuration.
+        "--ignore-user-config",
+        "--ignore-rules",
         "-c", "approval_policy=never",
         "-c", f"model_reasoning_effort={effort}",
     ]
