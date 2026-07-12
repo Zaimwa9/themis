@@ -19,7 +19,6 @@ Two planes:
 | `CODEX_HOME` | no | `/data/codex` | codex auth/state directory |
 | `THEMIS_CODEX_SANDBOX` | no | `workspace-write` | codex sandbox mode; `danger-full-access` for runtimes without Landlock |
 | `CLAUDE_CODE_OAUTH_TOKEN` | no | unset | Claude Max subscription token from `claude setup-token`; required only for the claude engine |
-| `THEMIS_REPOS` | no | unset (all installed repos) | comma-separated `owner/name` allowlist |
 | `THEMIS_PUBLIC_URL` | no | unset | enables webhook self-registration at `<url>/webhook` |
 | `THEMIS_TUNNEL_API` | no | unset | ngrok agent API URL for tunnel discovery |
 | `THEMIS_WEBHOOK_ENABLED` | no | `true` | set `false` for headless mode |

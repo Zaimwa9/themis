@@ -22,7 +22,7 @@ REQUIRED = {
 def _set_env(monkeypatch, extra=None, omit=()):
     for key in (
         "THEMIS_GH_APP_CLIENT_ID", "THEMIS_GH_APP_PRIVATE_KEY", "THEMIS_GH_WEBHOOK_SECRET",
-        "THEMIS_CODEX_SANDBOX", "THEMIS_REPOS", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
+        "THEMIS_CODEX_SANDBOX", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
         "THEMIS_WEBHOOK_ENABLED", "THEMIS_API_TOKEN", "THEMIS_WORKSPACE_ROOT", "THEMIS_ENGINE",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -38,7 +38,6 @@ def test_load_settings_happy_path(monkeypatch):
     assert settings.gh_app_private_key_pem.startswith("-----BEGIN")
     assert settings.webhook_enabled is True
     assert settings.api_token is None
-    assert settings.repos is None
     assert settings.codex_sandbox == "workspace-write"
     assert str(settings.workspace_root) == "/tmp/themis"
 
@@ -84,11 +83,6 @@ def test_webhook_enabled_requires_secret(monkeypatch):
     _set_env(monkeypatch, omit=("THEMIS_GH_WEBHOOK_SECRET",))
     with pytest.raises(SettingsError, match="THEMIS_GH_WEBHOOK_SECRET"):
         load_settings()
-
-
-def test_repos_allowlist_parsed(monkeypatch):
-    _set_env(monkeypatch, extra={"THEMIS_REPOS": "acme/widgets, acme/gadgets"})
-    assert load_settings().repos == frozenset({"acme/widgets", "acme/gadgets"})
 
 
 def test_blank_workspace_root_env_falls_back_to_default(monkeypatch):

@@ -54,7 +54,6 @@ def make_settings(**overrides) -> Settings:
         gh_webhook_secret="hush",
         webhook_enabled=True,
         api_token=None,
-        repos=None,
         codex_sandbox="workspace-write",
         engine="codex",
         workspace_root=Path("/tmp/themis-test"),

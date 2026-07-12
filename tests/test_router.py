@@ -21,7 +21,6 @@ def make_settings(**overrides) -> Settings:
         gh_webhook_secret="hush",
         webhook_enabled=True,
         api_token=None,
-        repos=None,
         codex_sandbox="workspace-write",
         engine="codex",
         workspace_root=Path("/tmp/themis-test"),
@@ -205,31 +204,6 @@ def test_webhook_unknown_event_ignored():
     assert queue.enqueued == []
 
 
-def test_webhook_ignores_disallowed_repo(monkeypatch):
-    monkeypatch.setattr("themis.router._ack", AsyncMock())
-    settings = make_settings(repos=frozenset({"acme/allowed"}))
-    client, queue = make_client(settings)
-    payload = json.dumps(
-        {
-            "action": "opened",
-            "pull_request": {"number": 1, "draft": False},
-            "repository": {"full_name": "acme/other"},
-            "installation": {"id": 42},
-            "sender": {"type": "User"},
-        }
-    ).encode()
-    response = client.post(
-        "/webhook",
-        content=payload,
-        headers={
-            "x-hub-signature-256": sign("hush", payload),
-            "x-github-event": "pull_request",
-        },
-    )
-    assert response.json() == {"status": "ignored"}
-    assert queue.enqueued == []
-
-
 # --- webhook: enqueue + ack --------------------------------------------------
 
 
@@ -398,18 +372,6 @@ def test_api_review_403_when_app_not_installed(monkeypatch):
     response = client.post(
         "/api/review",
         json={"repo": "acme/widgets", "pr_number": 7},
-        headers={"Authorization": "Bearer sekret"},
-    )
-    assert response.status_code == 403
-
-
-def test_api_review_403_on_disallowed_repo():
-    client, _ = make_client(
-        make_settings(api_token="sekret", repos=frozenset({"acme/allowed"}))
-    )
-    response = client.post(
-        "/api/review",
-        json={"repo": "acme/other", "pr_number": 7},
         headers={"Authorization": "Bearer sekret"},
     )
     assert response.status_code == 403

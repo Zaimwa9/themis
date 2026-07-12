@@ -95,16 +95,11 @@ class Settings:
     gh_webhook_secret: str | None = field(repr=False)
     webhook_enabled: bool
     api_token: str | None = field(repr=False)
-    repos: frozenset[str] | None
     codex_sandbox: str
     engine: str
     workspace_root: Path
     public_url: str | None
     tunnel_api: str | None
-
-    def repo_allowed(self, repo: str) -> bool:
-        return self.repos is None or repo in self.repos
-
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -158,13 +153,6 @@ def load_settings() -> Settings:
             f"invalid engine {engine!r}; expected one of {ENGINE_NAMES}"
         )
 
-    repos_raw = os.getenv("THEMIS_REPOS", "")
-    repos = (
-        frozenset(part.strip() for part in repos_raw.split(",") if part.strip()) or None
-        if repos_raw.strip()
-        else None
-    )
-
     public_url = (os.getenv("THEMIS_PUBLIC_URL") or "").rstrip("/") or None
 
     return Settings(
@@ -173,7 +161,6 @@ def load_settings() -> Settings:
         gh_webhook_secret=webhook_secret,
         webhook_enabled=webhook_enabled,
         api_token=api_token,
-        repos=repos,
         codex_sandbox=sandbox,
         engine=engine,
         workspace_root=Path(os.getenv("THEMIS_WORKSPACE_ROOT") or "/tmp/themis"),
