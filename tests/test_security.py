@@ -135,7 +135,7 @@ def test_redact__logs_count_not_value(monkeypatch, caplog):
     assert "api-token-value" not in caplog.text
 
 
-def test_redact_outbound__provider_api_keys(monkeypatch):
+def test_redact__provider_api_keys(monkeypatch):
     monkeypatch.setenv("GLM_API_KEY", "glm-key-abcdef123456")
     monkeypatch.setenv("QWEN_API_KEY", "sk-sp-abcdef123456")
 

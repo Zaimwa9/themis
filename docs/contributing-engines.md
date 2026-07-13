@@ -51,9 +51,11 @@ class FooEngine(AnthropicApiEngine):
     _quota_markers = _QUOTA_MARKERS
 ```
 
-Then register it everywhere an engine name lives — the map-coverage test
-(`tests/test_service.py::test_engine_maps_cover_all_engine_names`) fails
-until you finish:
+Then register it everywhere an engine name lives. The map-coverage test
+(`tests/test_service.py::test_engine_maps_cover_all_engine_names`) enforces
+only the registry and service maps (items 1-2 below); it fails until those
+two are done. Items 3-5 (redaction, compose/deployment, docs) are **not**
+test-enforced — you must verify them by hand:
 
 1. `src/themis/engines/__init__.py`: import, `ENGINE_NAMES`, `resolve()`.
 2. `src/themis/service.py`: `DEFAULT_MODELS` (the provider's current
@@ -61,11 +63,12 @@ until you finish:
    `_ENGINE_AUTH_HINTS` (what the courtesy comment tells users to set).
 3. `src/themis/security.py`: add the key env var to `_SECRET_ENV_VARS` so
    it is redacted from anything posted to GitHub.
-4. `docker-compose.yml` **and** the README Quickstart's inline compose
-   sample: pass `FOO_API_KEY: ${FOO_API_KEY:-}` to the **agent** service
-   only, never the controller. Compose does not forward variables the file
-   doesn't reference, so forgetting the Quickstart sample ships a silently
-   dead engine.
+4. `docker-compose.yml`, the README Quickstart's inline compose sample,
+   **and** `.env.example`: pass `FOO_API_KEY: ${FOO_API_KEY:-}` to the
+   **agent** service only, never the controller, and add a commented
+   `#FOO_API_KEY=` stanza to `.env.example`. Compose does not forward
+   variables the file doesn't reference, so forgetting the Quickstart
+   sample ships a silently dead engine.
 5. Docs: README (prereqs, Engines table, repo-config table,
    troubleshooting), `docs/configuration.md`, `docs/security.md`,
    `examples/themis/config.yaml`.
@@ -131,7 +134,7 @@ the workspace. Cover at least:
 
 - [ ] Engine module + tests
 - [ ] Registry, `DEFAULT_MODELS`, `_ENGINE_AUTH_HINTS`, `_SECRET_ENV_VARS`
-- [ ] `docker-compose.yml` + README Quickstart compose sample (agent only)
+- [ ] `docker-compose.yml` + README Quickstart compose sample (agent only) + `.env.example`
 - [ ] README, `docs/configuration.md`, `docs/security.md`, example config
 - [ ] Quota-marker sources cited; transient vs. exhausted distinction argued
 - [ ] Live validation round done or explicitly flagged as pending
