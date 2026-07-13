@@ -244,6 +244,12 @@ How the doctrine is consumed and how to write one that works:
 [`docs/doctrine.md`](docs/doctrine.md). This repo reviews itself with its own
 [`.themis/review.md`](.themis/review.md).
 
+Themis also learns as you use it: correct it in a PR thread (or say
+`@themis remember <rule>`) and, if you're a repo owner/member/collaborator,
+it saves the convention and applies it to future reviews — landing it in
+`.themis/learnings.jsonl` through a digest PR you review like any other.
+See [`docs/learnings.md`](docs/learnings.md).
+
 | Key | Default | Meaning |
 |---|---|---|
 | `engine` | instance `THEMIS_ENGINE` | `codex` or `claude`, overrides the instance's default engine for this repo |
@@ -297,6 +303,7 @@ failing silently. The claude path needs no volume: token in `.env`, done.
 - [`docs/local-tunnel.md`](docs/local-tunnel.md): the ngrok tunnel profile in depth.
 - [`docs/headless.md`](docs/headless.md): bring your own webhook handler, the `/api/review` and `/api/discuss` contracts.
 - [`docs/doctrine.md`](docs/doctrine.md): the review doctrine, how it works and how to write a good one.
+- [`docs/learnings.md`](docs/learnings.md): per-repo memory — how Themis learns conventions from PR discussions and lands them via digest PRs.
 - [`docs/configuration.md`](docs/configuration.md): the full env and `.themis/config.yaml` reference.
 - [`docs/security.md`](docs/security.md): the trust model and bot-side guardrails.
 
