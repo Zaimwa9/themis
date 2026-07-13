@@ -7,9 +7,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ startsWith(github.head_ref, 'release-please--') && github.head_ref || '' }}
       - uses: astral-sh/setup-uv@v5
+      - name: Sync lockfile on release PRs
+        if: startsWith(github.head_ref, 'release-please--')
+        run: |
+          if ! uv lock --check; then
+            uv lock
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "chore: sync uv.lock with release version bump"
+            git push origin "HEAD:${{ github.head_ref }}"
+          fi
       - run: uv sync --locked
       - run: uv run ruff check src tests
       - run: uv run pytest -q
