@@ -25,7 +25,7 @@ def _set_env(monkeypatch, extra=None, omit=()):
         "THEMIS_GH_APP_CLIENT_ID", "THEMIS_GH_APP_PRIVATE_KEY", "THEMIS_GH_WEBHOOK_SECRET",
         "THEMIS_CODEX_SANDBOX", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
         "THEMIS_WEBHOOK_ENABLED", "THEMIS_API_TOKEN", "THEMIS_WORKSPACE_ROOT", "THEMIS_ENGINE",
-        "THEMIS_AGENT_URL", "THEMIS_AGENT_TOKEN",
+        "THEMIS_AGENT_URL", "THEMIS_AGENT_TOKEN", "THEMIS_DATA_ROOT",
     ):
         monkeypatch.delenv(key, raising=False)
     for key, value in {**REQUIRED, **(extra or {})}.items():
@@ -190,3 +190,30 @@ def test_repo_config__web_access_true():
 def test_repo_config__model_name_default_is_none():
     # Engine-aware defaults resolve in the service, not here.
     assert parse_repo_config(None).model.name is None
+
+
+def test_repo_config__learnings_defaults():
+    config = parse_repo_config(None)
+    assert config.learnings.enabled is True
+    assert config.learnings.digest_threshold == 10
+
+
+def test_repo_config__learnings_opt_out():
+    config = parse_repo_config("learnings:\n  enabled: false\n")
+    assert config.learnings.enabled is False
+
+
+def test_repo_config__learnings_threshold_below_one_clamps(caplog):
+    config = parse_repo_config("learnings:\n  digest_threshold: 0\n")
+    assert config.learnings.digest_threshold == 10
+    assert "themis_invalid_digest_threshold" in caplog.text
+
+
+def test_load_settings__data_root_from_env(monkeypatch):
+    _set_env(monkeypatch, extra={"THEMIS_DATA_ROOT": "/var/lib/themis"})
+    assert str(load_settings().data_root) == "/var/lib/themis"
+
+
+def test_load_settings__data_root_default_is_home_dot_themis(monkeypatch):
+    _set_env(monkeypatch)
+    assert load_settings().data_root.name == ".themis"
