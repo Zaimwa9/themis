@@ -7,8 +7,12 @@ import pytest
 from themis.learnings import (
     Learning,
     PendingStore,
+    compose_digest,
+    effective_set,
+    is_duplicate,
     new_learning,
     parse_jsonl,
+    prune_merged,
     to_jsonl,
 )
 
@@ -112,3 +116,73 @@ async def test_pending_store__replace__overwrites(tmp_path):
     await store.replace("acme/widgets", [])
 
     assert await store.load("acme/widgets") == []
+
+
+def test_effective_set__dedupes_by_id_repo_wins():
+    repo = [_entry(text="repo version")]
+    pending = [_entry(text="pending version"), _entry(id="lrn-bbbbbbbb", text="new")]
+
+    merged = effective_set(repo, pending)
+
+    assert [e.id for e in merged] == ["lrn-aaaaaaaa", "lrn-bbbbbbbb"]
+    assert merged[0].text == "repo version"
+
+
+def test_effective_set__supersedes_removes_target():
+    repo = [_entry()]
+    pending = [_entry(id="lrn-bbbbbbbb", text="replacement", supersedes="lrn-aaaaaaaa")]
+
+    merged = effective_set(repo, pending)
+
+    assert [e.id for e in merged] == ["lrn-bbbbbbbb"]
+
+
+def test_effective_set__caps_entries_dropping_oldest_first(caplog):
+    repo = [
+        _entry(id=f"lrn-{i:08d}", text=f"rule {i}", created_at=f"2026-01-{(i % 28) + 1:02d}")
+        for i in range(250)
+    ]
+
+    merged = effective_set(repo, [])
+
+    assert len(merged) == 200
+    assert "themis_learnings_capped" in caplog.text
+
+
+def test_effective_set__caps_total_bytes(caplog):
+    repo = [_entry(id=f"lrn-{i:08d}", text="x" * 490) for i in range(150)]
+
+    merged = effective_set(repo, [])
+
+    from themis.learnings import to_jsonl as _to
+    assert len(_to(merged).encode()) <= 50_000
+    assert "themis_learnings_capped" in caplog.text
+
+
+def test_prune_merged__drops_pending_present_in_repo():
+    pending = [_entry(), _entry(id="lrn-bbbbbbbb")]
+    repo = [_entry()]
+
+    assert [e.id for e in prune_merged(pending, repo)] == ["lrn-bbbbbbbb"]
+
+
+def test_is_duplicate__normalizes_whitespace_and_case():
+    existing = [_entry(text="Prefer   X over Y.")]
+    assert is_duplicate("prefer x OVER y.", existing) is True
+    assert is_duplicate("prefer z", existing) is False
+
+
+def test_compose_digest__merges_and_applies_supersedes():
+    repo_text = to_jsonl([_entry()])
+    pending = [_entry(id="lrn-bbbbbbbb", text="replacement", supersedes="lrn-aaaaaaaa")]
+
+    out = compose_digest(repo_text, pending)
+
+    entries = parse_jsonl(out)
+    assert [e.id for e in entries] == ["lrn-bbbbbbbb"]
+    assert out.endswith("\n")
+
+
+def test_compose_digest__no_repo_file__pending_only():
+    entries = parse_jsonl(compose_digest(None, [_entry()]))
+    assert [e.id for e in entries] == ["lrn-aaaaaaaa"]

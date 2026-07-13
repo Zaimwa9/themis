@@ -150,3 +150,60 @@ class PendingStore:
         tmp.write_text(to_jsonl(entries))
         # Atomic rename: torn writes must not destroy previously persisted learnings.
         os.replace(tmp, path)
+
+
+def _dedupe_by_id(repo_entries: list[Learning], pending: list[Learning]) -> list[Learning]:
+    """Repo-first union: the human-merged repo file wins on id collisions."""
+    seen: set[str] = set()
+    merged: list[Learning] = []
+    for entry in (*repo_entries, *pending):
+        if entry.id in seen:
+            continue
+        seen.add(entry.id)
+        merged.append(entry)
+    return merged
+
+
+def _apply_supersedes(entries: list[Learning]) -> list[Learning]:
+    superseded = {e.supersedes for e in entries if e.supersedes}
+    return [e for e in entries if e.id not in superseded]
+
+
+def effective_set(repo_entries: list[Learning], pending: list[Learning]) -> list[Learning]:
+    """What reviews see: repo + pending, superseded removed, size-capped.
+
+    The cap drops oldest-first (created_at, then original order) and logs the
+    count — silent truncation would read as full coverage."""
+    merged = _apply_supersedes(_dedupe_by_id(repo_entries, pending))
+    if len(merged) > MAX_ENTRIES:
+        keep = sorted(
+            sorted(merged, key=lambda e: e.created_at, reverse=True)[:MAX_ENTRIES],
+            key=merged.index,
+        )
+        logger.warning("themis_learnings_capped dropped=%d reason=entries", len(merged) - MAX_ENTRIES)
+        merged = keep
+    while merged and len(to_jsonl(merged).encode()) > MAX_TOTAL_BYTES:
+        oldest = min(merged, key=lambda e: (e.created_at, merged.index(e)))
+        merged.remove(oldest)
+        logger.warning("themis_learnings_capped dropped=1 reason=bytes id=%s", oldest.id)
+    return merged
+
+
+def prune_merged(pending: list[Learning], repo_entries: list[Learning]) -> list[Learning]:
+    """Pending entries whose id already reached the repo file have merged."""
+    repo_ids = {e.id for e in repo_entries}
+    return [p for p in pending if p.id not in repo_ids]
+
+
+def _normalize(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def is_duplicate(text: str, existing: list[Learning]) -> bool:
+    norm = _normalize(text)
+    return any(_normalize(e.text) == norm for e in existing)
+
+
+def compose_digest(repo_text: str | None, pending: list[Learning]) -> str:
+    """New repo-file content for the digest PR: full merge, no size cap."""
+    return to_jsonl(_apply_supersedes(_dedupe_by_id(parse_jsonl(repo_text), pending)))
