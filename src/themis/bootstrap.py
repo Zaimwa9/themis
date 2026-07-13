@@ -194,6 +194,8 @@ def _compose_text(image: str) -> str:
       THEMIS_ENGINE: ${{THEMIS_ENGINE:-codex}}
       THEMIS_PUBLIC_URL: ${{THEMIS_PUBLIC_URL:-}}
       THEMIS_TUNNEL_API: ${{THEMIS_TUNNEL_API:-}}
+      THEMIS_WEBHOOK_ENABLED: ${{THEMIS_WEBHOOK_ENABLED:-true}}
+      THEMIS_API_TOKEN: ${{THEMIS_API_TOKEN:-}}
     ports:
       - \"8000:8000\"
     volumes:
@@ -211,6 +213,8 @@ def _compose_text(image: str) -> str:
       THEMIS_WORKSPACE_ROOT: /tmp/themis
       THEMIS_CODEX_SANDBOX: ${{THEMIS_CODEX_SANDBOX:-workspace-write}}
       CLAUDE_CODE_OAUTH_TOKEN: ${{CLAUDE_CODE_OAUTH_TOKEN:-}}
+      HTTP_PROXY: ${{HTTP_PROXY:-}}
+      HTTPS_PROXY: ${{HTTPS_PROXY:-}}
     volumes:
       - workspaces:/tmp/themis
       - codex-home:/data/codex

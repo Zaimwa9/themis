@@ -159,6 +159,26 @@ def test_write_deployment_keeps_secrets_out_of_compose_and_sets_modes(tmp_path):
     assert "image: ${THEMIS_IMAGE:-ghcr.io/example/themis:1.2.3}" in compose_text
     compose = yaml.safe_load(compose_text)
     assert set(compose["services"]) == {"themis", "agent", "codex-init", "ngrok"}
+    assert compose["services"]["themis"]["environment"] == {
+        "THEMIS_GH_APP_CLIENT_ID": "${THEMIS_GH_APP_CLIENT_ID}",
+        "THEMIS_GH_APP_PRIVATE_KEY": "${THEMIS_GH_APP_PRIVATE_KEY}",
+        "THEMIS_GH_WEBHOOK_SECRET": "${THEMIS_GH_WEBHOOK_SECRET}",
+        "THEMIS_AGENT_TOKEN": "${THEMIS_AGENT_TOKEN}",
+        "THEMIS_AGENT_URL": "http://agent:8001",
+        "THEMIS_ENGINE": "${THEMIS_ENGINE:-codex}",
+        "THEMIS_PUBLIC_URL": "${THEMIS_PUBLIC_URL:-}",
+        "THEMIS_TUNNEL_API": "${THEMIS_TUNNEL_API:-}",
+        "THEMIS_WEBHOOK_ENABLED": "${THEMIS_WEBHOOK_ENABLED:-true}",
+        "THEMIS_API_TOKEN": "${THEMIS_API_TOKEN:-}",
+    }
+    assert compose["services"]["agent"]["environment"] == {
+        "THEMIS_AGENT_TOKEN": "${THEMIS_AGENT_TOKEN}",
+        "THEMIS_WORKSPACE_ROOT": "/tmp/themis",
+        "THEMIS_CODEX_SANDBOX": "${THEMIS_CODEX_SANDBOX:-workspace-write}",
+        "CLAUDE_CODE_OAUTH_TOKEN": "${CLAUDE_CODE_OAUTH_TOKEN:-}",
+        "HTTP_PROXY": "${HTTP_PROXY:-}",
+        "HTTPS_PROXY": "${HTTPS_PROXY:-}",
+    }
     assert compose["services"]["agent"]["volumes"][1] == "codex-home:/data/codex"
     assert compose["services"]["codex-init"]["user"] == "0:0"
     assert stat.S_IMODE((output / ".env").stat().st_mode) == 0o600

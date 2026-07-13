@@ -99,6 +99,21 @@ CLAUDE_CODE_OAUTH_TOKEN=<token>
 
 The generated Compose file exposes it only to the isolated agent service.
 
+## Refreshing Codex authentication
+
+Codex normally refreshes its own tokens inside the persistent volume. If that
+eventually stops working, log in again on the host and replace the agent's copy:
+
+```bash
+codex login
+docker compose exec -T agent sh -c 'umask 077; cat > /data/codex/auth.json' \
+  < ~/.codex/auth.json
+docker compose restart agent
+```
+
+The command runs as the unprivileged `themis` user inside the agent container.
+GitHub App credentials remain isolated in the controller.
+
 ## Files and recovery
 
 The bootstrap writes:
