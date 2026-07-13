@@ -149,11 +149,17 @@ class ReviewService:
             )
             repo_text = None
         repo_entries = parse_jsonl(repo_text)
-        pending = await self.pending_store.load(repo)
-        pruned = prune_merged(pending, repo_entries)
-        if len(pruned) != len(pending):
-            await self.pending_store.replace(repo, pruned)
-            pending = pruned
+        try:
+            pending = await self.pending_store.load(repo)
+            pruned = prune_merged(pending, repo_entries)
+            if len(pruned) != len(pending):
+                await self.pending_store.replace(repo, pruned)
+                pending = pruned
+        except OSError as error:
+            logger.warning(
+                "themis_learnings_store_failed repo=%s error=%s", repo, error
+            )
+            pending = []
         return effective_set(repo_entries, pending), pending
 
     def _engine_for(self, repo_config: RepoConfig) -> Engine:

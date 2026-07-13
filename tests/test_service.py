@@ -1242,3 +1242,18 @@ async def test_load_learnings__merged_pending_pruned(service, gh, tmp_path):
     await service.review(REPO, 7, 42, auto=True)
 
     assert await store.load(REPO) == []
+
+
+async def test_review__pending_store_io_error__review_proceeds(service, gh):
+    class BrokenStore:
+        async def load(self, repo):
+            raise OSError("disk full")
+
+        async def replace(self, repo, entries):
+            raise OSError("disk full")
+
+    service.pending_store = BrokenStore()
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_summary_comment.assert_awaited_once()
