@@ -935,11 +935,16 @@ async def test_git_head_sha__returns_workspace_head(tmp_path):
 async def test_git_changed_lines__returns_exact_left_and_right_anchors(tmp_path):
     _run_git(tmp_path, "init", "-q", "-b", "main")
     (tmp_path / "a.py").write_text("one\nold\nthree\n")
+    unusual_path = 'tab\tquote"backslash\\.py'
+    (tmp_path / unusual_path).write_text("old\n")
     _run_git(tmp_path, "add", "a.py")
+    _run_git(tmp_path, "add", unusual_path)
     _run_git(tmp_path, "commit", "-q", "-m", "base")
     _run_git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
     (tmp_path / "a.py").write_text("one\nnew\nthree\nfour\n")
+    (tmp_path / unusual_path).write_text("new\n")
     _run_git(tmp_path, "add", "a.py")
+    _run_git(tmp_path, "add", unusual_path)
     _run_git(tmp_path, "commit", "-q", "-m", "head")
 
     anchors = await git_changed_lines(tmp_path, "main")
@@ -948,6 +953,8 @@ async def test_git_changed_lines__returns_exact_left_and_right_anchors(tmp_path)
         ("a.py", 2, "LEFT"),
         ("a.py", 2, "RIGHT"),
         ("a.py", 4, "RIGHT"),
+        (unusual_path, 1, "LEFT"),
+        (unusual_path, 1, "RIGHT"),
     }
 
 

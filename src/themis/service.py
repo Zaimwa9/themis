@@ -1,6 +1,7 @@
 """Themis orchestration: ReviewService + queue job runners."""
 
 import asyncio
+import ast
 import contextlib
 import json
 import logging
@@ -105,6 +106,14 @@ _DIFF_HUNK = re.compile(
 
 def _diff_path(header: str, prefix: str) -> str | None:
     path = header[4:]
+    if path.startswith('"'):
+        try:
+            decoded = ast.literal_eval(path)
+        except (SyntaxError, ValueError) as error:
+            raise ValueError("invalid quoted path in git diff") from error
+        if not isinstance(decoded, str):
+            raise ValueError("non-string path in git diff")
+        path = decoded
     if path == "/dev/null":
         return None
     return path.removeprefix(prefix)
@@ -133,12 +142,16 @@ async def git_changed_lines(
     old_path: str | None = None
     new_path: str | None = None
     for line in output.splitlines():
-        if line.startswith("--- "):
-            old_path = _diff_path(line, "a/")
-            continue
-        if line.startswith("+++ "):
-            new_path = _diff_path(line, "b/")
-            continue
+        try:
+            if line.startswith("--- "):
+                old_path = _diff_path(line, "a/")
+                continue
+            if line.startswith("+++ "):
+                new_path = _diff_path(line, "b/")
+                continue
+        except ValueError as error:
+            logger.warning("themis_changed_lines_failed error=%s", error)
+            return None
         match = _DIFF_HUNK.match(line)
         if match is None:
             continue
