@@ -27,6 +27,7 @@ from themis.learnings import (
     LEARNINGS_REPO_PATH,
     Learning,
     PendingStore,
+    compose_digest,
     effective_set,
     is_duplicate,
     new_learning,
@@ -85,6 +86,15 @@ _ENGINE_AUTH_HINTS = {
 LEARNING_FOOTER = (
     "\n\n🧠 Learning recorded — lands in `.themis/learnings.jsonl` "
     "via the next digest PR."
+)
+DIGEST_BRANCH = "themis/learnings"
+DIGEST_PR_TITLE = "chore: sync review learnings"
+DIGEST_PR_BODY = (
+    "Review learnings captured from PR discussions, landing into "
+    "`.themis/learnings.jsonl`.\n\n"
+    "Edit or delete lines before merging — the merged file is what future "
+    "reviews read. Closing without merging leaves the entries pending.\n\n"
+    "See `docs/learnings.md` in the Themis repository for how this works."
 )
 
 # One agent run at a time so reviews never monopolize the shared worker.
@@ -222,6 +232,36 @@ class ReviewService:
             return None
         logger.info("themis_learning_captured repo=%s id=%s", repo, learning.id)
         return learning
+
+    async def _flush_digest(self, gh: Any, repo: str) -> None:
+        """Land pending learnings as one digest PR; best-effort.
+
+        The branch is force-rebuilt from the default head so the PR diff is
+        always exactly the learnings file. Failures leave the buffer intact
+        and never fail the job that triggered the flush."""
+        assert self.pending_store is not None
+        try:
+            pending = await self.pending_store.load(repo)
+            if not pending:
+                return
+            default_branch = await gh.get_default_branch(repo)
+            base_sha = await gh.get_branch_sha(repo, default_branch)
+            repo_text = await gh.get_file_text(repo, LEARNINGS_REPO_PATH)
+            content = compose_digest(repo_text, pending)
+            await gh.upsert_branch(repo, DIGEST_BRANCH, base_sha)
+            file_sha = await gh.get_file_sha(repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH)
+            await gh.put_file(
+                repo, LEARNINGS_REPO_PATH, content=content,
+                message=DIGEST_PR_TITLE, branch=DIGEST_BRANCH, sha=file_sha,
+            )
+            if await gh.find_open_pr(repo, DIGEST_BRANCH) is None:
+                await gh.create_pr(
+                    repo, title=DIGEST_PR_TITLE, body=DIGEST_PR_BODY,
+                    head=DIGEST_BRANCH, base=default_branch,
+                )
+            logger.info("themis_digest_flushed repo=%s count=%d", repo, len(pending))
+        except (httpx.HTTPError, GitHubGraphQLError, OSError) as error:
+            logger.warning("themis_digest_flush_failed repo=%s error=%s", repo, error)
 
     def _engine_for(self, repo_config: RepoConfig) -> Engine:
         return self.resolve_engine(repo_config.engine or self.settings.engine)
@@ -411,6 +451,10 @@ class ReviewService:
                         )
                     else:
                         await post_gh.post_issue_comment(repo, pr_number, reply)
+                    if captured is not None:
+                        pending_now = await self.pending_store.load(repo)
+                        if len(pending_now) >= repo_config.learnings.digest_threshold:
+                            await self._flush_digest(post_gh, repo)
             finally:
                 self.cleanup(workspace)
 

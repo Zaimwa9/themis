@@ -12,6 +12,8 @@ from themis.engines import EngineError, EngineQuotaError
 from themis.github.client import GitHubGraphQLError
 from themis.learnings import Learning, PendingStore, to_jsonl
 from themis.service import (
+    DIGEST_BRANCH,
+    DIGEST_PR_TITLE,
     LEARNING_FOOTER,
     ReviewService,
     api_changed_paths,
@@ -1383,3 +1385,96 @@ async def test_discuss__invalid_learning_json__reply_still_posts(
     gh.post_issue_comment.assert_awaited_once()
     assert await store.load(REPO) == []
     assert "themis_learning_rejected" in caplog.text
+
+
+def _gh_for_digest(gh):
+    gh.get_default_branch.return_value = "main"
+    gh.get_branch_sha.return_value = "base-sha"
+    gh.get_file_sha.return_value = None
+    gh.find_open_pr.return_value = None
+    return gh
+
+
+def _entry_for_service(i: int) -> Learning:
+    return Learning(
+        id=f"lrn-{i:08x}", text=f"rule number {i}", paths=(),
+        learnt_from="dev", pr=1, created_at=f"2026-07-{(i % 28) + 1:02d}T00:00:00+00:00",
+    )
+
+
+async def test_discuss__threshold_reached__digest_pr_opened(service, gh, tmp_path):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    for i in range(9):
+        await store.append(REPO, _entry_for_service(i))
+    gh.get_file_text.side_effect = _config_and_learnings(
+        config_text="learnings:\n  digest_threshold: 10\n"
+    )
+    _gh_for_digest(gh)
+    service.resolve_engine = _resolver(_learning_reply_agent(
+        {"text": "The tenth rule.", "confidence": "high"}
+    ))
+
+    await service.discuss(**_discuss_kwargs())
+
+    gh.upsert_branch.assert_awaited_once_with(REPO, DIGEST_BRANCH, "base-sha")
+    put_kwargs = gh.put_file.await_args.kwargs
+    assert put_kwargs["branch"] == DIGEST_BRANCH
+    assert "The tenth rule." in put_kwargs["content"]
+    gh.create_pr.assert_awaited_once()
+    assert gh.create_pr.await_args.kwargs["title"] == DIGEST_PR_TITLE
+
+
+async def test_discuss__below_threshold__no_digest(service, gh, tmp_path):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    _gh_for_digest(gh)
+    service.resolve_engine = _resolver(_learning_reply_agent(
+        {"text": "First rule.", "confidence": "high"}
+    ))
+
+    await service.discuss(**_discuss_kwargs())
+
+    gh.create_pr.assert_not_awaited()
+    gh.put_file.assert_not_awaited()
+
+
+async def test_discuss__digest_pr_already_open__updated_not_duplicated(
+    service, gh, tmp_path
+):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    for i in range(9):
+        await store.append(REPO, _entry_for_service(i))
+    gh.get_file_text.side_effect = _config_and_learnings()
+    _gh_for_digest(gh)
+    gh.find_open_pr.return_value = 12
+    service.resolve_engine = _resolver(_learning_reply_agent(
+        {"text": "The tenth rule.", "confidence": "high"}
+    ))
+
+    await service.discuss(**_discuss_kwargs())
+
+    gh.put_file.assert_awaited_once()
+    gh.create_pr.assert_not_awaited()
+
+
+async def test_discuss__digest_flush_fails__reply_already_posted(
+    service, gh, tmp_path, caplog
+):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    for i in range(9):
+        await store.append(REPO, _entry_for_service(i))
+    gh.get_file_text.side_effect = _config_and_learnings()
+    _gh_for_digest(gh)
+    gh.upsert_branch.side_effect = _http_error(500)
+    service.resolve_engine = _resolver(_learning_reply_agent(
+        {"text": "The tenth rule.", "confidence": "high"}
+    ))
+
+    await service.discuss(**_discuss_kwargs())
+
+    gh.post_issue_comment.assert_awaited_once()
+    assert "themis_digest_flush_failed" in caplog.text
+    assert len(await store.load(REPO)) == 10  # buffer intact for retry
