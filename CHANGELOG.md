@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2](https://github.com/Zaimwa9/themis/compare/v0.1.1...v0.1.2) (2026-07-13)
+
+
+### Bug Fixes
+
+* gate review extra context to trusted comment authors ([e5ef123](https://github.com/Zaimwa9/themis/commit/e5ef123926736c6f613a0f1523d2fbfcd94d0d93))
+* gate review extra context to trusted comment authors ([826694a](https://github.com/Zaimwa9/themis/commit/826694af2d58dcbbfe581a18686aaa95a54c0d36))
+
 ## [0.1.1](https://github.com/Zaimwa9/themis/compare/v0.1.0...v0.1.1) (2026-07-12)
 
 
