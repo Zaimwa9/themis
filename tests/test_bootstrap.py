@@ -64,9 +64,11 @@ def test_build_manifest_contains_exact_permissions_events_and_callbacks(tmp_path
         "active": True,
     }
     assert manifest["default_permissions"] == {
+        "checks": "read",
         "contents": "read",
         "pull_requests": "write",
         "issues": "write",
+        "statuses": "read",
     }
     assert manifest["default_events"] == [
         "pull_request",

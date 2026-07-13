@@ -11,6 +11,7 @@ def test_build_review_prompt__contains_pr_context_and_contract():
     assert ".themis/review.md" in prompt
     assert ".review-input/pr.json" in prompt
     assert ".review-input/threads.json" in prompt
+    assert ".review-input/checks.json" in prompt
     assert ".review-output/summary.md" in prompt
     assert ".review-output/actions.json" in prompt
     assert "start_side" in prompt
@@ -29,11 +30,19 @@ def test_build_review_prompt__summary_format__verdict_severities_no_empty_sectio
     assert "sign-off" in prompt
     assert "<details><summary><b>🧪 How to verify</b></summary>" in prompt
     assert "Automate:" in prompt
-    assert "| 🎯 Correctness | n/5 |" in prompt
-    assert "| 🚀 Product impact | n/5 |" in prompt
-    assert "<details><summary><b>📝 Walkthrough</b></summary>" in prompt
-    assert "Product take:" in prompt
+    assert "Correctness, Test coverage, Code quality, Product impact" in prompt
+    assert "walkthrough" in prompt
+    assert "`**Product take:**`" in prompt
     assert "at most 3 lines" in prompt
+
+
+def test_build_review_prompt__tiny_reviews__omit_ceremonial_sections():
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+
+    assert "tiny diff, dependency-only update, or" in prompt
+    assert "Do not add a scorecard, walkthrough, product take, assumptions" in prompt
+    assert "joke/sign-off merely to fill out the template" in prompt
+    assert "do not repeat the" in prompt
 
 
 def test_build_review_prompt__inline_finding_format__label_title_suggestion_fix_direction():
@@ -69,6 +78,19 @@ def test_build_review_prompt__external_contract_cross_check():
     assert "unverified" in prompt
 
 
+def test_build_review_prompt__observed_vs_predicted_and_ci_states():
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+
+    assert "`Observed:`" in prompt
+    assert "`Predicted:`" in prompt
+    assert "never wording" in prompt
+    assert "presents it as something that already happened" in prompt
+    assert "`passed`, `failed`, `pending`, `none`, or `unavailable`" in prompt
+    assert "Never wait for, poll, or refetch CI" in prompt
+    assert "do not claim the PR caused them" in prompt
+    assert "never as success or failure" in prompt
+
+
 def test_build_review_prompt__includes_fenced_extra_context():
     prompt = build_review_prompt(
         "acme/widgets", 7, "main", extra_context="Focus on authorization paths."
@@ -96,8 +118,10 @@ def test_build_review_prompt__assumptions_section():
     prompt = build_review_prompt("acme/widgets", 7, "main")
 
     assert "<details><summary><b>🧭 Assumptions & unverified claims</b></summary>" in prompt
-    assert "did not verify" in prompt
-    assert "Omit the section only when you verified everything" in prompt
+    assert "could not verify" in prompt
+    assert "only" in prompt
+    assert "Omit it" in prompt
+    assert "when there are none" in prompt
 
 
 def test_build_review_prompt__unverified_findings_keep_severity():

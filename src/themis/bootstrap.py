@@ -118,9 +118,11 @@ def build_manifest(options: BootstrapOptions, state: str) -> dict[str, object]:
         "hook_attributes": {"url": webhook_url, "active": True},
         "public": False,
         "default_permissions": {
+            "checks": "read",
             "contents": "read",
             "pull_requests": "write",
             "issues": "write",
+            "statuses": "read",
         },
         "default_events": [
             "pull_request",

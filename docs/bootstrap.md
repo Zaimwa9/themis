@@ -4,6 +4,8 @@
 GitHub App with Themis's exact permissions and events, exchanges GitHub's
 one-time code for the App credentials, verifies installation on the requested
 repository, and writes `.env`, `compose.yaml`, and the model credential volume.
+The generated App requests `checks: read` and `statuses: read` so each review
+can capture one CI snapshot without polling. It does not request Actions access.
 
 GitHub still displays two authorization screens: one to create the App and one
 to choose repositories. Those ownership decisions cannot be made through the

@@ -74,6 +74,10 @@ def gh() -> AsyncMock:
         "user": {"login": "dev"}, "head": {"sha": "abc123"}, "base": {"ref": "main"},
     }
     mock.list_review_threads.return_value = []
+    mock.get_ci_snapshot.return_value = {
+        "state": "none", "head_sha": "abc123", "checks": [],
+        "unavailable_sources": [],
+    }
     # Repo config: None -> RepoConfig defaults; tests set this to a yaml string
     # to exercise per-repo behavior config.
     mock.get_file_text.return_value = None
@@ -323,6 +327,52 @@ async def test_review__flaky_agent__retries_then_succeeds(service, gh):
     gh.post_review.assert_awaited_once()
 
 
+async def test_review__ci_snapshot__written_once_before_agent_even_with_retry(
+    service, gh
+):
+    snapshot = {
+        "state": "failed", "head_sha": "abc123",
+        "checks": [{"type": "check_run", "name": "tests", "status": "completed",
+                    "conclusion": "failure", "details_url": None}],
+        "unavailable_sources": [],
+    }
+    gh.get_ci_snapshot.return_value = snapshot
+    calls = 0
+
+    async def agent(*, workspace, **kwargs):
+        nonlocal calls
+        calls += 1
+        assert json.loads((workspace / ".review-input/checks.json").read_text()) == snapshot
+        if calls == 1:
+            raise EngineError("retry")
+        return await _review_agent()(workspace=workspace, **kwargs)
+
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert calls == 2
+    gh.get_ci_snapshot.assert_awaited_once_with(REPO, "abc123")
+
+
+async def test_review__ci_snapshot_failure__writes_unavailable_and_continues(
+    service, gh
+):
+    gh.get_ci_snapshot.side_effect = _http_error(403)
+
+    async def agent(*, workspace, **kwargs):
+        snapshot = json.loads((workspace / ".review-input/checks.json").read_text())
+        assert snapshot["state"] == "unavailable"
+        assert snapshot["head_sha"] == "abc123"
+        return await _review_agent()(workspace=workspace, **kwargs)
+
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_summary_comment.assert_awaited_once()
+
+
 async def test_review__agent_always_fails__failure_comment_and_raises(service, gh):
     async def dead(**kwargs):
         raise EngineError("dead")
@@ -525,12 +575,13 @@ async def test_review__posting_uses_fresh_token(service, tmp_path):
         clients[token] = mock
         return mock
 
-    service.get_token = AsyncMock(side_effect=["t1", "t2"])
+    service.get_token = AsyncMock(side_effect=["t1", "t-ci", "t2"])
     service.make_client = make_client
 
     await service.review(REPO, 7, 42, auto=True)
 
     clients["t1"].post_review.assert_not_awaited()
+    clients["t-ci"].get_ci_snapshot.assert_awaited_once_with(REPO, "abc123")
     clients["t1"].post_summary_comment.assert_not_awaited()
     clients["t2"].post_review.assert_awaited_once()
     clients["t2"].post_summary_comment.assert_awaited_once()
@@ -551,7 +602,7 @@ async def test_review__quota_comment_uses_fresh_token(service):
         clients[token] = mock
         return mock
 
-    service.get_token = AsyncMock(side_effect=["t1", "t2"])
+    service.get_token = AsyncMock(side_effect=["t1", "t-ci", "t2"])
     service.make_client = make_client
 
     async def quota_agent(**kwargs):

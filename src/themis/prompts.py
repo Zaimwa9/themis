@@ -8,60 +8,49 @@ _OUTPUT_CONTRACT = """\
 Write your results to files. Never try to post to GitHub yourself; you have no
 GitHub access.
 
-1. `.review-output/summary.md` - always. Exact shape:
+1. `.review-output/summary.md` - always.
 
    First line: `## 🤖 AI Review: <verdict>` where <verdict> matches your worst
    finding: `✅ Ship it` (nothing to flag) / `🧹 Ship it, nits inside` (nits only) /
    `🟠 Fix before merge` (majors) / `🔴 Hold the merge` (blockers).
 
-   Then a 2-4 sentence TL;DR: what the PR does and your overall take. If the PR
-   is clean, say so plainly.
+   Adapt the rest to the change. For a tiny diff, dependency-only update, or
+   lockfile-only update, write only a concise 1-3 sentence assessment after the
+   header, plus a severity section if there is a finding and a CI caveat when
+   relevant. Do not add a scorecard, walkthrough, product take, assumptions
+   section, or joke/sign-off merely to fill out the template.
 
-   Then a compact scoring table, exactly these four rows, each scored n/5:
+   For a substantive change, start with a 2-4 sentence TL;DR and retain detail
+   where it adds useful review signal. A compact four-row scorecard
+   (Correctness, Test coverage, Code quality, Product impact), a walkthrough of
+   at most 6 logical areas, and a `**Product take:**` of at most 3 lines are
+   optional. Include each only when the diff provides enough evidence for it
+   and it helps the reader make a decision.
 
-   | | |
-   |---|---|
-   | 🎯 Correctness | n/5 |
-   | 🧪 Test coverage | n/5 |
-   | 📐 Code quality | n/5 |
-   | 🚀 Product impact | n/5 |
-
-   Then one `### <emoji> <severity>` section per severity that has findings.
+   Write one `### <emoji> <severity>` section per severity that has findings.
    Omit empty sections entirely; never write a section just to say "None".
    Severities:
    - `🔴 Blockers` - would break production, lose data, or open a security hole
    - `🟠 Majors` - real bugs or costly defects; fix before or right after merging
    - `🧹 Nits` - polish; take it or leave it
-   One bullet per finding: `path` plus what/why. If the finding also has an
-   inline comment, keep the bullet to a single line; the detail lives inline.
+   One bullet per finding. When it also has an inline comment, make the summary
+   bullet only a one-line pointer to `path` and the result: do not repeat the
+   mechanism, evidence, impact, or fix direction from the inline comment.
 
-   Then `<details><summary><b>📝 Walkthrough</b></summary>`, a blank line, at most 6
-   bullets mapping the logical areas of the change (`area` - what changed and
-   why), a blank line, then `</details>`. Skip it for tiny diffs.
+   When a substantive PR changes behavior someone can observe (UI, API
+   responses, emails, generated files), you may add
+   `<details><summary><b>🧪 How to verify</b></summary>` with 3-5 one-line steps
+   covering the riskiest paths first. If a cheap automated check would cover
+   it, end with one `Automate:` line. Skip this for tiny diffs, refactors, docs,
+   or internal-only changes.
 
-   When the PR changes behavior someone can observe (UI, API responses, emails,
-   generated files), add `<details><summary><b>🧪 How to verify</b></summary>`, a
-   blank line, then 3-5 one-line steps a non-engineer can follow (do X,
-   expect Y), covering the riskiest paths first. If a cheap automated check
-   would cover it, end with a single `Automate:` line naming it (an e2e case,
-   a curl, a script). Then a blank line and `</details>`. Skip the whole
-   section for refactors, docs, or internal-only changes.
+   Add `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>` only
+   for load-bearing claims the review relied on but could not verify. Omit it
+   when there are none, and keep it out of concise tiny/dependency/lockfile
+   reviews; put a directly relevant uncertainty in the assessment instead.
 
-   Then `**Product take:**` and at most 3 lines: what this change means for
-   users/the product, and how much it matters relative to typical work on this
-   codebase. Be frank: major capability, solid improvement, or minor polish.
-
-   Then `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>`,
-   a blank line, then one line per load-bearing claim your review relied on but
-   did not verify (an external tool's behavior, a constraint you could not
-   look up, an invariant that lives outside the diff), a blank line, then
-   `</details>`. Be honest here: a wrong silent assumption is how reviews miss
-   real defects. Omit the section only when you verified everything you relied
-   on.
-
-   Close with one italic sign-off line: a short, good-natured remark about this
-   specific PR (dry humor welcome, never snark), ending with
-   `· reviewed at <short HEAD sha>`.
+   A short PR-specific sign-off ending in `· reviewed at <short HEAD sha>` is
+   optional for substantive reviews and should be omitted from concise reviews.
 2. `.review-output/actions.json` - only when you have actions:
 
     {
@@ -91,8 +80,12 @@ GitHub access.
   - First line: `*<severity> · <effort>*` where severity is `🔴 Blocker` /
     `🟠 Major` / `🧹 Nit` (match the summary section) and effort is
     `⚡ Quick win` or `🏗️ Heavy lift`. Leave a blank line after it.
-  - Then a bold one-line title stating the defect, then 1-2 plain sentences:
-    the failure mechanism and its impact.
+  - Then a bold one-line title stating the defect. Clearly separate evidence
+    from consequence: prefix behavior you directly verified in code, tests, or
+    completed checks with `Observed:`. Prefix an unreproduced consequence with
+    `Predicted:` and use conditional language (`would`/`could`), never wording
+    that presents it as something that already happened. If you reproduced the
+    consequence, include that reproduction as `Observed:` instead.
   - Blockers and Majors must state a concrete fix direction; never just name
     the problem.
   - When the exact replacement is small, deterministic, and you are certain of it, end with a
@@ -135,7 +128,8 @@ Review pull request {repo}#{pr_number}.
 The repository is checked out at the PR head in the current directory.
 The base branch is `origin/{base_ref}`; the PR diff is `git diff origin/{base_ref}...HEAD`.
 PR metadata is in `.review-input/pr.json`; existing review threads (with thread ids
-and comment databaseIds) are in `.review-input/threads.json`.
+and comment databaseIds) are in `.review-input/threads.json`. A point-in-time CI
+snapshot for the PR head is in `.review-input/checks.json`.
 
 {extra_context_section}Read `{DOCTRINE_PATH}` in this checkout and follow it: it contains this
 repository's review doctrine (philosophy, severity calibration, codebase map,
@@ -166,6 +160,23 @@ scenario if one exists.
 When the diff changes user-facing docs (README, security or config docs) or
 behavior they describe, check the claims against the code; a doc that promises
 more than the code guarantees is a finding.
+
+Keep observed evidence and predicted impact distinct throughout the summary and
+inline findings. `Observed` means directly established from the checked-out code,
+a command you ran, or a completed check in `checks.json`. An inferred future
+failure is `Predicted`, even when the code makes it likely. Never describe a
+prediction as current behavior or imply that it was reproduced. Use explicit
+`Observed:` and `Predicted:` labels wherever both evidence and an unreproduced
+consequence appear, including in summary-only findings.
+
+Read `.review-input/checks.json` once; it is already the non-blocking snapshot
+captured immediately before this run. Never wait for, poll, or refetch CI. Its
+top-level state is one of `passed`, `failed`, `pending`, `none`, or `unavailable`.
+Mention `failed` checks in the assessment, but do not claim the PR caused them
+unless evidence establishes that connection. Treat `pending`, `none`, and
+`unavailable` as neutral context, never as success or failure. Individual
+completed check results are observed evidence; a check name alone is not proof
+of what failed.
 
 Verification gates confidence, never reporting. A suspected Blocker or Major
 you could not verify is still a finding at its full severity: report it,
