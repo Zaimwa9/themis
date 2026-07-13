@@ -1,13 +1,16 @@
 """`python -m themis` entry point."""
 
+import argparse
 import logging
 import os
 import sys
 
+import httpx
 import uvicorn
 
 from themis.app import create_app
 from themis.agent import create_agent_app
+from themis.bootstrap import BootstrapError, add_init_parser, options_from_args, run_bootstrap
 
 
 def main(role: str | None = None) -> None:
@@ -22,5 +25,21 @@ def main(role: str | None = None) -> None:
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", default_port)))
 
 
+def cli(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="python -m themis")
+    subparsers = parser.add_subparsers(dest="command")
+    subparsers.add_parser("controller", help="run the GitHub-facing controller")
+    subparsers.add_parser("agent", help="run the isolated model agent")
+    add_init_parser(subparsers)
+    args = parser.parse_args(argv)
+    if args.command == "init":
+        try:
+            run_bootstrap(options_from_args(args))
+        except (BootstrapError, httpx.HTTPError, OSError) as error:
+            parser.error(str(error))
+        return
+    main(args.command)
+
+
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else None)
+    cli(sys.argv[1:])
