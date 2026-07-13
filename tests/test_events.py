@@ -25,12 +25,13 @@ def _issue_comment_payload(
         "issue": {"number": 7, "pull_request": {"url": "https://x"}},
         "comment": {
             "id": 501, "body": body, "author_association": author_association,
+            "user": {"login": "dev"},
         },
     }
 
 
 def _review_comment_payload(body: str, in_reply_to: int | None = None) -> dict:
-    comment = {"id": 601, "body": body}
+    comment = {"id": 601, "body": body, "user": {"login": "dev"}}
     if in_reply_to is not None:
         comment["in_reply_to_id"] = in_reply_to
     return {
@@ -215,3 +216,27 @@ def test_parse_event__top_level_review_comment_without_mention__none():
 
 def test_parse_event__unknown_event__none():
     assert parse_event("push", {"repository": {"full_name": REPO}}, MENTION) is None
+
+
+def test_parse_event__discussion__carries_author_association_and_login():
+    payload = _issue_comment_payload(f"{MENTION} what does this do?",
+                                     author_association="MEMBER")
+    job = parse_event("issue_comment", payload, MENTION)
+    assert job.author_association == "MEMBER"
+    assert job.author_login == "dev"
+
+
+def test_parse_event__thread_reply__carries_author_association():
+    payload = _review_comment_payload("I disagree, use the manager", in_reply_to=11)
+    payload["comment"]["author_association"] = "COLLABORATOR"
+    job = parse_event("pull_request_review_comment", payload, MENTION)
+    assert job.author_association == "COLLABORATOR"
+
+
+def test_parse_event__missing_association__defaults_untrusted():
+    payload = _issue_comment_payload(f"{MENTION} hello there friend")
+    del payload["comment"]["author_association"]
+    del payload["comment"]["user"]
+    job = parse_event("issue_comment", payload, MENTION)
+    assert job.author_association == "NONE"
+    assert job.author_login == ""
