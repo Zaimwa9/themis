@@ -89,6 +89,8 @@ async def test_run__config_dir__isolated(tmp_path, monkeypatch, workspace):
     [
         "Usage limit reached for the past 5 hours. Resets at 18:00.",
         "Weekly/Monthly Limit Exhausted. Your limit will reset at Monday.",
+        "Weekly Limit Exhausted. Your limit will reset at Monday.",
+        "Monthly Limit Exhausted. Your limit will reset at the 1st.",
         "Your GLM Coding Plan package has expired.",
     ],
 )
@@ -101,11 +103,20 @@ async def test_run__plan_exhausted__raises_quota_error(
         await _run(workspace)
 
 
-async def test_run__transient_rate_limit__is_retryable_engine_error(
-    tmp_path, monkeypatch, workspace
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Z.ai code 1302 wording; must stay retryable.
+        "Rate limit reached for requests",
+        # Contains the bare substring "limit exhausted" but no window-qualified
+        # marker; generic agent prose must never match.
+        "the retry limit exhausted while calling the API",
+    ],
+)
+async def test_run__transient_or_generic_prose__is_retryable_engine_error(
+    tmp_path, monkeypatch, workspace, message
 ):
-    # Z.ai code 1302 wording; must stay retryable.
-    _fake_cli(tmp_path, monkeypatch, 'echo "Rate limit reached for requests"; exit 1')
+    _fake_cli(tmp_path, monkeypatch, f'echo "{message}"; exit 1')
 
     with pytest.raises(EngineError) as exc_info:
         await _run(workspace)

@@ -7,9 +7,20 @@ from themis.engines.anthropic_api import AnthropicApiEngine
 # "Your GLM Coding Plan package has expired". Transient throttling (1302)
 # says "Rate limit reached for requests", which none of these match; it
 # must remain a retryable EngineError.
+#
+# Markers must stay phrase-specific: run_cli matches them against the
+# lowercased tail of agent-visible output (stdout/stderr the CLI produced),
+# not a curated error code, so a marker that is too generic can accidentally
+# match ordinary agent prose (e.g. "the retry limit exhausted while calling
+# the API") and misclassify a plain failure as quota-exhausted. The 1310
+# template substitutes the window in ("Weekly/Monthly Limit Exhausted..."),
+# so all three forms are listed explicitly rather than matching on the bare
+# "limit exhausted" substring.
 _QUOTA_MARKERS = (
     "usage limit reached for",
-    "limit exhausted",
+    "weekly limit exhausted",
+    "monthly limit exhausted",
+    "weekly/monthly limit exhausted",
     "coding plan package has expired",
 )
 
