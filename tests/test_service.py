@@ -10,6 +10,7 @@ import pytest
 from themis.config import Settings
 from themis.engines import EngineError, EngineQuotaError
 from themis.github.client import GitHubGraphQLError
+from themis.learnings import Learning, PendingStore, to_jsonl
 from themis.service import (
     ReviewService,
     api_changed_paths,
@@ -1141,3 +1142,103 @@ async def test_discuss__engine_unavailable__courtesy_comment_no_clone(service, g
     body = gh.post_issue_comment.await_args.args[2]
     assert "credentials" in body
     gh.post_reply.assert_not_awaited()
+
+
+LEARNING = Learning(
+    id="lrn-aaaaaaaa", text="Prefer the manager method.", paths=("a.py",),
+    learnt_from="dev", pr=3, created_at="2026-07-10T00:00:00+00:00",
+)
+
+LEARNINGS_YAML_OFF = "learnings:\n  enabled: false\n"
+
+
+def _config_and_learnings(config_text=None, learnings_text=None):
+    """get_file_text side effect: .themis/config.yaml then .themis/learnings.jsonl."""
+    async def get_file_text(repo, path):
+        if path.endswith("config.yaml"):
+            return config_text
+        if path.endswith("learnings.jsonl"):
+            return learnings_text
+        return None
+    return get_file_text
+
+
+async def test_review__repo_learnings__written_to_inputs_and_prompt_flagged(
+    service, gh, tmp_path
+):
+    gh.get_file_text.side_effect = _config_and_learnings(
+        learnings_text=to_jsonl([LEARNING])
+    )
+    service.pending_store = PendingStore(tmp_path / "data")
+    seen_prompts = []
+
+    async def agent(*, prompt, workspace, **kwargs):
+        seen_prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        input_file = workspace / ".review-input" / "learnings.jsonl"
+        assert input_file.exists()
+        assert "lrn-aaaaaaaa" in input_file.read_text()
+        return "ok"
+
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert ".review-input/learnings.jsonl" in seen_prompts[0]
+
+
+async def test_review__learnings_disabled__no_injection(service, gh, tmp_path):
+    gh.get_file_text.side_effect = _config_and_learnings(
+        config_text=LEARNINGS_YAML_OFF, learnings_text=to_jsonl([LEARNING])
+    )
+    service.pending_store = PendingStore(tmp_path / "data")
+    seen_prompts = []
+
+    async def agent(*, prompt, workspace, **kwargs):
+        seen_prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        assert not (workspace / ".review-input" / "learnings.jsonl").exists()
+        return "ok"
+
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert "learnings.jsonl" not in seen_prompts[0]
+
+
+async def test_review__no_store_configured__works_as_before(service, gh):
+    # service fixture has pending_store=None by default
+    await service.review(REPO, 7, 42, auto=True)
+    gh.post_summary_comment.assert_awaited_once()
+
+
+async def test_review__learnings_fetch_fails__review_proceeds(service, gh, tmp_path):
+    async def get_file_text(repo, path):
+        if path.endswith("learnings.jsonl"):
+            raise _http_error(500)
+        return None
+    gh.get_file_text.side_effect = get_file_text
+    service.pending_store = PendingStore(tmp_path / "data")
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_summary_comment.assert_awaited_once()
+
+
+async def test_load_learnings__merged_pending_pruned(service, gh, tmp_path):
+    store = PendingStore(tmp_path / "data")
+    await store.append(REPO, LEARNING)  # same id now in the repo file -> merged
+    gh.get_file_text.side_effect = _config_and_learnings(
+        learnings_text=to_jsonl([LEARNING])
+    )
+    service.pending_store = store
+    service.resolve_engine = _resolver(_review_agent())
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert await store.load(REPO) == []

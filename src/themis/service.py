@@ -21,6 +21,15 @@ from themis.config import (
 from themis.engines import Engine, EngineError, EngineQuotaError, EngineUnavailableError
 from themis.github.auth import get_installation_token, make_app_jwt
 from themis.github.client import GitHubClient, GitHubGraphQLError
+from themis.learnings import (
+    LEARNINGS_REPO_PATH,
+    Learning,
+    PendingStore,
+    effective_set,
+    parse_jsonl,
+    prune_merged,
+    to_jsonl,
+)
 from themis.output import (
     MAX_BODY_LEN,
     OUTPUT_DIR,
@@ -109,6 +118,7 @@ class ReviewService:
     resolve_engine: Callable[[str], Engine]
     changed_paths: Callable[..., Awaitable[set[str] | None]] = api_changed_paths
     head_sha: Callable[[Path], Awaitable[str | None]] = git_head_sha
+    pending_store: PendingStore | None = None
 
     async def _fetch_repo_config(self, gh: Any, repo: str) -> RepoConfig:
         """Behavior config from the target repo's default branch; defaults on
@@ -121,6 +131,30 @@ class ReviewService:
             )
             text = None
         return parse_repo_config(text)
+
+    async def _load_learnings(
+        self, gh: Any, repo: str, repo_config: RepoConfig
+    ) -> tuple[list[Learning], list[Learning]]:
+        """(effective, pending) for injection; prunes merged pending entries.
+
+        Empty when the feature is off or unconfigured. Any failure degrades
+        to no learnings: memory must never block a review."""
+        if self.pending_store is None or not repo_config.learnings.enabled:
+            return [], []
+        try:
+            repo_text = await gh.get_file_text(repo, LEARNINGS_REPO_PATH)
+        except httpx.HTTPError as error:
+            logger.warning(
+                "themis_learnings_fetch_failed repo=%s error=%s", repo, error
+            )
+            repo_text = None
+        repo_entries = parse_jsonl(repo_text)
+        pending = await self.pending_store.load(repo)
+        pruned = prune_merged(pending, repo_entries)
+        if len(pruned) != len(pending):
+            await self.pending_store.replace(repo, pruned)
+            pending = pruned
+        return effective_set(repo_entries, pending), pending
 
     def _engine_for(self, repo_config: RepoConfig) -> Engine:
         return self.resolve_engine(repo_config.engine or self.settings.engine)
@@ -178,6 +212,7 @@ class ReviewService:
                     repo, pr_number, error,
                 )
             threads = await gh.list_review_threads(repo, pr_number)
+            learnings, _ = await self._load_learnings(gh, repo, repo_config)
             workspace = await self.prepare(
                 root=self.settings.workspace_root,
                 clone_url=clone_url_for(repo, token),
@@ -186,9 +221,10 @@ class ReviewService:
                 depth=repo_config.limits.clone_depth,
             )
             try:
-                _write_inputs(workspace, pr, threads)
+                _write_inputs(workspace, pr, threads, learnings=learnings)
                 prompt = build_review_prompt(
-                    repo, pr_number, pr["base"]["ref"], extra_context=extra_context
+                    repo, pr_number, pr["base"]["ref"], extra_context=extra_context,
+                    has_learnings=bool(learnings),
                 )
                 actions = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
@@ -226,6 +262,8 @@ class ReviewService:
         kind: str,
         in_reply_to_id: int | None,
         mentions_bot: bool,
+        author_association: str = "NONE",
+        author_login: str = "",
     ) -> None:
         token = await self.get_token(installation_id)
         gh = self.make_client(token)
@@ -253,6 +291,7 @@ class ReviewService:
                 reply_anchor = thread["comments"]["nodes"][0]["databaseId"]
             pr = await gh.get_pr(repo, pr_number)
             repo_config = await self._fetch_repo_config(gh, repo)
+            learnings, pending = await self._load_learnings(gh, repo, repo_config)
             engine = self._engine_for(repo_config)
             if not await self._ensure_engine_available(
                 engine, installation_id, repo, pr_number, "reply"
@@ -266,11 +305,14 @@ class ReviewService:
                 depth=repo_config.limits.clone_depth,
             )
             try:
-                _write_inputs(workspace, pr, [thread] if thread else [])
+                _write_inputs(
+                    workspace, pr, [thread] if thread else [], learnings=learnings
+                )
                 prompt = build_discussion_prompt(
                     question=body,
                     kind=kind,
                     thread_context=json.dumps(thread, indent=2) if thread else "",
+                    has_learnings=bool(learnings),
                 )
                 reply = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
@@ -463,7 +505,8 @@ class ReviewService:
 
 
 def _write_inputs(
-    workspace: Path, pr: dict[str, Any], threads: list[dict[str, Any]]
+    workspace: Path, pr: dict[str, Any], threads: list[dict[str, Any]],
+    learnings: list[Learning] | None = None,
 ) -> None:
     input_dir = workspace / INPUT_DIR
     input_dir.mkdir(exist_ok=True)
@@ -476,6 +519,8 @@ def _write_inputs(
         "head_sha": pr["head"]["sha"],
     }, indent=2))
     (input_dir / "threads.json").write_text(json.dumps(threads, indent=2))
+    if learnings:
+        (input_dir / "learnings.jsonl").write_text(to_jsonl(learnings))
 
 
 def _find_thread(
@@ -568,6 +613,7 @@ def build_service(settings: Settings, bot_slug: str) -> ReviewService:
         prepare=prepare_workspace,
         cleanup=remove_workspace,
         resolve_engine=lambda name: RemoteEngine(name, settings.agent_url, settings.agent_token),
+        pending_store=PendingStore(settings.data_root),
     )
 
 
@@ -595,6 +641,7 @@ async def run_discussion_job(
     settings: Settings, bot_slug: str, *, repo: str, pr_number: int,
     installation_id: int, comment_id: int, body: str, kind: str,
     in_reply_to_id: int | None, mentions_bot: bool,
+    author_association: str = "NONE", author_login: str = "",
 ) -> None:
     service = build_service(settings, bot_slug)
     await asyncio.to_thread(sweep_stale, settings.workspace_root)
@@ -603,6 +650,7 @@ async def run_discussion_job(
             repo=repo, pr_number=pr_number, installation_id=installation_id,
             comment_id=comment_id, body=body, kind=kind,
             in_reply_to_id=in_reply_to_id, mentions_bot=mentions_bot,
+            author_association=author_association, author_login=author_login,
         )
     except asyncio.CancelledError:
         await _post_cancelled_comment(service, repo, pr_number, installation_id)
