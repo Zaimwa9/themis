@@ -90,6 +90,7 @@ transient throttling.
 | `src/themis/engines/glm.py`, `qwen.py` | New. Declarative leaf classes per the table above, with quota-marker rationale comments. |
 | `src/themis/engines/__init__.py` | `ENGINE_NAMES = ("codex", "claude", "glm", "qwen")`; `resolve()` branches. |
 | `src/themis/service.py` | `DEFAULT_MODELS` + `_ENGINE_AUTH_HINTS` entries for glm/qwen. |
+| `src/themis/security.py` | `GLM_API_KEY`, `QWEN_API_KEY` join `_SECRET_ENV_VARS` so provider keys are outbound-redacted like the Claude token. |
 | `docker-compose.yml` | Agent service: `GLM_API_KEY: ${GLM_API_KEY:-}`, `QWEN_API_KEY: ${QWEN_API_KEY:-}`. |
 | Docs | README (prereqs, Engines, repo-config table, troubleshooting), `docs/configuration.md`, `docs/security.md` (allowlist description), `examples/themis/config.yaml`. |
 
