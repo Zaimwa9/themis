@@ -172,21 +172,22 @@ def _apply_supersedes(entries: list[Learning]) -> list[Learning]:
 def effective_set(repo_entries: list[Learning], pending: list[Learning]) -> list[Learning]:
     """What reviews see: repo + pending, superseded removed, size-capped.
 
-    The cap drops oldest-first (created_at, then original order) and logs the
-    count — silent truncation would read as full coverage."""
+    The cap drops oldest-first (created_at, then original position) and logs
+    the count — silent truncation would read as full coverage."""
     merged = _apply_supersedes(_dedupe_by_id(repo_entries, pending))
-    if len(merged) > MAX_ENTRIES:
-        keep = sorted(
-            sorted(merged, key=lambda e: e.created_at, reverse=True)[:MAX_ENTRIES],
-            key=merged.index,
-        )
-        logger.warning("themis_learnings_capped dropped=%d reason=entries", len(merged) - MAX_ENTRIES)
-        merged = keep
-    while merged and len(to_jsonl(merged).encode()) > MAX_TOTAL_BYTES:
-        oldest = min(merged, key=lambda e: (e.created_at, merged.index(e)))
-        merged.remove(oldest)
-        logger.warning("themis_learnings_capped dropped=1 reason=bytes id=%s", oldest.id)
-    return merged
+    position = {entry.id: index for index, entry in enumerate(merged)}
+    by_age = sorted(merged, key=lambda e: (e.created_at, position[e.id]))
+    dropped = 0
+    while len(by_age) > MAX_ENTRIES:
+        by_age.pop(0)
+        dropped += 1
+    while by_age and len(to_jsonl(by_age).encode()) > MAX_TOTAL_BYTES:
+        by_age.pop(0)
+        dropped += 1
+    if dropped:
+        logger.warning("themis_learnings_capped dropped=%d", dropped)
+    kept = {entry.id for entry in by_age}
+    return [entry for entry in merged if entry.id in kept]
 
 
 def prune_merged(pending: list[Learning], repo_entries: list[Learning]) -> list[Learning]:

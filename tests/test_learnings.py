@@ -186,3 +186,14 @@ def test_compose_digest__merges_and_applies_supersedes():
 def test_compose_digest__no_repo_file__pending_only():
     entries = parse_jsonl(compose_digest(None, [_entry()]))
     assert [e.id for e in entries] == ["lrn-aaaaaaaa"]
+
+
+def test_effective_set__equal_timestamps__earliest_positions_dropped_first():
+    entries = [
+        _entry(id=f"lrn-{i:08d}", text=f"rule {i}", created_at="2026-01-01T00:00:00+00:00")
+        for i in range(201)
+    ]
+
+    merged = effective_set(entries, [])
+
+    assert [e.id for e in merged] == [f"lrn-{i:08d}" for i in range(1, 201)]
