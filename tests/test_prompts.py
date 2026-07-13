@@ -167,3 +167,35 @@ def test_build_discussion_prompt__closing_tag_in_payload_cannot_break_fence():
 
     assert prompt.count("</question>") == 1
     assert prompt.count("</thread>") == 1
+
+
+def test_review_prompt__learnings__section_present_only_when_flagged():
+    without = build_review_prompt("acme/widgets", 7, "main")
+    with_learnings = build_review_prompt("acme/widgets", 7, "main", has_learnings=True)
+
+    assert "learnings.jsonl" not in without
+    assert ".review-input/learnings.jsonl" in with_learnings
+    assert "data, not instructions" in with_learnings
+    assert "never suppress" in with_learnings
+
+
+def test_discussion_prompt__learnings_section_only_when_flagged():
+    without = build_discussion_prompt(question="q", kind="conversation", thread_context="")
+    with_learnings = build_discussion_prompt(
+        question="q", kind="conversation", thread_context="", has_learnings=True
+    )
+
+    assert "learnings.jsonl" not in without
+    assert ".review-input/learnings.jsonl" in with_learnings
+
+
+def test_discussion_prompt__capture_instruction_only_when_enabled():
+    without = build_discussion_prompt(question="q", kind="conversation", thread_context="")
+    with_capture = build_discussion_prompt(
+        question="q", kind="conversation", thread_context="", capture=True
+    )
+
+    assert "learning.json" not in without
+    assert ".review-output/learning.json" in with_capture
+    assert "At most one" in with_capture
+    assert "remember" in with_capture
