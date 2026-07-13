@@ -401,6 +401,8 @@ def test_parse_learning__minimal__defaults(tmp_path):
     {"text": "ok", "paths": ["../up.py"]},
     {"text": "ok", "supersedes": "not-an-id"},
     {"text": "ok", "confidence": "certain"},
+    {"text": "ok", "paths": [123]},
+    {"text": "ok", "supersedes": 123},
 ])
 def test_parse_learning__invalid__raises(tmp_path, payload):
     _write_learning(tmp_path, payload)
