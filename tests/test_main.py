@@ -69,3 +69,19 @@ def test_main_fails_fast_when_settings_missing(monkeypatch):
 
     with pytest.raises(SettingsError):
         main_module.main()
+
+
+def test_cli_dispatches_init_without_loading_controller_settings(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(
+        main_module,
+        "run_bootstrap",
+        lambda options: captured.update(repo=options.repo, output=options.output),
+    )
+
+    main_module.cli([
+        "init", "--repo", "acme/widgets", "--public-url", "https://themis.example.com",
+        "--output", str(tmp_path), "--no-browser",
+    ])
+
+    assert captured == {"repo": "acme/widgets", "output": tmp_path.resolve()}

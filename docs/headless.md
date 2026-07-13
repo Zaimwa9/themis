@@ -6,8 +6,8 @@ routes, so the full review and discussion feature set works without
 Themis's own `/webhook` route.
 
 The GitHub App still has to exist and be installed on the target repos
-(create it per the README's Quickstart step 1). Themis still talks outbound
-to GitHub itself: cloning the PR, posting comments and reviews, reading
+(create it with [`bootstrap.md`](bootstrap.md) or its manual fallback). Themis
+still talks outbound to GitHub itself: cloning the PR, posting comments and reviews, reading
 `.themis/config.yaml`. What headless mode removes is Themis's *inbound*
 webhook route; your existing handler owns receiving and verifying GitHub's
 deliveries, and calls these two routes instead.
