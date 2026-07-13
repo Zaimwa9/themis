@@ -121,8 +121,13 @@ just a discussion comment.
      more than one digest PR per repo.
 - **Merge reconciliation, no webhook:** whenever the effective set is
   loaded, pending entries whose `id` already appears in the repo file are
-  pruned from the buffer (they merged). Entries edited or deleted by humans
-  in the digest PR win automatically because the repo file is the read truth.
+  pruned from the buffer (they merged). A flush also records a `flushed`
+  marker (the flushed ids + the digest PR number) next to the pending
+  buffer. At read time, if that PR has merged, flushed ids still missing
+  from the repo file were deleted by a human before merging — they're
+  dropped from the buffer too, so deletions win even though they never
+  reach the repo file. Closed-without-merging clears the marker and leaves
+  the entries pending; an open PR leaves the marker and buffer untouched.
 - A digest PR closed without merging leaves entries pending; the next
   threshold crossing re-flushes them. (Persistent rejection is handled by
   the human deleting lines in the digest PR or disabling the feature.)

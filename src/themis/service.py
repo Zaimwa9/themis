@@ -179,6 +179,29 @@ class ReviewService:
                 "themis_learnings_store_failed repo=%s error=%s", repo, error
             )
             pending = []
+        try:
+            flushed = await self.pending_store.load_flushed(repo)
+            if flushed is not None:
+                pr = await gh.get_pr(repo, flushed["pr"])
+                if pr.get("merged"):
+                    repo_ids = {e.id for e in repo_entries}
+                    zombies = {i for i in flushed["ids"] if i not in repo_ids}
+                    if zombies:
+                        await self.pending_store.discard(repo, zombies)
+                        pending = [p for p in pending if p.id not in zombies]
+                        logger.info(
+                            "themis_learnings_rejected_pruned repo=%s count=%d",
+                            repo, len(zombies),
+                        )
+                    await self.pending_store.clear_flushed(repo)
+                elif pr.get("state") == "closed":
+                    # Closed without merging: entries stay pending and re-flush
+                    # at the next threshold crossing.
+                    await self.pending_store.clear_flushed(repo)
+        except (httpx.HTTPError, OSError) as error:
+            logger.warning(
+                "themis_learnings_flushed_check_failed repo=%s error=%s", repo, error
+            )
         return effective_set(repo_entries, pending), pending
 
     async def _capture_learning(
@@ -224,6 +247,9 @@ class ReviewService:
         )
         assert self.pending_store is not None  # gated by caller
         try:
+            # Persists even if the reply post below fails, so a learning can
+            # occasionally land without its 🧠 footer — the digest PR still
+            # surfaces it.
             await self.pending_store.append(repo, learning)
         except OSError as error:
             logger.warning(
@@ -233,16 +259,18 @@ class ReviewService:
         logger.info("themis_learning_captured repo=%s id=%s", repo, learning.id)
         return learning
 
-    async def _flush_digest(self, gh: Any, repo: str) -> None:
+    async def _flush_digest(self, gh: Any, repo: str, threshold: int) -> None:
         """Land pending learnings as one digest PR; best-effort.
 
         The branch is force-rebuilt from the default head so the PR diff is
         always exactly the learnings file. Failures leave the buffer intact
-        and never fail the job that triggered the flush."""
+        and never fail the job that triggered the flush. The threshold check
+        lives here (not in the caller) so an I/O error while loading the
+        pending count can never escape unguarded."""
         assert self.pending_store is not None
         try:
             pending = await self.pending_store.load(repo)
-            if not pending:
+            if len(pending) < threshold:
                 return
             default_branch = await gh.get_default_branch(repo)
             base_sha = await gh.get_branch_sha(repo, default_branch)
@@ -254,11 +282,15 @@ class ReviewService:
                 repo, LEARNINGS_REPO_PATH, content=content,
                 message=DIGEST_PR_TITLE, branch=DIGEST_BRANCH, sha=file_sha,
             )
-            if await gh.find_open_pr(repo, DIGEST_BRANCH) is None:
-                await gh.create_pr(
+            pr_number = await gh.find_open_pr(repo, DIGEST_BRANCH)
+            if pr_number is None:
+                pr_number = await gh.create_pr(
                     repo, title=DIGEST_PR_TITLE, body=DIGEST_PR_BODY,
                     head=DIGEST_BRANCH, base=default_branch,
                 )
+            await self.pending_store.record_flushed(
+                repo, [e.id for e in pending], pr_number
+            )
             logger.info("themis_digest_flushed repo=%s count=%d", repo, len(pending))
         except (httpx.HTTPError, GitHubGraphQLError, OSError) as error:
             logger.warning("themis_digest_flush_failed repo=%s error=%s", repo, error)
@@ -452,9 +484,9 @@ class ReviewService:
                     else:
                         await post_gh.post_issue_comment(repo, pr_number, reply)
                     if captured is not None:
-                        pending_now = await self.pending_store.load(repo)
-                        if len(pending_now) >= repo_config.learnings.digest_threshold:
-                            await self._flush_digest(post_gh, repo)
+                        await self._flush_digest(
+                            post_gh, repo, repo_config.learnings.digest_threshold
+                        )
             finally:
                 self.cleanup(workspace)
 

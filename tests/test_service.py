@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from themis.config import Settings
+from themis.config import Settings, parse_repo_config
 from themis.engines import EngineError, EngineQuotaError
 from themis.github.client import GitHubGraphQLError
 from themis.learnings import Learning, PendingStore, to_jsonl
@@ -1255,6 +1255,9 @@ async def test_review__pending_store_io_error__review_proceeds(service, gh):
         async def replace(self, repo, entries):
             raise OSError("disk full")
 
+        async def load_flushed(self, repo):
+            raise OSError("disk full")
+
     service.pending_store = BrokenStore()
 
     await service.review(REPO, 7, 42, auto=True)
@@ -1392,6 +1395,7 @@ def _gh_for_digest(gh):
     gh.get_branch_sha.return_value = "base-sha"
     gh.get_file_sha.return_value = None
     gh.find_open_pr.return_value = None
+    gh.create_pr.return_value = 99
     return gh
 
 
@@ -1423,6 +1427,9 @@ async def test_discuss__threshold_reached__digest_pr_opened(service, gh, tmp_pat
     assert "The tenth rule." in put_kwargs["content"]
     gh.create_pr.assert_awaited_once()
     assert gh.create_pr.await_args.kwargs["title"] == DIGEST_PR_TITLE
+    flushed = await store.load_flushed(REPO)
+    assert flushed["pr"] == 99
+    assert len(flushed["ids"]) == 10
 
 
 async def test_discuss__below_threshold__no_digest(service, gh, tmp_path):
@@ -1457,6 +1464,8 @@ async def test_discuss__digest_pr_already_open__updated_not_duplicated(
 
     gh.put_file.assert_awaited_once()
     gh.create_pr.assert_not_awaited()
+    flushed = await store.load_flushed(REPO)
+    assert flushed["pr"] == 12
 
 
 async def test_discuss__digest_flush_fails__reply_already_posted(
@@ -1478,3 +1487,121 @@ async def test_discuss__digest_flush_fails__reply_already_posted(
     gh.post_issue_comment.assert_awaited_once()
     assert "themis_digest_flush_failed" in caplog.text
     assert len(await store.load(REPO)) == 10  # buffer intact for retry
+
+
+async def test_flush_digest__below_threshold__no_op(service, gh, tmp_path):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    await store.append(REPO, _entry_for_service(0))
+    _gh_for_digest(gh)
+
+    await service._flush_digest(gh, REPO, threshold=5)
+
+    gh.upsert_branch.assert_not_awaited()
+    gh.put_file.assert_not_awaited()
+    gh.create_pr.assert_not_awaited()
+    assert await store.load_flushed(REPO) is None
+
+
+async def test_discuss__flush_load_oserror__does_not_propagate(service, gh, tmp_path):
+    """The old bug: an unguarded pending-count load between reply-post and
+    flush could raise OSError after the reply already posted. The threshold
+    load now lives inside _flush_digest's guarded try, so it must never
+    escape discuss()."""
+    inner = PendingStore(tmp_path / "data")
+
+    class FlakyStore:
+        async def load(self, repo):
+            raise OSError("disk full")
+
+        async def append(self, repo, learning):
+            await inner.append(repo, learning)
+
+        async def replace(self, repo, entries):
+            await inner.replace(repo, entries)
+
+        async def load_flushed(self, repo):
+            return None
+
+        async def record_flushed(self, repo, ids, pr_number):
+            pass
+
+        async def clear_flushed(self, repo):
+            pass
+
+        async def discard(self, repo, ids):
+            pass
+
+    service.pending_store = FlakyStore()
+    service.resolve_engine = _resolver(_learning_reply_agent(
+        {"text": "The rule.", "confidence": "high"}
+    ))
+
+    await service.discuss(**_discuss_kwargs())
+
+    gh.post_issue_comment.assert_awaited_once()
+    posted = gh.post_issue_comment.await_args.args[2]
+    assert posted.endswith(LEARNING_FOOTER)
+
+
+async def test_load_learnings__flushed_pr_merged__zombie_ids_dropped(
+    service, gh, tmp_path, caplog
+):
+    caplog.set_level("INFO")
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    kept = _entry_for_service(0)
+    zombie = _entry_for_service(1)
+    await store.append(REPO, kept)
+    await store.append(REPO, zombie)
+    await store.record_flushed(REPO, [kept.id, zombie.id], 55)
+    # Human deleted the zombie's line before merging the digest PR.
+    gh.get_file_text.side_effect = _config_and_learnings(learnings_text=to_jsonl([kept]))
+    gh.get_pr.return_value = {"number": 55, "state": "closed", "merged": True}
+
+    repo_config = parse_repo_config(None)
+    effective, pending = await service._load_learnings(gh, REPO, repo_config)
+
+    assert zombie.id not in {e.id for e in effective}
+    assert zombie.id not in {p.id for p in pending}
+    assert kept.id in {e.id for e in effective}
+    assert await store.load_flushed(REPO) is None
+    assert zombie.id not in {e.id for e in await store.load(REPO)}
+    assert "themis_learnings_rejected_pruned" in caplog.text
+
+
+async def test_load_learnings__flushed_pr_closed_unmerged__clears_marker_keeps_pending(
+    service, gh, tmp_path
+):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    entry = _entry_for_service(0)
+    await store.append(REPO, entry)
+    await store.record_flushed(REPO, [entry.id], 55)
+    gh.get_file_text.side_effect = _config_and_learnings()
+    gh.get_pr.return_value = {"number": 55, "state": "closed", "merged": False}
+
+    repo_config = parse_repo_config(None)
+    effective, pending = await service._load_learnings(gh, REPO, repo_config)
+
+    assert entry.id in {p.id for p in pending}
+    assert entry.id in {e.id for e in effective}
+    assert await store.load_flushed(REPO) is None
+
+
+async def test_load_learnings__flushed_pr_open__marker_and_pending_untouched(
+    service, gh, tmp_path
+):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    entry = _entry_for_service(0)
+    await store.append(REPO, entry)
+    await store.record_flushed(REPO, [entry.id], 55)
+    gh.get_file_text.side_effect = _config_and_learnings()
+    gh.get_pr.return_value = {"number": 55, "state": "open", "merged": False}
+
+    repo_config = parse_repo_config(None)
+    effective, pending = await service._load_learnings(gh, REPO, repo_config)
+
+    assert entry.id in {p.id for p in pending}
+    assert await store.load_flushed(REPO) == {"ids": [entry.id], "pr": 55}
