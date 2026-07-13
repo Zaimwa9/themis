@@ -8,10 +8,12 @@ import httpx
 import pytest
 
 from themis.config import Settings
-from themis.engines import EngineError, EngineQuotaError
+from themis.engines import ENGINE_NAMES, EngineError, EngineQuotaError
 from themis.github.client import GitHubGraphQLError
 from themis.service import (
+    DEFAULT_MODELS,
     ReviewService,
+    _ENGINE_AUTH_HINTS,
     api_changed_paths,
     git_head_sha,
     run_review_job,
@@ -1141,3 +1143,10 @@ async def test_discuss__engine_unavailable__courtesy_comment_no_clone(service, g
     body = gh.post_issue_comment.await_args.args[2]
     assert "credentials" in body
     gh.post_reply.assert_not_awaited()
+
+
+def test_engine_maps_cover_all_engine_names():
+    # A registered engine without a default model or auth hint is a KeyError
+    # at review time; keep the three maps in lockstep.
+    assert set(DEFAULT_MODELS) == set(ENGINE_NAMES)
+    assert set(_ENGINE_AUTH_HINTS) == set(ENGINE_NAMES)
