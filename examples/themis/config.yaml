@@ -1,11 +1,11 @@
 # Themis per-repo config. Every key is optional; these are the defaults.
 # Drop this directory into your repo root as `.themis/`.
-# engine: codex            # codex | claude; unset = the instance's THEMIS_ENGINE
+# engine: codex            # codex | claude | glm | qwen; unset = the instance's THEMIS_ENGINE
 # web_access: false        # toggles engine web tooling; Claude Bash egress
                            # requires deployment-level controls (see docs/security.md)
 model:
-  # name: gpt-5.4          # unset = engine default (codex: gpt-5.4, claude: claude-opus-4-6[1m])
-  reasoning_effort: high   # low | medium | high (codex only; the claude engine ignores it)
+  # name: gpt-5.4          # unset = engine default (codex: gpt-5.4, claude: claude-opus-4-6[1m], glm: glm-5.2, qwen: qwen3.7-plus)
+  reasoning_effort: high   # low | medium | high (codex only; claude/glm/qwen ignore it)
 limits:
   timeout_seconds: 1200    # per agent attempt
   max_attempts: 2
