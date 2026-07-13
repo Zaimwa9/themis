@@ -307,6 +307,7 @@ failing silently. The claude, glm, and qwen paths need no volume: key in
 - [`docs/doctrine.md`](docs/doctrine.md): the review doctrine, how it works and how to write a good one.
 - [`docs/configuration.md`](docs/configuration.md): the full env and `.themis/config.yaml` reference.
 - [`docs/security.md`](docs/security.md): the trust model and bot-side guardrails.
+- [`docs/contributing-engines.md`](docs/contributing-engines.md): adding a new engine / model provider.
 
 ## Developing
 
