@@ -1,5 +1,6 @@
 """GitHub REST + GraphQL client for themis posting and reads."""
 
+import base64
 from typing import Any
 
 import httpx
@@ -219,3 +220,76 @@ class GitHubClient:
             return None
         response.raise_for_status()
         return response.text
+
+    async def get_default_branch(self, repo: str) -> str:
+        response = await self._client.get(f"{self._api_url}/repos/{repo}")
+        response.raise_for_status()
+        return str(response.json()["default_branch"])
+
+    async def get_branch_sha(self, repo: str, branch: str) -> str:
+        response = await self._client.get(
+            f"{self._api_url}/repos/{repo}/git/ref/heads/{branch}"
+        )
+        response.raise_for_status()
+        return str(response.json()["object"]["sha"])
+
+    async def upsert_branch(self, repo: str, branch: str, sha: str) -> None:
+        """Force-move branch to sha, creating it when absent.
+
+        Force on purpose: the digest branch is bot-owned and always rebuilt
+        from the default branch head; stale digest commits are disposable."""
+        response = await self._client.patch(
+            f"{self._api_url}/repos/{repo}/git/refs/heads/{branch}",
+            json={"sha": sha, "force": True},
+        )
+        if response.status_code in (404, 422):
+            response = await self._client.post(
+                f"{self._api_url}/repos/{repo}/git/refs",
+                json={"ref": f"refs/heads/{branch}", "sha": sha},
+            )
+        response.raise_for_status()
+
+    async def get_file_sha(self, repo: str, path: str, ref: str) -> str | None:
+        response = await self._client.get(
+            f"{self._api_url}/repos/{repo}/contents/{path}", params={"ref": ref}
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return str(response.json()["sha"])
+
+    async def put_file(
+        self, repo: str, path: str, *, content: str, message: str,
+        branch: str, sha: str | None = None,
+    ) -> None:
+        body: dict[str, Any] = {
+            "message": message,
+            "content": base64.b64encode(content.encode()).decode(),
+            "branch": branch,
+        }
+        if sha is not None:
+            body["sha"] = sha
+        response = await self._client.put(
+            f"{self._api_url}/repos/{repo}/contents/{path}", json=body
+        )
+        response.raise_for_status()
+
+    async def find_open_pr(self, repo: str, head_branch: str) -> int | None:
+        owner = repo.split("/", 1)[0]
+        response = await self._client.get(
+            f"{self._api_url}/repos/{repo}/pulls",
+            params={"head": f"{owner}:{head_branch}", "state": "open"},
+        )
+        response.raise_for_status()
+        pulls = response.json()
+        return int(pulls[0]["number"]) if pulls else None
+
+    async def create_pr(
+        self, repo: str, *, title: str, body: str, head: str, base: str
+    ) -> int:
+        response = await self._client.post(
+            f"{self._api_url}/repos/{repo}/pulls",
+            json={"title": title, "body": body, "head": head, "base": base},
+        )
+        response.raise_for_status()
+        return int(response.json()["number"])

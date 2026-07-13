@@ -1,3 +1,4 @@
+import base64
 import json
 
 import httpx
@@ -364,3 +365,110 @@ async def test_get_file_text_server_error_raises():
 
     with pytest.raises(httpx.HTTPStatusError):
         await _client(handler).get_file_text("acme/widgets", ".themis/config.yaml")
+
+
+async def test_get_default_branch__returns_field():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/acme/widgets"
+        return httpx.Response(200, json={"default_branch": "main"})
+
+    assert await _client(handler).get_default_branch("acme/widgets") == "main"
+
+
+async def test_get_branch_sha__returns_object_sha():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/acme/widgets/git/ref/heads/main"
+        return httpx.Response(200, json={"object": {"sha": "abc123"}})
+
+    assert await _client(handler).get_branch_sha("acme/widgets", "main") == "abc123"
+
+
+async def test_upsert_branch__exists__force_updates():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={})
+
+    await _client(handler).upsert_branch("acme/widgets", "themis/learnings", "abc123")
+
+    assert captured["method"] == "PATCH"
+    assert captured["path"] == "/repos/acme/widgets/git/refs/heads/themis/learnings"
+    assert captured["json"] == {"sha": "abc123", "force": True}
+
+
+async def test_upsert_branch__missing__creates_ref():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "PATCH":
+            return httpx.Response(422, json={"message": "Reference does not exist"})
+        assert json.loads(request.content) == {
+            "ref": "refs/heads/themis/learnings", "sha": "abc123",
+        }
+        return httpx.Response(201, json={})
+
+    await _client(handler).upsert_branch("acme/widgets", "themis/learnings", "abc123")
+
+    assert calls[-1] == ("POST", "/repos/acme/widgets/git/refs")
+
+
+async def test_get_file_sha__missing__none():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["ref"] == "themis/learnings"
+        return httpx.Response(404, json={})
+
+    sha = await _client(handler).get_file_sha(
+        "acme/widgets", ".themis/learnings.jsonl", ref="themis/learnings"
+    )
+    assert sha is None
+
+
+async def test_put_file__encodes_content_and_sha():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={})
+
+    await _client(handler).put_file(
+        "acme/widgets", ".themis/learnings.jsonl",
+        content='{"id": "lrn-aaaaaaaa"}\n', message="chore: sync review learnings",
+        branch="themis/learnings", sha="f00",
+    )
+
+    assert captured["path"] == "/repos/acme/widgets/contents/.themis/learnings.jsonl"
+    body = captured["json"]
+    assert base64.b64decode(body["content"]).decode() == '{"id": "lrn-aaaaaaaa"}\n'
+    assert body["branch"] == "themis/learnings"
+    assert body["sha"] == "f00"
+
+
+async def test_find_open_pr__present_and_absent():
+    def some(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["head"] == "acme:themis/learnings"
+        assert request.url.params["state"] == "open"
+        return httpx.Response(200, json=[{"number": 12}])
+
+    def none(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    assert await _client(some).find_open_pr("acme/widgets", "themis/learnings") == 12
+    assert await _client(none).find_open_pr("acme/widgets", "themis/learnings") is None
+
+
+async def test_create_pr__returns_number():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["head"] == "themis/learnings" and body["base"] == "main"
+        return httpx.Response(201, json={"number": 13})
+
+    number = await _client(handler).create_pr(
+        "acme/widgets", title="chore: sync review learnings", body="digest",
+        head="themis/learnings", base="main",
+    )
+    assert number == 13
