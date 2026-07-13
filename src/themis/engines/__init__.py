@@ -5,9 +5,8 @@ from themis.engines.base import Engine, EngineError, EngineQuotaError, EngineUna
 from themis.engines.claude import ClaudeEngine
 from themis.engines.codex import CodexEngine
 from themis.engines.glm import GlmEngine
-from themis.engines.qwen import QwenEngine
 
-ENGINE_NAMES = ("codex", "claude", "glm", "qwen")
+ENGINE_NAMES = ("codex", "claude", "glm")
 
 __all__ = [
     "ENGINE_NAMES", "Engine", "EngineError", "EngineQuotaError",
@@ -22,6 +21,4 @@ def resolve(name: str, *, codex_sandbox: str = "workspace-write") -> Engine:
         return ClaudeEngine()
     if name == "glm":
         return GlmEngine()
-    if name == "qwen":
-        return QwenEngine()
     raise ValueError(f"unknown engine {name!r}")

@@ -4,11 +4,10 @@ from themis.engines import ENGINE_NAMES, resolve
 from themis.engines.claude import ClaudeEngine
 from themis.engines.codex import CodexEngine
 from themis.engines.glm import GlmEngine
-from themis.engines.qwen import QwenEngine
 
 
 def test_engine_names():
-    assert ENGINE_NAMES == ("codex", "claude", "glm", "qwen")
+    assert ENGINE_NAMES == ("codex", "claude", "glm")
 
 
 def test_resolve_codex_carries_sandbox():
@@ -23,10 +22,6 @@ def test_resolve_claude():
 
 def test_resolve_glm():
     assert isinstance(resolve("glm"), GlmEngine)
-
-
-def test_resolve_qwen():
-    assert isinstance(resolve("qwen"), QwenEngine)
 
 
 def test_resolve_unknown_raises():

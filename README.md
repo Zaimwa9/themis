@@ -13,7 +13,7 @@ doctrine from your own repository, under `.themis/`.
 A GitHub App webhook delivers PR and comment events to Themis. Each event
 becomes a job on an in-memory queue, processed one at a time. The worker
 shallow-clones the PR head, runs the configured engine (`codex exec`, or
-`claude -p` — natively or in API mode for GLM/Qwen) against your repo's review doctrine, and posts findings and a
+`claude -p` — natively or in API mode for GLM) against your repo's review doctrine, and posts findings and a
 summary back to GitHub as the App. One image runs as an isolated controller
 and agent; there is still no database, Redis, or message broker.
 
@@ -21,7 +21,7 @@ and agent; there is still no database, Redis, or message broker.
 
 - Docker with the Compose plugin (Docker Desktop, or Docker Engine + `docker compose`)
 - An OpenAI account with Codex access, or a Claude Max subscription (pick your engine): the matching CLI installed (`npm install -g @openai/codex` or `npm install -g @anthropic-ai/claude-code`, Node 22+) and `codex login` or `claude setup-token` working on your machine. Claude Pro is not supported because Themis defaults to Opus.
-  GLM and Qwen engines need no local CLI login: just a `GLM_API_KEY` (Z.ai GLM Coding Plan) or `QWEN_API_KEY` (Alibaba Model Studio Qwen Coding Plan, international) in `.env`.
+  The glm engine needs no local CLI login: just a `GLM_API_KEY` (Z.ai GLM Coding Plan) in `.env`.
 - A GitHub account that can create a GitHub App (personal account or an org)
 
 No clone or build needed: Themis ships as a prebuilt image,
@@ -62,9 +62,9 @@ file), and **Install App** on the repositories you want reviewed.
 
 Using the claude engine instead? Skip this step and the auth.json seeding in
 step 4: run `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` plus
-`THEMIS_ENGINE=claude` in `.env` during step 3. Using glm or qwen? Skip this
-step and step 4 too, no `claude setup-token` needed: set `GLM_API_KEY` or
-`QWEN_API_KEY` plus `THEMIS_ENGINE=glm|qwen` in `.env` during step 3. Details
+`THEMIS_ENGINE=claude` in `.env` during step 3. Using glm? Skip this
+step and step 4 too, no `claude setup-token` needed: set `GLM_API_KEY`
+plus `THEMIS_ENGINE=glm` in `.env` during step 3. Details
 in [Engines](#engines).
 
 Install the CLI if you haven't already (Node 22+):
@@ -116,7 +116,6 @@ services:
       THEMIS_WORKSPACE_ROOT: /tmp/themis
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       GLM_API_KEY: ${GLM_API_KEY:-}
-      QWEN_API_KEY: ${QWEN_API_KEY:-}
     volumes:
       - workspaces:/tmp/themis
       - codex-home:/data/codex
@@ -251,9 +250,9 @@ How the doctrine is consumed and how to write one that works:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `engine` | instance `THEMIS_ENGINE` | `codex`, `claude`, `glm`, or `qwen`, overrides the instance's default engine for this repo |
-| `web_access` | `false` | toggles engine web tooling (`WebFetch`/`WebSearch`); glm and qwen behave like claude here, and Claude's Bash may still egress unless the deployment enforces an external network policy — this caveat applies to all claude-harness engines |
-| `model.name` | engine default | engine default: `gpt-5.4` (codex), `claude-opus-4-6[1m]` (claude), `glm-5.2` (glm), `qwen3.7-plus` (qwen) |
+| `engine` | instance `THEMIS_ENGINE` | `codex`, `claude`, or `glm`, overrides the instance's default engine for this repo |
+| `web_access` | `false` | toggles engine web tooling (`WebFetch`/`WebSearch`); glm behaves like claude here, and Claude's Bash may still egress unless the deployment enforces an external network policy — this caveat applies to all claude-harness engines |
+| `model.name` | engine default | engine default: `gpt-5.4` (codex), `claude-opus-4-6[1m]` (claude), `glm-5.2` (glm) |
 | `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` (codex only) |
 | `limits.timeout_seconds` | `1200` | per agent attempt |
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
@@ -269,19 +268,18 @@ answered automatically, no mention needed.
 
 ## Engines
 
-Themis runs reviews through an agent CLI, using your Codex, Claude Max, GLM or Qwen Coding Plan subscription:
+Themis runs reviews through an agent CLI, using your Codex, Claude Max, or GLM Coding Plan subscription:
 
 | Engine | Auth | Setup |
 |---|---|---|
 | `codex` (default) | `auth.json` volume (`CODEX_HOME`) | `codex login` locally (quickstart step 2), copy `auth.json` into the volume (quickstart step 4) |
 | `claude` | one env var | run `claude setup-token` locally, set `CLAUDE_CODE_OAUTH_TOKEN` in `.env` |
 | `glm` | one env var | set `GLM_API_KEY` in `.env` (Z.ai GLM Coding Plan key); reviews run through the claude CLI against Z.ai's Anthropic-compatible endpoint |
-| `qwen` | one env var | set `QWEN_API_KEY` in `.env` (Qwen Coding Plan key, international endpoint); reviews run through the claude CLI against DashScope's Anthropic-compatible endpoint |
 
 Pick the instance default with `THEMIS_ENGINE` in `.env`. A repo can override it
 in `.themis/config.yaml` with `engine:` set to any of them; if that engine
 has no credentials on the instance, Themis posts a comment saying so instead of
-failing silently. The claude, glm, and qwen paths need no volume: key in
+failing silently. The claude and glm paths need no volume: key in
 `.env`, done.
 
 ## Troubleshooting
@@ -293,7 +291,7 @@ failing silently. The claude, glm, and qwen paths need no volume: key in
 | Codex sandbox errors | Set `THEMIS_CODEX_SANDBOX=danger-full-access`; the container is the sandbox boundary on runtimes without Landlock. |
 | PR comment says the usage limit was reached | The subscription of whichever engine ran the job has hit its usage window. Mention the bot again once it resets. |
 | Auth that worked starts failing months later | Re-seed `auth.json` (`codex login` locally, then repeat the seeding step from Quickstart step 4). |
-| Review comment says engine credentials missing | Set `CLAUDE_CODE_OAUTH_TOKEN` (claude), `GLM_API_KEY` (glm), `QWEN_API_KEY` (qwen), or seed the codex auth volume (codex), or change `THEMIS_ENGINE` / the repo's `engine:` key. |
+| Review comment says engine credentials missing | Set `CLAUDE_CODE_OAUTH_TOKEN` (claude), `GLM_API_KEY` (glm), or seed the codex auth volume (codex), or change `THEMIS_ENGINE` / the repo's `engine:` key. |
 | Webhook deliveries show 401 in the App's settings | `THEMIS_GH_WEBHOOK_SECRET` doesn't match the App's webhook secret. |
 | Where are the logs | `docker compose logs -f themis` |
 | A job queued right before a restart never ran | The in-memory queue doesn't survive restarts; mention the bot again to re-trigger. |

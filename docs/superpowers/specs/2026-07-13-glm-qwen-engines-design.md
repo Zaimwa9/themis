@@ -135,3 +135,14 @@ does (`claude -p` has no effort flag).
 Live review round on a known PR with real GLM/Qwen keys to compare finding
 quality against codex/claude baselines and tune quota markers (issues #20/#21
 "Validation").
+
+## Status update (2026-07-13)
+
+qwen dropped post-review: Alibaba's Qwen Coding Plan ToS (and the Token Plan's)
+prohibits unattended/backend use of the plan's API key — "Do not use the
+plan's API key for automated scripts, application backends, or other
+non-interactive scenarios… may result in subscription suspension or API key
+revocation" (https://www.alibabacloud.com/help/en/model-studio/coding-plan).
+Only DashScope's pay-as-you-go tier permits this usage pattern. glm is
+unaffected and stays in this PR. Issue #21 will be redesigned later against
+pay-as-you-go instead of the Coding Plan.

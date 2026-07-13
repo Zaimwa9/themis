@@ -9,7 +9,7 @@ retry semantics. This guide walks through adding one.
 
 **Anthropic-compatible provider (the common case).** If the provider exposes
 an Anthropic-compatible API endpoint that works with the Claude Code CLI —
-as Z.ai (glm) and DashScope (qwen) do — you subclass `AnthropicApiEngine`
+as Z.ai (glm) does — you subclass `AnthropicApiEngine`
 and write ~15 lines. Start from `src/themis/engines/glm.py`.
 
 **New CLI (the rare case).** If the provider ships its own agent CLI, you
@@ -79,6 +79,12 @@ Engines run on untrusted PR content. A hostile PR can steer the agent's
 output and behavior, so the adapter's job is to make sure there is nothing
 interesting to steal and nowhere to send it:
 
+- **Check the ToS first.** Verify the provider's plan terms actually permit
+  unattended, non-interactive backend use before building the engine.
+  Subscription coding plans often forbid it — DashScope's Coding Plan and
+  Token Plan both do, with API key revocation as the stated penalty. When a
+  subscription plan's ToS says no, a pay-as-you-go tier is the usual
+  fallback.
 - **Bake the endpoint.** The base URL is a class constant, never an env var,
   setting, or repo-config key. A controllable base URL redirects the
   provider key to an attacker's host.
@@ -88,7 +94,7 @@ interesting to steal and nowhere to send it:
   guarantees no other engine's credential — and none of Themis's own
   secrets — is visible.
 - **One credential per engine.** Sibling engines must not see yours; write
-  the env-dump test proving it (see `tests/engines/test_qwen.py`).
+  the env-dump test proving it (see `tests/engines/test_glm.py`).
 - **Redact outbound.** `_SECRET_ENV_VARS` (step 3 above), with a test.
 - **Don't weaken the harness.** For claude-harness engines the flag set in
   `build_command` (`--safe-mode`, `--setting-sources ""`, strict empty MCP
@@ -107,9 +113,11 @@ posts "usage limit reached, mention the bot once it resets".
   a comment above the tuple.
 - Transient throttling (429s, "try again later", burst/concurrency limits)
   must **not** match — it has to stay a retryable `EngineError`. Watch for
-  substring traps: qwen's markers are window-qualified precisely because
-  `"allocated quota exceeded"` alone would also catch the retryable
-  concurrency variant.
+  substring traps: DashScope's plan-exhausted family is
+  `"hour/week/month allocated quota exceeded"`, but the same provider's
+  `"concurrency allocated quota exceeded"` is documented as retryable — a
+  marker of bare `"allocated quota exceeded"` would swallow both, so the
+  window word has to be part of the match, not just present nearby.
 - Billing arrears don't match either: they never auto-reset, so the
   "once it resets" comment would mislead.
 - Markers are best-effort until validated live; expect to tune them after a
@@ -132,6 +140,7 @@ the workspace. Cover at least:
 
 ## PR checklist
 
+- [ ] Provider's plan ToS confirmed to permit unattended/backend use
 - [ ] Engine module + tests
 - [ ] Registry, `DEFAULT_MODELS`, `_ENGINE_AUTH_HINTS`, `_SECRET_ENV_VARS`
 - [ ] `docker-compose.yml` + README Quickstart compose sample (agent only) + `.env.example`

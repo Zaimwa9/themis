@@ -42,7 +42,7 @@ def build_command(prompt: str, model: str, web_access: bool) -> list[str]:
 
 
 class ClaudeEngine:
-    """Also the base for API-mode engines (glm, qwen): subclasses override
+    """Also the base for API-mode engines (glm): subclasses override
     the class attributes and _auth_env() to target an Anthropic-compatible
     endpoint while keeping the hardened harness identical."""
 

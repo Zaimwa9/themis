@@ -50,7 +50,6 @@ DEFAULT_MODELS = {
     "codex": "gpt-5.4",
     "claude": "claude-opus-4-6[1m]",
     "glm": "glm-5.2",
-    "qwen": "qwen3.7-plus",
 }
 
 QUOTA_COMMENT = (
@@ -73,7 +72,6 @@ _ENGINE_AUTH_HINTS = {
     "codex": "auth.json in CODEX_HOME",
     "claude": "CLAUDE_CODE_OAUTH_TOKEN",
     "glm": "GLM_API_KEY",
-    "qwen": "QWEN_API_KEY",
 }
 
 # One agent run at a time so reviews never monopolize the shared worker.
