@@ -7,6 +7,7 @@ import logging
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -19,6 +20,7 @@ from themis.config import (
     parse_repo_config,
 )
 from themis.engines import Engine, EngineError, EngineQuotaError, EngineUnavailableError
+from themis.events import TRUSTED_ASSOCIATIONS
 from themis.github.auth import get_installation_token, make_app_jwt
 from themis.github.client import GitHubClient, GitHubGraphQLError
 from themis.learnings import (
@@ -26,6 +28,8 @@ from themis.learnings import (
     Learning,
     PendingStore,
     effective_set,
+    is_duplicate,
+    new_learning,
     parse_jsonl,
     prune_merged,
     to_jsonl,
@@ -35,6 +39,7 @@ from themis.output import (
     OUTPUT_DIR,
     OutputError,
     ReviewActions,
+    parse_learning,
     parse_output,
     parse_reply,
 )
@@ -77,6 +82,10 @@ _ENGINE_AUTH_HINTS = {
     "codex": "auth.json in CODEX_HOME",
     "claude": "CLAUDE_CODE_OAUTH_TOKEN",
 }
+LEARNING_FOOTER = (
+    "\n\n🧠 Learning recorded — lands in `.themis/learnings.jsonl` "
+    "via the next digest PR."
+)
 
 # One agent run at a time so reviews never monopolize the shared worker.
 # Note: this bounds agent runs per worker process only; running several worker
@@ -161,6 +170,58 @@ class ReviewService:
             )
             pending = []
         return effective_set(repo_entries, pending), pending
+
+    async def _capture_learning(
+        self,
+        workspace: Path,
+        repo: str,
+        pr_number: int,
+        author_login: str,
+        effective: list[Learning],
+        pending: list[Learning],
+    ) -> Learning | None:
+        """Gate and persist the agent's learning proposal, if any.
+
+        Every rejection is logged, never raised: a bad proposal must not
+        fail the discussion job whose reply already exists."""
+        try:
+            proposal = parse_learning(workspace)
+        except OutputError as error:
+            logger.warning(
+                "themis_learning_rejected repo=%s reason=invalid error=%s",
+                repo, redact_outbound(str(error))[:200],
+            )
+            return None
+        if proposal is None:
+            return None
+        if proposal["confidence"] != "high":
+            logger.info("themis_learning_rejected repo=%s reason=low-confidence", repo)
+            return None
+        if is_duplicate(proposal["text"], effective):
+            logger.info("themis_learning_rejected repo=%s reason=duplicate", repo)
+            return None
+        supersedes = proposal["supersedes"]
+        if supersedes and any(p.supersedes == supersedes for p in pending):
+            logger.info("themis_learning_rejected repo=%s reason=supersede-race", repo)
+            return None
+        learning = new_learning(
+            text=proposal["text"],
+            paths=tuple(proposal["paths"]),
+            learnt_from=author_login,
+            pr=pr_number,
+            created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            supersedes=supersedes,
+        )
+        assert self.pending_store is not None  # gated by caller
+        try:
+            await self.pending_store.append(repo, learning)
+        except OSError as error:
+            logger.warning(
+                "themis_learning_store_failed repo=%s error=%s", repo, error
+            )
+            return None
+        logger.info("themis_learning_captured repo=%s id=%s", repo, learning.id)
+        return learning
 
     def _engine_for(self, repo_config: RepoConfig) -> Engine:
         return self.resolve_engine(repo_config.engine or self.settings.engine)
@@ -298,6 +359,11 @@ class ReviewService:
             pr = await gh.get_pr(repo, pr_number)
             repo_config = await self._fetch_repo_config(gh, repo)
             learnings, pending = await self._load_learnings(gh, repo, repo_config)
+            capture = (
+                self.pending_store is not None
+                and repo_config.learnings.enabled
+                and author_association in TRUSTED_ASSOCIATIONS
+            )
             engine = self._engine_for(repo_config)
             if not await self._ensure_engine_available(
                 engine, installation_id, repo, pr_number, "reply"
@@ -319,6 +385,7 @@ class ReviewService:
                     kind=kind,
                     thread_context=json.dumps(thread, indent=2) if thread else "",
                     has_learnings=bool(learnings),
+                    capture=capture,
                 )
                 reply = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
@@ -326,7 +393,14 @@ class ReviewService:
                 )
                 if reply is None:
                     return
+                captured = None
+                if capture:
+                    captured = await self._capture_learning(
+                        workspace, repo, pr_number, author_login, learnings, pending
+                    )
                 reply = redact_outbound(reply)
+                if captured is not None:
+                    reply += LEARNING_FOOTER
                 # Codex runs can outlive the 60-min installation token; post with
                 # a fresh one.
                 post_gh = self.make_client(await self.get_token(installation_id))
