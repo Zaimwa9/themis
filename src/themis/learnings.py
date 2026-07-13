@@ -123,6 +123,9 @@ class PendingStore:
     def _path(self, repo: str) -> Path:
         return self._root / repo.replace("/", "__") / "pending.jsonl"
 
+    def _flushed_path(self, repo: str) -> Path:
+        return self._path(repo).parent / "flushed.json"
+
     async def load(self, repo: str) -> list[Learning]:
         async with self._lock:
             return self._read(repo)
@@ -137,6 +140,32 @@ class PendingStore:
         async with self._lock:
             self._write(repo, entries)
 
+    async def discard(self, repo: str, ids: set[str]) -> None:
+        """Drop pending entries by id (e.g. deleted by a human in the digest PR)."""
+        async with self._lock:
+            entries = self._read(repo)
+            remaining = [e for e in entries if e.id not in ids]
+            if len(remaining) != len(entries):
+                self._write(repo, remaining)
+
+    async def record_flushed(self, repo: str, ids: list[str], pr_number: int) -> None:
+        """Remember which pending ids were sent to which digest PR, so the next
+        read can tell deletions (human-edited out in the PR) from still-pending."""
+        async with self._lock:
+            path = self._flushed_path(repo)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps({"ids": ids, "pr": pr_number}))
+            os.replace(tmp, path)
+
+    async def load_flushed(self, repo: str) -> dict | None:
+        async with self._lock:
+            return self._read_flushed(repo)
+
+    async def clear_flushed(self, repo: str) -> None:
+        async with self._lock:
+            self._flushed_path(repo).unlink(missing_ok=True)
+
     def _read(self, repo: str) -> list[Learning]:
         path = self._path(repo)
         if not path.exists():
@@ -150,6 +179,29 @@ class PendingStore:
         tmp.write_text(to_jsonl(entries))
         # Atomic rename: torn writes must not destroy previously persisted learnings.
         os.replace(tmp, path)
+
+    def _read_flushed(self, repo: str) -> dict | None:
+        path = self._flushed_path(repo)
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(errors="replace"))
+        except json.JSONDecodeError:
+            logger.warning("themis_learnings_flushed_invalid repo=%s reason=not-json", repo)
+            return None
+        ids = raw.get("ids") if isinstance(raw, dict) else None
+        pr = raw.get("pr") if isinstance(raw, dict) else None
+        valid = (
+            isinstance(raw, dict)
+            and isinstance(ids, list)
+            and all(isinstance(i, str) for i in ids)
+            and isinstance(pr, int)
+            and not isinstance(pr, bool)
+        )
+        if not valid:
+            logger.warning("themis_learnings_flushed_invalid repo=%s reason=bad-shape", repo)
+            return None
+        return raw
 
 
 def _dedupe_by_id(repo_entries: list[Learning], pending: list[Learning]) -> list[Learning]:

@@ -118,6 +118,84 @@ async def test_pending_store__replace__overwrites(tmp_path):
     assert await store.load("acme/widgets") == []
 
 
+@pytest.mark.asyncio
+async def test_pending_store__discard__removes_matching_ids(tmp_path):
+    store = PendingStore(tmp_path)
+    await store.append("acme/widgets", _entry())
+    await store.append("acme/widgets", _entry(id="lrn-bbbbbbbb", text="two"))
+
+    await store.discard("acme/widgets", {"lrn-aaaaaaaa"})
+
+    assert [e.id for e in await store.load("acme/widgets")] == ["lrn-bbbbbbbb"]
+
+
+@pytest.mark.asyncio
+async def test_pending_store__discard__no_match__noop(tmp_path):
+    store = PendingStore(tmp_path)
+    await store.append("acme/widgets", _entry())
+
+    await store.discard("acme/widgets", {"lrn-zzzzzzzz"})
+
+    assert [e.id for e in await store.load("acme/widgets")] == ["lrn-aaaaaaaa"]
+
+
+@pytest.mark.asyncio
+async def test_pending_store__record_flushed_then_load__roundtrip(tmp_path):
+    store = PendingStore(tmp_path)
+
+    await store.record_flushed("acme/widgets", ["lrn-aaaaaaaa", "lrn-bbbbbbbb"], 42)
+
+    assert await store.load_flushed("acme/widgets") == {
+        "ids": ["lrn-aaaaaaaa", "lrn-bbbbbbbb"], "pr": 42,
+    }
+    on_disk = tmp_path / "learnings" / "acme__widgets" / "flushed.json"
+    assert on_disk.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_store__load_flushed__missing__none(tmp_path):
+    store = PendingStore(tmp_path)
+    assert await store.load_flushed("acme/widgets") is None
+
+
+@pytest.mark.asyncio
+async def test_pending_store__load_flushed__malformed_json__none_and_warns(tmp_path, caplog):
+    store = PendingStore(tmp_path)
+    path = tmp_path / "learnings" / "acme__widgets"
+    path.mkdir(parents=True)
+    (path / "flushed.json").write_text("{not json")
+
+    assert await store.load_flushed("acme/widgets") is None
+    assert "themis_learnings_flushed_invalid" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_pending_store__load_flushed__wrong_shape__none_and_warns(tmp_path, caplog):
+    store = PendingStore(tmp_path)
+    path = tmp_path / "learnings" / "acme__widgets"
+    path.mkdir(parents=True)
+    (path / "flushed.json").write_text(json.dumps({"ids": "not-a-list", "pr": 42}))
+
+    assert await store.load_flushed("acme/widgets") is None
+    assert "themis_learnings_flushed_invalid" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_pending_store__clear_flushed__missing_ok(tmp_path):
+    store = PendingStore(tmp_path)
+    await store.clear_flushed("acme/widgets")  # no raise
+
+
+@pytest.mark.asyncio
+async def test_pending_store__clear_flushed__removes_marker(tmp_path):
+    store = PendingStore(tmp_path)
+    await store.record_flushed("acme/widgets", ["lrn-aaaaaaaa"], 42)
+
+    await store.clear_flushed("acme/widgets")
+
+    assert await store.load_flushed("acme/widgets") is None
+
+
 def test_effective_set__dedupes_by_id_repo_wins():
     repo = [_entry(text="repo version")]
     pending = [_entry(text="pending version"), _entry(id="lrn-bbbbbbbb", text="new")]
