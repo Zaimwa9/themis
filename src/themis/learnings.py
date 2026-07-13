@@ -8,6 +8,7 @@ Everything here is deterministic; the LLM only proposes candidates.
 import asyncio
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -145,4 +146,7 @@ class PendingStore:
     def _write(self, repo: str, entries: list[Learning]) -> None:
         path = self._path(repo)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(to_jsonl(entries))
+        tmp = path.with_suffix(".jsonl.tmp")
+        tmp.write_text(to_jsonl(entries))
+        # Atomic rename: torn writes must not destroy previously persisted learnings.
+        os.replace(tmp, path)

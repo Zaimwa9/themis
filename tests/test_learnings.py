@@ -78,9 +78,6 @@ def test_new_learning__generates_id_and_carries_fields():
     assert learning.pr == 9
 
 
-pytestmark_async = pytest.mark.asyncio  # module already has sync tests; mark per-test
-
-
 @pytest.mark.asyncio
 async def test_pending_store__load_missing_file__empty(tmp_path):
     store = PendingStore(tmp_path)
