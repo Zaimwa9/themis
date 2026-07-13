@@ -62,8 +62,10 @@ file), and **Install App** on the repositories you want reviewed.
 
 Using the claude engine instead? Skip this step and the auth.json seeding in
 step 4: run `claude setup-token` and set `CLAUDE_CODE_OAUTH_TOKEN` plus
-`THEMIS_ENGINE=claude` in `.env` during step 3. Details in
-[Engines](#engines).
+`THEMIS_ENGINE=claude` in `.env` during step 3. Using glm or qwen? Skip this
+step and step 4 too, no `claude setup-token` needed: set `GLM_API_KEY` or
+`QWEN_API_KEY` plus `THEMIS_ENGINE=glm|qwen` in `.env` during step 3. Details
+in [Engines](#engines).
 
 Install the CLI if you haven't already (Node 22+):
 
@@ -113,6 +115,8 @@ services:
       THEMIS_AGENT_TOKEN: ${THEMIS_AGENT_TOKEN}
       THEMIS_WORKSPACE_ROOT: /tmp/themis
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      GLM_API_KEY: ${GLM_API_KEY:-}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
     volumes:
       - workspaces:/tmp/themis
       - codex-home:/data/codex
@@ -248,7 +252,7 @@ How the doctrine is consumed and how to write one that works:
 | Key | Default | Meaning |
 |---|---|---|
 | `engine` | instance `THEMIS_ENGINE` | `codex`, `claude`, `glm`, or `qwen`, overrides the instance's default engine for this repo |
-| `web_access` | `false` | toggles engine web tooling; Claude's Bash may still egress unless the deployment enforces an external network policy |
+| `web_access` | `false` | toggles engine web tooling (`WebFetch`/`WebSearch`); glm and qwen behave like claude here, and Claude's Bash may still egress unless the deployment enforces an external network policy — this caveat applies to all claude-harness engines |
 | `model.name` | engine default | engine default: `gpt-5.4` (codex), `claude-opus-4-6[1m]` (claude), `glm-5.2` (glm), `qwen3.7-plus` (qwen) |
 | `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` (codex only) |
 | `limits.timeout_seconds` | `1200` | per agent attempt |
@@ -277,7 +281,8 @@ Themis runs reviews through an agent CLI, using your Codex, Claude Max, GLM or Q
 Pick the instance default with `THEMIS_ENGINE` in `.env`. A repo can override it
 in `.themis/config.yaml` with `engine:` set to any of them; if that engine
 has no credentials on the instance, Themis posts a comment saying so instead of
-failing silently. The claude path needs no volume: token in `.env`, done.
+failing silently. The claude, glm, and qwen paths need no volume: key in
+`.env`, done.
 
 ## Troubleshooting
 
