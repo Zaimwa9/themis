@@ -2,8 +2,11 @@
 
 import json
 
+import pytest
+
 from themis.learnings import (
     Learning,
+    PendingStore,
     new_learning,
     parse_jsonl,
     to_jsonl,
@@ -73,3 +76,42 @@ def test_new_learning__generates_id_and_carries_fields():
     assert learning.id.startswith("lrn-") and len(learning.id) == 12
     assert learning.supersedes == "lrn-aaaaaaaa"
     assert learning.pr == 9
+
+
+pytestmark_async = pytest.mark.asyncio  # module already has sync tests; mark per-test
+
+
+@pytest.mark.asyncio
+async def test_pending_store__load_missing_file__empty(tmp_path):
+    store = PendingStore(tmp_path)
+    assert await store.load("acme/widgets") == []
+
+
+@pytest.mark.asyncio
+async def test_pending_store__append_then_load__roundtrip(tmp_path):
+    store = PendingStore(tmp_path)
+    await store.append("acme/widgets", _entry())
+    await store.append("acme/widgets", _entry(id="lrn-bbbbbbbb", text="two"))
+
+    entries = await store.load("acme/widgets")
+
+    assert [e.id for e in entries] == ["lrn-aaaaaaaa", "lrn-bbbbbbbb"]
+    on_disk = tmp_path / "learnings" / "acme__widgets" / "pending.jsonl"
+    assert on_disk.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_store__repos_isolated(tmp_path):
+    store = PendingStore(tmp_path)
+    await store.append("acme/widgets", _entry())
+
+    assert await store.load("acme/gadgets") == []
+
+
+@pytest.mark.asyncio
+async def test_pending_store__replace__overwrites(tmp_path):
+    store = PendingStore(tmp_path)
+    await store.append("acme/widgets", _entry())
+    await store.replace("acme/widgets", [])
+
+    assert await store.load("acme/widgets") == []

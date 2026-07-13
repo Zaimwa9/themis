@@ -5,10 +5,12 @@ the server-side pending buffer holds captured-but-not-yet-merged entries.
 Everything here is deterministic; the LLM only proposes candidates.
 """
 
+import asyncio
 import json
 import logging
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -104,3 +106,43 @@ def new_learning(
         created_at=created_at,
         supersedes=supersedes,
     )
+
+
+class PendingStore:
+    """Durable buffer of captured-but-not-yet-merged learnings, per repo.
+
+    One directory per repo under <root>/learnings/. A single lock serializes
+    read-modify-write within this process; the queue's single-concurrency
+    worker is the writer, so cross-process races are out of scope."""
+
+    def __init__(self, root: Path) -> None:
+        self._root = root / "learnings"
+        self._lock = asyncio.Lock()
+
+    def _path(self, repo: str) -> Path:
+        return self._root / repo.replace("/", "__") / "pending.jsonl"
+
+    async def load(self, repo: str) -> list[Learning]:
+        async with self._lock:
+            return self._read(repo)
+
+    async def append(self, repo: str, learning: Learning) -> None:
+        async with self._lock:
+            entries = self._read(repo)
+            entries.append(learning)
+            self._write(repo, entries)
+
+    async def replace(self, repo: str, entries: list[Learning]) -> None:
+        async with self._lock:
+            self._write(repo, entries)
+
+    def _read(self, repo: str) -> list[Learning]:
+        path = self._path(repo)
+        if not path.exists():
+            return []
+        return parse_jsonl(path.read_text(errors="replace"))
+
+    def _write(self, repo: str, entries: list[Learning]) -> None:
+        path = self._path(repo)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(to_jsonl(entries))
