@@ -271,7 +271,8 @@ def write_deployment(options: BootstrapOptions, credentials: dict[str, object]) 
     output.mkdir(parents=True, exist_ok=True)
     env_path = output / ".env"
     compose_path = output / "compose.yaml"
-    for path in (env_path, compose_path):
+    info_path = output / "themis-info.json"
+    for path in (env_path, compose_path, info_path):
         if path.exists():
             raise BootstrapError(f"refusing to overwrite existing {path}")
 
@@ -289,6 +290,14 @@ def write_deployment(options: BootstrapOptions, credentials: dict[str, object]) 
     ]
     _write_exclusive(env_path, ("\n".join(lines) + "\n").encode(), 0o600)
     _write_exclusive(compose_path, _compose_text(options.image).encode(), 0o644)
+    info = {
+        "github_app_slug": str(credentials["slug"]),
+        "mention": f"@{credentials['slug']}",
+        "repository": options.repo,
+    }
+    _write_exclusive(
+        info_path, (json.dumps(info, indent=2, sort_keys=True) + "\n").encode(), 0o644
+    )
 
     codex_seed = output / "codex-seed"
     codex_seed.mkdir(mode=0o700, exist_ok=True)
@@ -392,6 +401,8 @@ class BootstrapSession:
                 session.done.set()
                 body = (
                     f"<p>The App is installed on <code>{html.escape(session.options.repo)}</code>.</p>"
+                    f"<p>Your bot is <strong>@{html.escape(str(session.credentials['slug']))}</strong>. "
+                    f"Call it with <code>@{html.escape(str(session.credentials['slug']))} review</code>.</p>"
                     "<p>You can close this window and return to the terminal.</p>"
                 )
                 self._send(200, _page("Themis GitHub setup complete", body))
@@ -434,8 +445,14 @@ def run_bootstrap(options: BootstrapOptions) -> None:
         server.server_close()
         thread.join(timeout=5)
 
+    if session.credentials is None:  # guarded by session.done, narrows the type
+        raise BootstrapError("GitHub App credentials were not received")
+    mention = f"@{session.credentials['slug']}"
     profile = " --profile tunnel" if options.tunnel else ""
     print(
+        f"\nGitHub bot: {mention}\n"
+        f"Request a review with: {mention} review\n"
+        f"Deployment details: {options.output / 'themis-info.json'}\n\n"
         f"Deployment written to {options.output}\n"
         f"Start it with: docker compose -f {options.output / 'compose.yaml'}{profile} up -d"
     )

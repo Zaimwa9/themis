@@ -41,6 +41,11 @@ are signed in to GitHub. Confirm the generated App name, then select the exact
 repository supplied to `--repo`. The bootstrap independently checks that the
 installation callback belongs to that repository before completing.
 
+The success page and terminal both show the generated bot mention, for example
+`@themis-acme-123`, and the command used to request a review. The same identity
+is saved in the generated `themis-info.json`, so users and automation can find
+it again without reading logs or credentials.
+
 Start the generated deployment:
 
 ```bash
@@ -101,6 +106,8 @@ The bootstrap writes:
 - `.env`, mode `0600`, containing the App credentials and generated internal
   agent token.
 - `compose.yaml`, using the published Themis image rather than a source build.
+- `themis-info.json`, containing the non-secret App slug, `@mention`, and target
+  repository.
 - `codex-seed/auth.json`, mode `0600`, when Codex authentication was found or
   supplied. A one-time Compose init service copies it into the persistent
   `codex-home` volume without exposing it to the controller.

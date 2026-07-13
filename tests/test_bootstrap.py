@@ -166,6 +166,11 @@ def test_write_deployment_keeps_secrets_out_of_compose_and_sets_modes(tmp_path):
     assert json.loads((output / "codex-seed" / "auth.json").read_text())["token"] == (
         "model-secret"
     )
+    assert json.loads((output / "themis-info.json").read_text()) == {
+        "github_app_slug": "themis-acme-123",
+        "mention": "@themis-acme-123",
+        "repository": "acme/widgets",
+    }
 
 
 def test_write_deployment_refuses_to_overwrite_existing_files(tmp_path):
@@ -224,6 +229,8 @@ def test_bootstrap_http_flow_converts_writes_and_verifies(monkeypatch, tmp_path)
             params={"installation_id": "42", "state": session.state},
         )
         assert installed.status_code == 200
+        assert "@themis-acme-123" in installed.text
+        assert "@themis-acme-123 review" in installed.text
         assert session.done.is_set()
         assert verifications == [(converted, "acme/widgets", 42)]
     finally:
@@ -268,3 +275,37 @@ def test_bootstrap_http_flow_rejects_wrong_state(tmp_path):
 def test_run_bootstrap_validates_before_listening(tmp_path, overrides, message):
     with pytest.raises(BootstrapError, match=message):
         run_bootstrap(options(tmp_path, **overrides))
+
+
+def test_run_bootstrap_prints_bot_mention_and_info_path(monkeypatch, tmp_path, capsys):
+    opts = options(tmp_path, bind_port=9999)
+    fake_server = type(
+        "FakeServer",
+        (),
+        {
+            "serve_forever": lambda self: None,
+            "shutdown": lambda self: None,
+            "server_close": lambda self: None,
+        },
+    )()
+
+    def session_factory(options):
+        session = type("FakeSession", (), {})()
+        session.done = type("Done", (), {"wait": lambda self, timeout: True})()
+        session.error = None
+        session.credentials = credentials()
+        session.handler = lambda: object
+        return session
+
+    monkeypatch.setattr(bootstrap, "BootstrapSession", session_factory)
+    monkeypatch.setattr(bootstrap, "ThreadingHTTPServer", lambda address, handler: fake_server)
+    monkeypatch.setattr(bootstrap.threading, "Thread", lambda **kwargs: type(
+        "Thread", (), {"start": lambda self: None, "join": lambda self, timeout: None}
+    )())
+
+    run_bootstrap(opts)
+
+    output = capsys.readouterr().out
+    assert "GitHub bot: @themis-acme-123" in output
+    assert "@themis-acme-123 review" in output
+    assert str(tmp_path / "themis-info.json") in output

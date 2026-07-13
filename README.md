@@ -86,7 +86,9 @@ If the target is owned by an organization, also pass `--organization OWNER`.
 The App must be created under that organization because the generated App is
 private. The command prints a localhost URL. Open it, approve the pre-filled
 App, and select `OWNER/REPO` on the installation screen. The private key never
-leaves the bootstrap process and the generated `.env`.
+leaves the bootstrap process and the generated `.env`. The success screen and
+terminal show the bot's generated `@mention`; it is also saved in
+`themis-info.json` for later reference.
 
 The same command can run from a source checkout without Docker:
 
