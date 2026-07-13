@@ -14,8 +14,6 @@ _QUOTA_MARKERS = (
     "you've hit your opus limit",
     "you've hit your limit · resets",
 )
-_EXTRA_ENV = frozenset({"CLAUDE_CODE_OAUTH_TOKEN"})
-
 # No self-updates or third-party telemetry from inside a review job.
 _HYGIENE_ENV = {
     "DISABLE_AUTOUPDATER": "1",
@@ -44,10 +42,21 @@ def build_command(prompt: str, model: str, web_access: bool) -> list[str]:
 
 
 class ClaudeEngine:
+    """Also the base for API-mode engines (glm, qwen): subclasses override
+    the class attributes and _auth_env() to target an Anthropic-compatible
+    endpoint while keeping the hardened harness identical."""
+
     name = "claude"
+    _token_env = "CLAUDE_CODE_OAUTH_TOKEN"
+    _quota_markers = _QUOTA_MARKERS
 
     def available(self) -> bool:
-        return bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))
+        return bool(os.environ.get(self._token_env))
+
+    def _auth_env(self) -> dict[str, str]:
+        # Subscription mode: the OAuth token passes through under its own name.
+        token = os.environ.get(self._token_env)
+        return {self._token_env: token} if token else {}
 
     async def run(
         self, *, prompt: str, workspace: Path, model: str, effort: str,
@@ -57,15 +66,15 @@ class ClaudeEngine:
         # reasoning-effort flag.
         # CLAUDE_CONFIG_DIR also isolates ~/.claude.json and user plugins,
         # which setting-sources intentionally does not cover.
-        with tempfile.TemporaryDirectory(prefix="themis-claude-") as config_dir:
-            env = allowlisted_env(_EXTRA_ENV) | _HYGIENE_ENV | {
+        with tempfile.TemporaryDirectory(prefix=f"themis-{self.name}-") as config_dir:
+            env = allowlisted_env(frozenset()) | _HYGIENE_ENV | self._auth_env() | {
                 "CLAUDE_CONFIG_DIR": config_dir,
             }
             return await run_cli(
-                name="claude",
+                name=self.name,
                 command=build_command(prompt, model, web_access),
                 workspace=workspace,
                 env=env,
                 timeout=timeout,
-                quota_markers=_QUOTA_MARKERS,
+                quota_markers=self._quota_markers,
             )
