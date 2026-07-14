@@ -12,9 +12,37 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      prs_created: ${{ steps.release.outputs.prs_created }}
+      pr: ${{ steps.release.outputs.pr }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
+
+  # release-please bumps pyproject.toml but not uv.lock (#15). The sync step
+  # in ci.yml never fires on release PRs because release-please pushes with
+  # GITHUB_TOKEN, which does not trigger pull_request workflows. This job runs
+  # on the same user-triggered main push that updated the release PR, so it
+  # reliably lands the lockfile bump before the PR is merged.
+  sync-lockfile:
+    needs: release-please
+    if: needs.release-please.outputs.prs_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync uv.lock with the release version bump
+        run: |
+          if ! uv lock --check; then
+            uv lock
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "chore: sync uv.lock with release version bump"
+            git push
+          fi
 
   # Tags created with GITHUB_TOKEN do not trigger other workflows, so the
   # image build chains off the release job instead of a tag push.
