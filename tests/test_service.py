@@ -2644,3 +2644,33 @@ async def test_review__code_suggestions_off__suggestion_only_body_keeps_placehol
     # whole batch on an empty comment body and every finding gets demoted.
     assert posted.strip()
     assert "```suggestion" not in posted
+
+
+async def test_review__code_suggestions_off__unclosed_suggestion_fence_stripped(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Off-by-one.**\n\n"
+        "```suggestion\n"
+        "range(n + 1)\n"
+    )  # no closing fence: GFM extends it to end of comment
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    # An unclosed suggestion fence still renders as an apply-able suggestion
+    # (an unclosed fence runs to end of comment), so it must be stripped too.
+    assert "```suggestion" not in posted
+    assert "range(n + 1)" not in posted
+    assert "Off-by-one." in posted

@@ -957,8 +957,9 @@ def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
     Line-based fence tracking rather than a regex: a suggestion fence
     inside an enclosing longer fence (a Markdown example quoting one) is
     prose about a suggestion, not a suggestion block. A closing fence must
-    match its opener's character, per GFM. An unclosed suggestion fence is
-    kept verbatim - never strip what cannot be parsed."""
+    match its opener's character, per GFM. An unclosed suggestion fence
+    extends to end of text, per GFM, so it still renders apply-able and is
+    stripped like a closed one."""
     out: list[str] = []
     pending: list[str] = []  # lines of a suggestion block until it closes
     open_fence: tuple[str, int] | None = None  # enclosing non-suggestion fence
@@ -998,7 +999,8 @@ def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
             else:
                 open_fence = (char, length)
         out.append(line)
-    out.extend(pending)  # unclosed suggestion fence: keep, strip nothing
+    if suggestion:  # unclosed fence runs to EOF: everything pending is inside
+        removed += 1
     return "".join(out), removed
 
 
