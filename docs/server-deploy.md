@@ -32,17 +32,21 @@ login there and refreshes tokens in place. Without a persistent volume
 you'd need to re-authenticate on every restart.
 
 Seed it once, after the container is up, from wherever you already ran
-`codex login`:
+`codex login`. Pipe it through an exec shell rather than `docker cp`: the
+exec runs as the container's unprivileged `themis` user, while `docker cp`
+creates the file root-owned and unreadable to the agent:
 
 ```bash
 # docker compose
-docker compose cp ~/.codex/auth.json agent:/data/codex/auth.json
+docker compose exec -T agent sh -c 'umask 077; cat > /data/codex/auth.json' \
+  < ~/.codex/auth.json
 
 # plain docker
-docker cp ~/.codex/auth.json <container>:/data/codex/auth.json
+docker exec -i <container> sh -c 'umask 077; cat > /data/codex/auth.json' \
+  < ~/.codex/auth.json
 
-# PaaS with only a remote shell: pipe the file in
-<platform-shell-command> sh -c 'cat > /data/codex/auth.json' < ~/.codex/auth.json
+# PaaS with only a remote shell: same pipe through the platform's shell command
+<platform-shell-command> sh -c 'umask 077; cat > /data/codex/auth.json' < ~/.codex/auth.json
 ```
 
 Any of the three gets the same file onto the volume; use whichever your
