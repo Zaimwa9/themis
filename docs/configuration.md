@@ -36,8 +36,10 @@ Two planes:
 Names and defaults come straight from `../src/themis/config.py`, except
 `PORT` and `THEMIS_ROLE` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and
 `CLAUDE_CODE_OAUTH_TOKEN` and `GLM_API_KEY` (read directly by
-the engine adapters in `../src/themis/engines/`, not part of `Settings`). There is no model, limit, or mention configuration
-in the environment; the
+the engine adapters in `../src/themis/engines/`, not part of `Settings`). Model, limit, and trigger configuration
+lives in `.themis/config.yaml` (or its `THEMIS_DEFAULT_REPO_CONFIG`
+fallback, below), not in dedicated environment variables. There is no
+mention configuration at all: the
 mention handle is derived at startup from `GET /app` (the App's slug), so it
 can never drift from the App's actual name.
 
