@@ -15,9 +15,12 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev
 
+# /data/themis must exist in the image so the named volume mounted there
+# inherits themis ownership; otherwise Docker creates it root-owned and the
+# pending-learnings store cannot write.
 RUN useradd -m themis \
-    && mkdir -p /data/codex /tmp/themis \
-    && chown -R themis:themis /data/codex /tmp/themis
+    && mkdir -p /data/codex /data/themis /tmp/themis \
+    && chown -R themis:themis /data/codex /data/themis /tmp/themis
 USER themis
 ENV CODEX_HOME=/data/codex \
     PATH="/app/.venv/bin:$PATH"

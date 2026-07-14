@@ -170,15 +170,16 @@ To create the App manually, configure:
 |---|---|
 | Webhook URL | `https://HOST/webhook` |
 | Checks permission | Read-only |
-| Contents permission | Read-only |
+| Contents permission | Read and write (write publishes learnings digest PRs) |
 | Pull requests permission | Read and write |
 | Issues permission | Read and write |
 | Commit statuses permission | Read-only |
 | Events | `pull_request`, `issue_comment`, `pull_request_review_comment` |
 
 Actions permission is not required. If an existing App predates CI-aware
-reviews, add the Checks and Commit statuses permissions before deploying this
-version.
+reviews or the learnings digest, add the Checks and Commit statuses read
+permissions and upgrade Contents to write before deploying this version;
+each installation must then accept the permission change GitHub sends it.
 
 Generate a private key, install the App on the target repositories, and set
 `THEMIS_GH_APP_CLIENT_ID`, `THEMIS_GH_APP_PRIVATE_KEY` (PEM or base64),

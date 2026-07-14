@@ -178,7 +178,7 @@ organization that owns the target repos or on your personal account:
 | Webhook URL | `https://HOST/webhook`; any placeholder works if you set `THEMIS_PUBLIC_URL` later, Themis re-registers it at startup |
 | Webhook secret | a long random string, goes in `THEMIS_GH_WEBHOOK_SECRET` |
 | Checks permission | Read-only |
-| Contents permission | Read-only |
+| Contents permission | Read and write (write publishes learnings digest PRs) |
 | Issues permission | Read and write |
 | Pull requests permission | Read and write |
 | Commit statuses permission | Read-only |
@@ -186,7 +186,8 @@ organization that owns the target repos or on your personal account:
 
 Actions permission is not required. Existing Apps must be updated with the
 Checks and Commit statuses permissions before Themis can include CI context
-in reviews.
+in reviews, and with Contents write before it can open learnings digest PRs;
+each installation must then accept the permission upgrade GitHub sends it.
 
 Then generate a private key (App settings > Private keys) and install the App
 on the target repositories (App settings > Install App).

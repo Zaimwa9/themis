@@ -31,6 +31,11 @@ Mount a persistent volume on the **agent** at `/data/codex` (`CODEX_HOME`). Code
 login there and refreshes tokens in place. Without a persistent volume
 you'd need to re-authenticate on every restart.
 
+Mount a second persistent volume on the **controller** at `/data/themis`
+(`THEMIS_DATA_ROOT`). It holds pending review learnings; without it they are
+lost whenever the controller container is recreated. Both compose files
+(the repo's and the bootstrap-generated one) already do this.
+
 Seed it once, after the container is up, from wherever you already ran
 `codex login`. Pipe it through an exec shell rather than `docker cp`: the
 exec runs as the container's unprivileged `themis` user, while `docker cp`

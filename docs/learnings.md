@@ -19,6 +19,11 @@ and applies it to every future review of that repo.
    `.themis/learnings.jsonl`. Review it like any PR: edit lines, delete bad
    ones, then merge. What you merge is what future reviews read.
 
+Publishing the digest PR needs the App's **Contents: Read and write**
+permission (bootstrap-created Apps request it; older Apps must upgrade —
+see [bootstrap.md](bootstrap.md)). Until the permission is granted the
+digest write fails with a logged warning and learnings simply stay pending.
+
 ## Trust model
 
 - Only comments from authors with `OWNER`, `MEMBER`, or `COLLABORATOR`
