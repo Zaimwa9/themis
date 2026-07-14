@@ -112,13 +112,17 @@ just a discussion comment.
 
 - After a successful capture, if `len(pending) >= digest_threshold`
   (default **10**), flush:
-  1. Compose new file: current repo file content + pending entries
-     (supersedes applied — superseded lines removed).
-  2. Upsert branch `themis/learnings` at the default branch head and PUT the
-     file via the contents API.
-  3. Open a PR (`chore: sync review learnings`) if no open PR from that
-     branch exists; otherwise the PUT already updated the open PR. Never
-     more than one digest PR per repo.
+  1. No open digest PR: rebuild branch `themis/learnings` at the default
+     branch head, compose the file from the default-branch content + all
+     pending entries (supersedes applied — superseded lines removed), PUT
+     it via the contents API, and open a PR (`chore: sync review
+     learnings`). Never more than one digest PR per repo.
+  2. Digest PR already open: its branch belongs to reviewers. The flush
+     never resets it — it appends only not-yet-flushed entries onto the
+     branch's *current* file, so manual edits and deletions on the open PR
+     survive later flushes.
+  3. The composed file passes through outbound redaction (like every
+     GitHub-facing write) before the PUT.
 - **Merge reconciliation, no webhook:** whenever the effective set is
   loaded, pending entries whose `id` already appears in the repo file are
   pruned from the buffer (they merged). A flush also records a `flushed`

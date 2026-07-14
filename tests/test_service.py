@@ -1157,7 +1157,7 @@ LEARNINGS_YAML_OFF = "learnings:\n  enabled: false\n"
 
 def _config_and_learnings(config_text=None, learnings_text=None):
     """get_file_text side effect: .themis/config.yaml then .themis/learnings.jsonl."""
-    async def get_file_text(repo, path):
+    async def get_file_text(repo, path, ref=None):
         if path.endswith("config.yaml"):
             return config_text
         if path.endswith("learnings.jsonl"):
@@ -1501,6 +1501,79 @@ async def test_flush_digest__below_threshold__no_op(service, gh, tmp_path):
     gh.put_file.assert_not_awaited()
     gh.create_pr.assert_not_awaited()
     assert await store.load_flushed(REPO) is None
+
+
+async def test_flush_digest__content_redacted_before_put(service, gh, tmp_path):
+    """The digest write is GitHub-facing: model-derived learning text must go
+    through outbound redaction like every other posted surface."""
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    token = "ghp_ABCDEFGHIJKLMNOP1234"
+    await store.append(REPO, Learning(
+        id="lrn-000000ff", text=f"Always authenticate with {token}.", paths=(),
+        learnt_from="dev", pr=1, created_at="2026-07-13T00:00:00+00:00",
+    ))
+    _gh_for_digest(gh)
+    gh.get_file_text.return_value = None
+
+    await service._flush_digest(gh, REPO, threshold=1)
+
+    content = gh.put_file.await_args.kwargs["content"]
+    assert token not in content
+    assert "[redacted]" in content
+
+
+async def test_flush_digest__open_pr__preserves_reviewer_edits(service, gh, tmp_path):
+    """A reviewer edited one line and deleted another on the open digest PR's
+    branch; the next flush must append only not-yet-flushed entries onto the
+    branch's current file instead of force-rebuilding from the default head."""
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    for i in range(10):
+        await store.append(REPO, _entry_for_service(i))
+    await store.record_flushed(REPO, [f"lrn-{i:08x}" for i in range(9)], 12)
+    edited = Learning(
+        id="lrn-00000000", text="rule number 0 EDITED", paths=(),
+        learnt_from="dev", pr=1, created_at="2026-07-01T00:00:00+00:00",
+    )
+    branch_text = to_jsonl(
+        [edited] + [_entry_for_service(i) for i in range(1, 9) if i != 3]
+    )
+
+    async def get_file_text(repo, path, ref=None):
+        assert ref == DIGEST_BRANCH
+        return branch_text
+
+    _gh_for_digest(gh)
+    gh.get_file_text.side_effect = get_file_text
+    gh.find_open_pr.return_value = 12
+
+    await service._flush_digest(gh, REPO, threshold=10)
+
+    gh.upsert_branch.assert_not_awaited()
+    gh.create_pr.assert_not_awaited()
+    content = gh.put_file.await_args.kwargs["content"]
+    assert "rule number 0 EDITED" in content  # reviewer's edit kept
+    assert "lrn-00000003" not in content  # reviewer's deletion kept
+    assert "rule number 9" in content  # new entry appended
+    flushed = await store.load_flushed(REPO)
+    assert flushed["pr"] == 12
+    assert len(flushed["ids"]) == 10
+
+
+async def test_flush_digest__open_pr_nothing_new__no_write(service, gh, tmp_path):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    for i in range(3):
+        await store.append(REPO, _entry_for_service(i))
+    await store.record_flushed(REPO, [f"lrn-{i:08x}" for i in range(3)], 12)
+    _gh_for_digest(gh)
+    gh.find_open_pr.return_value = 12
+
+    await service._flush_digest(gh, REPO, threshold=3)
+
+    gh.upsert_branch.assert_not_awaited()
+    gh.put_file.assert_not_awaited()
 
 
 async def test_discuss__flush_load_oserror__does_not_propagate(service, gh, tmp_path):

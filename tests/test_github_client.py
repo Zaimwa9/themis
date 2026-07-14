@@ -352,6 +352,27 @@ async def test_get_file_text_returns_raw_content():
     assert text == "model:\n  name: gpt-5.4\n"
 
 
+async def test_get_file_text_with_ref__queries_that_ref():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["ref"] == "themis/learnings"
+        assert request.headers["Accept"] == "application/vnd.github.raw+json"
+        return httpx.Response(200, text='{"id": "lrn-00000001"}')
+
+    text = await _client(handler).get_file_text(
+        "acme/widgets", ".themis/learnings.jsonl", ref="themis/learnings"
+    )
+
+    assert text == '{"id": "lrn-00000001"}'
+
+
+async def test_get_file_text_without_ref__no_ref_param():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "ref" not in request.url.params
+        return httpx.Response(200, text="x")
+
+    assert await _client(handler).get_file_text("acme/widgets", "f.txt") == "x"
+
+
 async def test_get_file_text_missing_file_returns_none():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"message": "Not Found"})

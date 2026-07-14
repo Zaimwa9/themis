@@ -206,15 +206,19 @@ class GitHubClient:
         response = await self._client.post(url, json={"content": content})
         response.raise_for_status()
 
-    async def get_file_text(self, repo: str, path: str) -> str | None:
-        """File content from the repo's default branch, or None when absent.
+    async def get_file_text(
+        self, repo: str, path: str, ref: str | None = None
+    ) -> str | None:
+        """File content, or None when absent.
 
-        Default branch on purpose: per-repo behavior config must not be
-        overridable from inside the PR under review.
+        Defaults to the repo's default branch on purpose: per-repo behavior
+        config must not be overridable from inside the PR under review. An
+        explicit ref is for bot-owned branches (the learnings digest).
         """
         response = await self._client.get(
             f"{self._api_url}/repos/{repo}/contents/{path}",
             headers={"Accept": "application/vnd.github.raw+json"},
+            params={"ref": ref} if ref is not None else None,
         )
         if response.status_code == 404:
             return None

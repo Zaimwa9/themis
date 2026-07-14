@@ -262,36 +262,53 @@ class ReviewService:
     async def _flush_digest(self, gh: Any, repo: str, threshold: int) -> None:
         """Land pending learnings as one digest PR; best-effort.
 
-        The branch is force-rebuilt from the default head so the PR diff is
-        always exactly the learnings file. Failures leave the buffer intact
-        and never fail the job that triggered the flush. The threshold check
-        lives here (not in the caller) so an I/O error while loading the
-        pending count can never escape unguarded."""
+        With no open digest PR the branch is force-rebuilt from the default
+        head so the PR diff is always exactly the learnings file. While a
+        digest PR is open its branch belongs to reviewers: only entries not
+        already flushed are appended onto the branch's current file, so
+        manual edits and deletions survive later flushes. The digest is a
+        GitHub-facing write, so it goes through outbound redaction like
+        every posted surface. Failures leave the buffer intact and never
+        fail the job that triggered the flush. The threshold check lives
+        here (not in the caller) so an I/O error while loading the pending
+        count can never escape unguarded."""
         assert self.pending_store is not None
         try:
             pending = await self.pending_store.load(repo)
             if len(pending) < threshold:
                 return
             default_branch = await gh.get_default_branch(repo)
-            base_sha = await gh.get_branch_sha(repo, default_branch)
-            repo_text = await gh.get_file_text(repo, LEARNINGS_REPO_PATH)
-            content = compose_digest(repo_text, pending)
-            await gh.upsert_branch(repo, DIGEST_BRANCH, base_sha)
+            pr_number = await gh.find_open_pr(repo, DIGEST_BRANCH)
+            flushed_ids: set[str] = set()
+            if pr_number is None:
+                base_sha = await gh.get_branch_sha(repo, default_branch)
+                base_text = await gh.get_file_text(repo, LEARNINGS_REPO_PATH)
+                to_flush = pending
+                await gh.upsert_branch(repo, DIGEST_BRANCH, base_sha)
+            else:
+                flushed = await self.pending_store.load_flushed(repo)
+                flushed_ids = set(flushed["ids"]) if flushed else set()
+                to_flush = [e for e in pending if e.id not in flushed_ids]
+                if not to_flush:
+                    return
+                base_text = await gh.get_file_text(
+                    repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH
+                )
+            content = compose_digest(base_text, to_flush)
             file_sha = await gh.get_file_sha(repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH)
             await gh.put_file(
-                repo, LEARNINGS_REPO_PATH, content=content,
+                repo, LEARNINGS_REPO_PATH, content=redact_outbound(content),
                 message=DIGEST_PR_TITLE, branch=DIGEST_BRANCH, sha=file_sha,
             )
-            pr_number = await gh.find_open_pr(repo, DIGEST_BRANCH)
             if pr_number is None:
                 pr_number = await gh.create_pr(
                     repo, title=DIGEST_PR_TITLE, body=DIGEST_PR_BODY,
                     head=DIGEST_BRANCH, base=default_branch,
                 )
             await self.pending_store.record_flushed(
-                repo, [e.id for e in pending], pr_number
+                repo, sorted(flushed_ids | {e.id for e in to_flush}), pr_number
             )
-            logger.info("themis_digest_flushed repo=%s count=%d", repo, len(pending))
+            logger.info("themis_digest_flushed repo=%s count=%d", repo, len(to_flush))
         except (httpx.HTTPError, GitHubGraphQLError, OSError) as error:
             logger.warning("themis_digest_flush_failed repo=%s error=%s", repo, error)
 
