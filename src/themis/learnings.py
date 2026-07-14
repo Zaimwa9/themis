@@ -149,12 +149,14 @@ class PendingStore:
                 self._write(repo, remaining)
 
     async def record_flushed(
-        self, repo: str, ids: list[str], pr_number: int, sha: str | None = None
+        self, repo: str, ids: list[str], pr_number: int | None, sha: str | None = None
     ) -> None:
         """Remember which pending ids were sent to which digest PR, so the next
         read can tell deletions (human-edited out in the PR) from still-pending.
         sha is the digest commit we pushed: post-merge branch cleanup deletes
-        the branch only while it still points exactly there."""
+        the branch only while it still points exactly there. pr_number None
+        marks a flush whose branch write landed but whose PR does not exist
+        yet (recorded before create_pr, completed by the retry)."""
         async with self._lock:
             path = self._flushed_path(repo)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,8 +201,7 @@ class PendingStore:
             isinstance(raw, dict)
             and isinstance(ids, list)
             and all(isinstance(i, str) for i in ids)
-            and isinstance(pr, int)
-            and not isinstance(pr, bool)
+            and (pr is None or (isinstance(pr, int) and not isinstance(pr, bool)))
         )
         if not valid:
             logger.warning("themis_learnings_flushed_invalid repo=%s reason=bad-shape", repo)

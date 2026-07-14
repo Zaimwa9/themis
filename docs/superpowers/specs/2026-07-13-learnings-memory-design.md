@@ -131,8 +131,10 @@ just a discussion comment.
 - **Merge reconciliation, no webhook:** whenever the effective set is
   loaded, pending entries whose `id` already appears in the repo file are
   pruned from the buffer (they merged). A flush also records a `flushed`
-  marker (the flushed ids + the digest PR number) next to the pending
-  buffer. At read time, if that PR has merged, flushed ids still missing
+  marker (the flushed ids + the digest PR number + the digest commit sha)
+  next to the pending buffer; the marker is written before `create_pr`
+  (`pr` null) so a flush interrupted between the branch write and PR
+  creation is recognized as our orphan (tip == marker sha) and resumed. At read time, if that PR has merged, flushed ids still missing
   from the repo file were deleted by a human before merging — they're
   dropped from the buffer too, so deletions win even though they never
   reach the repo file. Closed-without-merging clears the marker and leaves

@@ -257,7 +257,9 @@ class ReviewService:
             pending = []
         try:
             flushed = await self.pending_store.load_flushed(repo)
-            if flushed is not None:
+            # pr None = branch written but create_pr failed; the marker stays
+            # so the next flush can prove the orphaned branch is ours.
+            if flushed is not None and flushed["pr"] is not None:
                 pr = await gh.get_pr(repo, flushed["pr"])
                 if pr.get("merged"):
                     repo_ids = {e.id for e in repo_entries}
@@ -388,19 +390,33 @@ class ReviewService:
                 return
             default_branch = await gh.get_default_branch(repo)
             pr_number = await gh.find_open_pr(repo, DIGEST_BRANCH)
+            flushed = await self.pending_store.load_flushed(repo)
             flushed_ids: set[str] = set()
+            commit_sha: str | None = None
             if pr_number is None:
                 base_sha = await gh.get_branch_sha(repo, default_branch)
-                base_text = await gh.get_file_text(repo, LEARNINGS_REPO_PATH)
-                to_flush = pending
-                if not await gh.upsert_branch(repo, DIGEST_BRANCH, base_sha):
-                    logger.warning(
-                        "themis_digest_branch_conflict repo=%s branch=%s",
-                        repo, DIGEST_BRANCH,
+                if await gh.upsert_branch(repo, DIGEST_BRANCH, base_sha):
+                    base_text = await gh.get_file_text(repo, LEARNINGS_REPO_PATH)
+                    to_flush = pending
+                else:
+                    # Not fast-forwardable. If the tip is the very commit our
+                    # marker recorded, this is our own orphan (an earlier
+                    # flush wrote the branch but create_pr failed): resume it.
+                    # Anything else is not provably ours — leave it alone.
+                    tip = await gh.find_branch_sha(repo, DIGEST_BRANCH)
+                    if flushed is None or tip is None or flushed["sha"] != tip:
+                        logger.warning(
+                            "themis_digest_branch_conflict repo=%s branch=%s",
+                            repo, DIGEST_BRANCH,
+                        )
+                        return
+                    commit_sha = tip
+                    flushed_ids = set(flushed["ids"])
+                    to_flush = [e for e in pending if e.id not in flushed_ids]
+                    base_text = await gh.get_file_text(
+                        repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH
                     )
-                    return
             else:
-                flushed = await self.pending_store.load_flushed(repo)
                 if flushed is None or flushed["pr"] != pr_number:
                     # An open PR from the reserved branch that our marker did
                     # not record is someone else's PR — never commit onto it.
@@ -416,20 +432,28 @@ class ReviewService:
                 base_text = await gh.get_file_text(
                     repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH
                 )
-            content = compose_digest(base_text, to_flush)
-            file_sha = await gh.get_file_sha(repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH)
-            commit_sha = await gh.put_file(
-                repo, LEARNINGS_REPO_PATH, content=redact_outbound(content),
-                message=DIGEST_PR_TITLE, branch=DIGEST_BRANCH, sha=file_sha,
-            )
+            if to_flush:
+                content = compose_digest(base_text, to_flush)
+                file_sha = await gh.get_file_sha(
+                    repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH
+                )
+                commit_sha = await gh.put_file(
+                    repo, LEARNINGS_REPO_PATH, content=redact_outbound(content),
+                    message=DIGEST_PR_TITLE, branch=DIGEST_BRANCH, sha=file_sha,
+                )
+            all_ids = sorted(flushed_ids | {e.id for e in to_flush})
             if pr_number is None:
+                # Marker before create_pr: if PR creation fails, the sha lets
+                # the next flush prove the orphaned branch is ours and resume.
+                await self.pending_store.record_flushed(
+                    repo, all_ids, None, sha=commit_sha
+                )
                 pr_number = await gh.create_pr(
                     repo, title=DIGEST_PR_TITLE, body=DIGEST_PR_BODY,
                     head=DIGEST_BRANCH, base=default_branch,
                 )
             await self.pending_store.record_flushed(
-                repo, sorted(flushed_ids | {e.id for e in to_flush}), pr_number,
-                sha=commit_sha,
+                repo, all_ids, pr_number, sha=commit_sha
             )
             logger.info("themis_digest_flushed repo=%s count=%d", repo, len(to_flush))
         except (httpx.HTTPError, GitHubGraphQLError, OSError) as error:

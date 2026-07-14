@@ -1745,6 +1745,102 @@ async def test_flush_digest__open_pr_marker_names_other_pr__skips(
     assert "themis_digest_branch_conflict" in caplog.text
 
 
+async def test_flush_digest__create_pr_fails__marker_still_records_our_commit(
+    service, gh, tmp_path, caplog
+):
+    """put_file landed but create_pr failed: the marker must already hold the
+    digest commit sha (pr None) so a retry can prove the branch is ours."""
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    for i in range(5):
+        await store.append(REPO, _entry_for_service(i))
+    _gh_for_digest(gh)
+    gh.create_pr.side_effect = _http_error(502)
+
+    await service._flush_digest(gh, REPO, threshold=5)
+
+    assert "themis_digest_flush_failed" in caplog.text
+    flushed = await store.load_flushed(REPO)
+    assert flushed is not None
+    assert flushed["sha"] == "digest-tip"
+    assert flushed["pr"] is None
+    assert len(flushed["ids"]) == 5
+
+
+async def test_flush_digest__orphaned_branch_ours__resumes_and_creates_pr(
+    service, gh, tmp_path
+):
+    """Retry after a failed create_pr: the branch tip matches our marker, so
+    the flush appends anything new and completes the PR instead of wedging."""
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    entries = [_entry_for_service(i) for i in range(6)]
+    for entry in entries:
+        await store.append(REPO, entry)
+    orphan_ids = [e.id for e in entries[:5]]
+    await store.record_flushed(REPO, orphan_ids, None, sha="digest-tip")
+    _gh_for_digest(gh)
+    gh.upsert_branch.return_value = False  # branch holds our orphan commit
+    gh.find_branch_sha.return_value = "digest-tip"
+    gh.put_file.return_value = "digest-tip-2"
+
+    async def get_file_text(repo, path, ref=None):
+        assert ref == DIGEST_BRANCH
+        return to_jsonl(entries[:5])
+
+    gh.get_file_text.side_effect = get_file_text
+
+    await service._flush_digest(gh, REPO, threshold=1)
+
+    put_kwargs = gh.put_file.await_args.kwargs
+    assert "rule number 5" in put_kwargs["content"]
+    gh.create_pr.assert_awaited_once()
+    flushed = await store.load_flushed(REPO)
+    assert flushed["pr"] == 99
+    assert flushed["sha"] == "digest-tip-2"
+    assert len(flushed["ids"]) == 6
+
+
+async def test_flush_digest__orphaned_branch_nothing_new__still_creates_pr(
+    service, gh, tmp_path
+):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    entries = [_entry_for_service(i) for i in range(5)]
+    for entry in entries:
+        await store.append(REPO, entry)
+    await store.record_flushed(REPO, [e.id for e in entries], None, sha="digest-tip")
+    _gh_for_digest(gh)
+    gh.upsert_branch.return_value = False
+    gh.find_branch_sha.return_value = "digest-tip"
+
+    await service._flush_digest(gh, REPO, threshold=1)
+
+    gh.put_file.assert_not_awaited()  # branch content is already complete
+    gh.create_pr.assert_awaited_once()
+    flushed = await store.load_flushed(REPO)
+    assert flushed["pr"] == 99
+    assert flushed["sha"] == "digest-tip"
+
+
+async def test_load_learnings__marker_pr_none__left_for_flush_to_complete(
+    service, gh, tmp_path
+):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    entry = _entry_for_service(0)
+    await store.append(REPO, entry)
+    await store.record_flushed(REPO, [entry.id], None, sha="digest-tip")
+    gh.get_file_text.side_effect = _config_and_learnings()
+
+    repo_config = parse_repo_config(None)
+    _, pending = await service._load_learnings(gh, REPO, repo_config)
+
+    gh.get_pr.assert_not_awaited()
+    assert entry.id in {p.id for p in pending}
+    assert (await store.load_flushed(REPO))["sha"] == "digest-tip"
+
+
 async def test_flush_digest__below_threshold__no_op(service, gh, tmp_path):
     store = PendingStore(tmp_path / "data")
     service.pending_store = store
