@@ -1645,8 +1645,11 @@ async def test_discuss__digest_pr_already_open__updated_not_duplicated(
 ):
     store = PendingStore(tmp_path / "data")
     service.pending_store = store
-    for i in range(9):
-        await store.append(REPO, _entry_for_service(i))
+    entries = [_entry_for_service(i) for i in range(9)]
+    for entry in entries:
+        await store.append(REPO, entry)
+    # The marker proves open PR 12 is our digest PR.
+    await store.record_flushed(REPO, [e.id for e in entries], 12, sha="digest-tip")
     gh.get_file_text.side_effect = _config_and_learnings()
     _gh_for_digest(gh)
     gh.find_open_pr.return_value = 12
@@ -1702,6 +1705,43 @@ async def test_flush_digest__foreign_branch__skips_and_keeps_pending(
     gh.create_pr.assert_not_awaited()
     assert len(await store.load(REPO)) == 5
     assert await store.load_flushed(REPO) is None
+    assert "themis_digest_branch_conflict" in caplog.text
+
+
+async def test_flush_digest__open_pr_without_our_marker__skips_and_keeps_pending(
+    service, gh, tmp_path, caplog
+):
+    """An open PR from the reserved branch that our marker did not record is
+    someone else's PR: never commit learnings onto it."""
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    for i in range(5):
+        await store.append(REPO, _entry_for_service(i))
+    _gh_for_digest(gh)
+    gh.find_open_pr.return_value = 12  # no marker: PR 12 is not provably ours
+
+    await service._flush_digest(gh, REPO, threshold=5)
+
+    gh.put_file.assert_not_awaited()
+    gh.upsert_branch.assert_not_awaited()
+    assert len(await store.load(REPO)) == 5
+    assert "themis_digest_branch_conflict" in caplog.text
+
+
+async def test_flush_digest__open_pr_marker_names_other_pr__skips(
+    service, gh, tmp_path, caplog
+):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    entry = _entry_for_service(0)
+    await store.append(REPO, entry)
+    await store.record_flushed(REPO, [entry.id], 99, sha="digest-tip")
+    _gh_for_digest(gh)
+    gh.find_open_pr.return_value = 12  # ours is 99; 12 is someone else's
+
+    await service._flush_digest(gh, REPO, threshold=1)
+
+    gh.put_file.assert_not_awaited()
     assert "themis_digest_branch_conflict" in caplog.text
 
 

@@ -369,10 +369,13 @@ class ReviewService:
         With no open digest PR the branch is created at (or fast-forwarded
         to) the default head so the PR diff is always exactly the learnings
         file; a same-named branch that cannot fast-forward is not provably
-        ours and is left untouched, deferring the flush. While a
-        digest PR is open its branch belongs to reviewers: only entries not
-        already flushed are appended onto the branch's current file, so
-        manual edits and deletions survive later flushes. The digest is a
+        ours and is left untouched, deferring the flush. An open PR from the
+        reserved branch counts as our digest PR only when the flushed marker
+        recorded its number — anything else is a human's PR and is never
+        committed onto. While our digest PR is open its branch belongs to
+        reviewers: only entries not already flushed are appended onto the
+        branch's current file, so manual edits and deletions survive later
+        flushes. The digest is a
         GitHub-facing write, so it goes through outbound redaction like
         every posted surface. Failures leave the buffer intact and never
         fail the job that triggered the flush. The threshold check lives
@@ -398,7 +401,15 @@ class ReviewService:
                     return
             else:
                 flushed = await self.pending_store.load_flushed(repo)
-                flushed_ids = set(flushed["ids"]) if flushed else set()
+                if flushed is None or flushed["pr"] != pr_number:
+                    # An open PR from the reserved branch that our marker did
+                    # not record is someone else's PR — never commit onto it.
+                    logger.warning(
+                        "themis_digest_branch_conflict repo=%s branch=%s",
+                        repo, DIGEST_BRANCH,
+                    )
+                    return
+                flushed_ids = set(flushed["ids"])
                 to_flush = [e for e in pending if e.id not in flushed_ids]
                 if not to_flush:
                     return
