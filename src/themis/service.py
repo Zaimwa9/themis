@@ -1034,7 +1034,11 @@ def _enforce_delivery_modules(
                 + "\n[assessment truncated to keep folded findings visible]"
             )
         budget = MAX_BODY_LEN - len(actions.summary) - len(heading) - 512
-        share = max(floor, budget // len(actions.findings))
+        # The share accounts for each entry's pointer overhead and shrinks
+        # below the reserve floor when there are more findings than the floor
+        # allows in one comment: the `path:line` pointer of every finding
+        # outranks the prose of any single one.
+        share = max(80, budget // len(actions.findings) - pointer_overhead)
         lines = []
         for finding in actions.findings:
             body = finding["body"]
