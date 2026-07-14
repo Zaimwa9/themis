@@ -53,8 +53,8 @@ Set up Themis for this repository using the automated GitHub App Manifest bootst
   Do not manually create or configure a GitHub App. Run `python -m themis init` with
   `--engine claude --tunnel`.
 
-  Handle everything autonomously. Only pause when GitHub requires my approval or
-  Claude requires authentication.
+  Handle everything autonomously. Only pause when GitHub requires my approval, or when
+  I need to provide an ngrok auth token or complete Claude authentication.
 
   After setup, start the deployment, verify it works, and tell me the bot's @mention
   and how to trigger a review.
