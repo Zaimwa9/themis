@@ -173,6 +173,8 @@ organization that owns the target repos or on your personal account:
 
 | Setting | Value |
 |---|---|
+| GitHub App name | your choice, must be unique on GitHub; its slug becomes the bot's `@mention` |
+| Homepage URL | any URL; `https://github.com/Zaimwa9/themis` works |
 | Webhook URL | `https://HOST/webhook`; any placeholder works if you set `THEMIS_PUBLIC_URL` later, Themis re-registers it at startup |
 | Webhook secret | a long random string, goes in `THEMIS_GH_WEBHOOK_SECRET` |
 | Checks permission | Read-only |

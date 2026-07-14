@@ -43,6 +43,13 @@ jobs:
             git commit -am "chore: sync uv.lock with release version bump"
             git push
           fi
+      # The push above uses GITHUB_TOKEN, so it cannot trigger ci.yml on the
+      # release PR either. Validate the branch's final state here instead.
+      - name: Run CI checks on the synced branch
+        run: |
+          uv sync --locked
+          uv run ruff check src tests
+          uv run pytest -q
 
   # Tags created with GITHUB_TOKEN do not trigger other workflows, so the
   # image build chains off the release job instead of a tag push.
