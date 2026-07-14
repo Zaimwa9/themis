@@ -1454,6 +1454,39 @@ async def test_discuss__untrusted_author__learning_ignored_no_footer(
     assert "🧠" not in posted
 
 
+async def test_discuss__learnings_disabled__trusted_author_not_captured(
+    service, gh, tmp_path
+):
+    """enabled: false is a full opt-out: even an OWNER's learning.json is
+    ignored, nothing is injected, and no capture instruction is emitted."""
+    gh.get_file_text.side_effect = _config_and_learnings(
+        config_text=LEARNINGS_YAML_OFF, learnings_text=to_jsonl([LEARNING])
+    )
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    seen = []
+
+    async def agent(*, prompt, workspace, **kwargs):
+        seen.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "reply.md").write_text("understood")
+        (out / "learning.json").write_text(json.dumps(
+            {"text": "Prefer the manager method.", "confidence": "high"}
+        ))
+        return "ok"
+
+    service.resolve_engine = _resolver(agent)
+
+    await service.discuss(**_discuss_kwargs(author_association="OWNER"))
+
+    assert await store.load(REPO) == []
+    assert "learning.json" not in seen[0]
+    assert "learnings.jsonl" not in seen[0]
+    posted = gh.post_issue_comment.await_args.args[2]
+    assert "🧠" not in posted
+
+
 async def test_discuss__untrusted_author__no_capture_instruction_in_prompt(
     service, gh, tmp_path
 ):
