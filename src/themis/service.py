@@ -216,8 +216,11 @@ class ReviewService:
     pending_store: PendingStore | None = None
 
     async def _fetch_repo_config(self, gh: Any, repo: str) -> RepoConfig:
-        """Behavior config from the target repo's default branch; defaults on
-        any failure (a missing or broken .themis/ must never block reviews)."""
+        """Behavior config from the target repo's default branch. When the repo
+        has none (or the read fails — a missing or broken .themis/ must never
+        block reviews), the instance-level THEMIS_DEFAULT_REPO_CONFIG applies,
+        then hardcoded defaults. A repo file replaces the instance default
+        wholesale; the two are never merged per key."""
         try:
             text = await gh.get_file_text(repo, REPO_CONFIG_PATH)
         except httpx.HTTPError as error:
@@ -225,6 +228,9 @@ class ReviewService:
                 "themis_repo_config_fetch_failed repo=%s error=%s", repo, error
             )
             text = None
+        if text is None and self.settings.default_repo_config is not None:
+            logger.info("themis_repo_config_default_used repo=%s", repo)
+            text = self.settings.default_repo_config
         return parse_repo_config(text)
 
     async def _load_learnings(

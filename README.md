@@ -286,6 +286,12 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `learnings.enabled` | `true` | `false` disables capturing, injecting, and digesting [learnings](docs/learnings.md) for this repo |
 | `learnings.digest_threshold` | `10` | pending learnings that trigger the digest PR (minimum 1) |
 
+Can't commit `.themis/config.yaml` to the target repo (yet)? Set
+`THEMIS_DEFAULT_REPO_CONFIG` on the controller to the same yaml (raw or
+base64) and it applies to every repo that has no `.themis/config.yaml` of
+its own; a committed file always wins. See
+[`docs/configuration.md`](docs/configuration.md).
+
 Talk to the bot in a PR: `@<app-slug> review` re-reviews on demand,
 `@<app-slug> review <focus>` steers the review toward a given area (the
 focus text is honored only from repo owners, org members, and

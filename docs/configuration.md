@@ -18,6 +18,7 @@ Two planes:
 | `THEMIS_AGENT_TOKEN` | yes | none | controller-to-agent bearer token; use the same random value in both containers |
 | `THEMIS_AGENT_URL` | no | `http://agent:8001` | internal URL of the isolated agent service |
 | `THEMIS_ENGINE` | no | `codex` | instance default review engine; `codex`, `claude`, or `glm` |
+| `THEMIS_DEFAULT_REPO_CONFIG` | no | unset | `.themis/config.yaml` content (raw yaml or base64 of it) used for repos that have no `.themis/config.yaml`; see below |
 | `CODEX_HOME` | no | `/data/codex` | codex auth/state directory |
 | `THEMIS_CODEX_SANDBOX` | no | `workspace-write` | codex sandbox mode; `danger-full-access` for runtimes without Landlock |
 | `CLAUDE_CODE_OAUTH_TOKEN` | agent only | unset | Claude Max token from `claude setup-token`; never set it on the controller |
@@ -78,6 +79,28 @@ learnings:
 
 A partial file deep-merges over the defaults, key by key, so you only need
 to set the fields you want to change.
+
+### Instance-level default (`THEMIS_DEFAULT_REPO_CONFIG`)
+
+When you can't (or don't want to) commit `.themis/config.yaml` to a target
+repo — trying Themis on a repo you can't push to yet — set
+`THEMIS_DEFAULT_REPO_CONFIG` on the controller to the config content, raw
+yaml or base64-encoded (base64 keeps `.env` files and compose one-liners
+sane):
+
+```bash
+THEMIS_DEFAULT_REPO_CONFIG=$(base64 <<'EOF'
+triggers:
+  auto_review: false
+EOF
+)
+```
+
+Resolution order per repo: `.themis/config.yaml` in the repo if present,
+else `THEMIS_DEFAULT_REPO_CONFIG`, else built-in defaults. A repo file
+replaces the instance default wholesale — the two are never merged key by
+key. A value that isn't valid yaml (or isn't a mapping) fails startup;
+unknown or invalid keys inside it degrade per key like a repo file would.
 
 A malformed `.themis/config.yaml`, invalid YAML, wrong types, not a
 mapping, logs a warning and Themis proceeds on full defaults. A broken
