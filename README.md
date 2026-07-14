@@ -216,10 +216,14 @@ GLM_API_KEY=<key>                      # glm engine only
 docker compose up -d
 ```
 
-For the codex engine, seed the auth volume once the agent is up:
+For the codex engine, seed the auth volume once the agent is up. The pipe
+runs as the container's unprivileged `themis` user, so ownership and `0600`
+mode come out right (`docker compose cp` would leave the file root-owned and
+unreadable to the agent):
 
 ```bash
-docker compose cp ~/.codex/auth.json agent:/data/codex/auth.json
+docker compose exec -T agent sh -c 'umask 077; cat > /data/codex/auth.json' \
+  < ~/.codex/auth.json
 ```
 
 PaaS deployment, upgrades, and the full env reference:
