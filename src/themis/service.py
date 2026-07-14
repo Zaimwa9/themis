@@ -966,13 +966,15 @@ def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
         match = _FENCE_LINE.match(line)
         if suggestion_ticks:
             pending.append(line)
-            if match and not match.group(2) and len(match.group(1)) >= suggestion_ticks:
+            if match and not match.group(2).strip() and len(match.group(1)) >= suggestion_ticks:
                 pending.clear()
                 suggestion_ticks = 0
                 removed += 1
             continue
         if match:
-            ticks, info = len(match.group(1)), match.group(2)
+            # GFM strips whitespace around the info string, so "```  suggestion"
+            # still renders as a suggestion block.
+            ticks, info = len(match.group(1)), match.group(2).strip()
             if open_ticks:
                 if not info and ticks >= open_ticks:
                     open_ticks = 0
@@ -1037,8 +1039,12 @@ def _enforce_delivery_modules(
         # The share accounts for each entry's pointer overhead and shrinks
         # below the reserve floor when there are more findings than the floor
         # allows in one comment: the `path:line` pointer of every finding
-        # outranks the prose of any single one.
+        # outranks the prose of any single one. When even the minimum share
+        # cannot fit, entries degrade to bare pointers - every finding stays
+        # addressable up to far beyond any real review.
         share = max(80, budget // len(actions.findings) - pointer_overhead)
+        if len(actions.findings) * (share + pointer_overhead) > budget:
+            share = 0
         lines = []
         for finding in actions.findings:
             body = finding["body"]

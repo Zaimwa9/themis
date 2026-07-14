@@ -2497,3 +2497,59 @@ async def test_review__inline_findings_off__many_findings_all_stay_visible(
     # many findings the share shrinks instead, so every entry stays visible.
     assert summary.count("- `a.py:3`") == 120
     assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__code_suggestions_off__padded_info_string_stripped(service, gh):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Off-by-one.**\n\n"
+        "```  suggestion\n"
+        "range(n + 1)\n"
+        "```\n"
+        "Keep this.\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    # GFM strips whitespace around the info string, so a padded fence still
+    # renders as an apply-able suggestion; `off` must catch it too.
+    assert "suggestion" not in posted
+    assert "Keep this." in posted
+
+
+async def test_review__inline_findings_off__extreme_count_falls_back_to_pointers(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": 3, "body": f"finding-{i} " + "x" * 300}
+                for i in range(500)
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    # When even the floor cannot fit, entries degrade to pointers rather than
+    # dropping tail findings past the comment cap.
+    assert summary.count("- `a.py:3`") == 500
+    assert len(summary) <= MAX_BODY_LEN
