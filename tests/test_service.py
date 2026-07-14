@@ -1420,6 +1420,24 @@ async def test_discuss__trusted_author_high_confidence__captured_with_footer(
     assert posted.endswith(LEARNING_FOOTER)
 
 
+async def test_discuss__reply_post_fails__learning_not_retained(
+    service, gh, tmp_path
+):
+    """The 🧠 footer is the capture receipt: when the reply post fails the
+    commenter saw nothing, so nothing may be remembered."""
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    gh.post_issue_comment.side_effect = _http_error(500)
+    service.resolve_engine = _resolver(_learning_reply_agent(
+        {"text": "Prefer the manager method.", "confidence": "high"}
+    ))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await service.discuss(**_discuss_kwargs())
+
+    assert await store.load(REPO) == []
+
+
 async def test_discuss__untrusted_author__learning_ignored_no_footer(
     service, gh, tmp_path
 ):

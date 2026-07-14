@@ -287,7 +287,7 @@ class ReviewService:
             )
         return effective_set(repo_entries, pending), pending
 
-    async def _capture_learning(
+    def _gate_learning(
         self,
         workspace: Path,
         repo: str,
@@ -296,7 +296,8 @@ class ReviewService:
         effective: list[Learning],
         pending: list[Learning],
     ) -> Learning | None:
-        """Gate and persist the agent's learning proposal, if any.
+        """Gate the agent's learning proposal; persistence happens separately,
+        only after the 🧠-footered reply lands (see _persist_learning).
 
         Every rejection is logged, never raised: a bad proposal must not
         fail the discussion job whose reply already exists."""
@@ -329,7 +330,7 @@ class ReviewService:
         if supersedes and any(p.supersedes == supersedes for p in pending):
             logger.info("themis_learning_rejected repo=%s reason=supersede-race", repo)
             return None
-        learning = new_learning(
+        return new_learning(
             text=proposal["text"],
             paths=tuple(proposal["paths"]),
             learnt_from=author_login,
@@ -337,19 +338,24 @@ class ReviewService:
             created_at=datetime.now(UTC).isoformat(timespec="seconds"),
             supersedes=supersedes,
         )
+
+    async def _persist_learning(self, repo: str, learning: Learning) -> bool:
+        """Store a gated learning; called only after its reply posted, so a
+        failed reply never retains memory the commenter was not shown.
+
+        The inverse failure (footer posted, store write fails) merely
+        over-promises: the warning below surfaces it and the human can
+        re-state the rule."""
         assert self.pending_store is not None  # gated by caller
         try:
-            # Persists even if the reply post below fails, so a learning can
-            # occasionally land without its 🧠 footer — the digest PR still
-            # surfaces it.
             await self.pending_store.append(repo, learning)
         except OSError as error:
             logger.warning(
                 "themis_learning_store_failed repo=%s error=%s", repo, error
             )
-            return None
+            return False
         logger.info("themis_learning_captured repo=%s id=%s", repo, learning.id)
-        return learning
+        return True
 
     async def _flush_digest(self, gh: Any, repo: str, threshold: int) -> None:
         """Land pending learnings as one digest PR; best-effort.
@@ -603,7 +609,7 @@ class ReviewService:
                     return
                 captured = None
                 if capture:
-                    captured = await self._capture_learning(
+                    captured = self._gate_learning(
                         workspace, repo, pr_number, author_login, learnings, pending
                     )
                 reply = redact_outbound(reply)
@@ -619,7 +625,9 @@ class ReviewService:
                         )
                     else:
                         await post_gh.post_issue_comment(repo, pr_number, reply)
-                    if captured is not None:
+                    if captured is not None and await self._persist_learning(
+                        repo, captured
+                    ):
                         await self._flush_digest(
                             post_gh, repo, repo_config.learnings.digest_threshold
                         )

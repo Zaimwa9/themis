@@ -52,9 +52,13 @@ Themis deletes its own branch automatically.
 {"id": "lrn-a3f9c2d1", "text": "Prefer FeatureState.objects.get_live_feature_states(...) over duplicating the live filter.", "paths": ["api/features/models.py"], "learnt_from": "dev", "pr": 42, "created_at": "2026-07-13T09:00:00+00:00"}
 ```
 
-`paths` scopes the rule ([] = repo-wide); `supersedes` (optional) points at
-a learning this one replaces. Malformed lines are skipped with a warning —
-a broken file never blocks reviews.
+`paths` names the files or directories the rule applies to ([] = repo-wide).
+Every learning is handed to the reviewing model, which is instructed to
+apply path-scoped rules only where the change touches those paths — there
+is no mechanical pre-filter (deliberately: model-written paths are fuzzy,
+and a strict filter would silently drop relevant conventions).
+`supersedes` (optional) points at a learning this one replaces. Malformed
+lines are skipped with a warning — a broken file never blocks reviews.
 
 ## Opting out
 
