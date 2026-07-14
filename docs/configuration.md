@@ -87,22 +87,22 @@ to set the fields you want to change.
 When you can't (or don't want to) commit `.themis/config.yaml` to a target
 repo — trying Themis on a repo you can't push to yet — set
 `THEMIS_DEFAULT_REPO_CONFIG` on the controller to the config content, raw
-yaml or base64-encoded (base64 keeps `.env` files and compose one-liners
-sane):
+yaml or base64-encoded. A shell assignment is not seen by a later
+`docker compose up`; put the encoded value in the deployment's `.env`
+(single line, like the private key):
 
 ```bash
-THEMIS_DEFAULT_REPO_CONFIG=$(base64 <<'EOF'
-triggers:
-  auto_review: false
-EOF
-)
+printf 'triggers:\n  auto_review: false\n' | base64 | tr -d '\n'
+# then in .env next to the compose file:
+# THEMIS_DEFAULT_REPO_CONFIG=dHJpZ2dlcnM6CiAgYXV0b19yZXZpZXc6IGZhbHNlCg==
 ```
 
 Resolution order per repo: `.themis/config.yaml` in the repo if present,
 else `THEMIS_DEFAULT_REPO_CONFIG`, else built-in defaults. A repo file
 replaces the instance default wholesale — the two are never merged key by
 key. A value that isn't valid yaml (or isn't a mapping) fails startup;
-unknown or invalid keys inside it degrade per key like a repo file would.
+what's inside is handled leniently like a repo file: unknown keys are
+ignored and invalid values degrade to defaults with a warning.
 
 A malformed `.themis/config.yaml`, invalid YAML, wrong types, not a
 mapping, logs a warning and Themis proceeds on full defaults. A broken
