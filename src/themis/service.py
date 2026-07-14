@@ -943,7 +943,12 @@ def _bot_in_thread(thread: dict[str, Any], bot_login: str) -> bool:
     return False
 
 
-_SUGGESTION_BLOCK = re.compile(r"```suggestion\n.*?```\n?", re.DOTALL)
+# Fence-line anchored on both ends: a literal ```suggestion inside a line of
+# an ordinary code sample must never start a match and eat through the next
+# closing fence.
+_SUGGESTION_BLOCK = re.compile(
+    r"^```suggestion[ \t]*\n.*?^```[ \t]*$\n?", re.DOTALL | re.MULTILINE
+)
 
 
 def _enforce_delivery_modules(
@@ -973,13 +978,24 @@ def _enforce_delivery_modules(
             "themis_inline_findings_folded repo=%s pr=%s count=%d",
             repo, pr_number, len(actions.findings),
         )
-        lines = "\n".join(
-            f"- `{f['path']}:{f['line']}` {f['body']}" for f in actions.findings
-        )
-        actions.summary += (
+        heading = (
             "\n\n##### Findings (inline comments are disabled for this"
-            f" repository)\n{lines}"
+            " repository)\n"
         )
+        # The summary is the only delivery surface here and it is one GitHub
+        # comment: give every finding an equal share of the remaining budget
+        # so the final length cap can never drop a whole finding from the
+        # tail. The floor keeps each entry meaningful; a pathological count
+        # still falls back to the global truncation guard at posting time.
+        budget = MAX_BODY_LEN - len(actions.summary) - len(heading) - 512
+        share = max(1000, budget // len(actions.findings))
+        lines = []
+        for finding in actions.findings:
+            body = finding["body"]
+            if len(body) > share:
+                body = body[:share] + "\n[finding truncated to fit the summary comment]"
+            lines.append(f"- `{finding['path']}:{finding['line']}` {body}")
+        actions.summary += heading + "\n".join(lines)
         actions.findings = []
 
 

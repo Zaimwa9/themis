@@ -2290,3 +2290,63 @@ async def test_review__code_suggestions_off__suggestion_blocks_stripped(service,
     body = gh.post_review.await_args.kwargs["comments"][0]["body"]
     assert "```suggestion" not in body
     assert "Off-by-one" in body
+
+
+async def test_review__code_suggestions_off__literal_marker_in_code_sample_survives(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Regex too broad.**\n\n"
+        "Inline mention of ```suggestion\n"
+        "must stay as prose.\n\n"
+        "```python\n"
+        "code_sample()\n"
+        "```\n"
+        "Keep this text.\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    # The literal marker sits inside a line of an ordinary code sample; only
+    # real suggestion fences (marker alone on a fence line) may be stripped.
+    assert posted == body
+
+
+async def test_review__inline_findings_off__every_folded_finding_stays_visible(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": 3, "body": "first " + "x" * 64_000},
+                {"path": "a.py", "line": 3, "body": "second " + "y" * 64_000},
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    # Both findings must remain visible under the comment cap; tail truncation
+    # dropping the second finding would break the never-dropped promise.
+    assert "first" in summary
+    assert "second" in summary
+    assert len(summary) <= MAX_BODY_LEN
