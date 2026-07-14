@@ -4,7 +4,12 @@ import json
 import httpx
 import pytest
 
-from themis.github.client import SUMMARY_MARKER, GitHubClient, GitHubGraphQLError
+from themis.github.client import (
+    MAX_COMMENT_PAGES,
+    SUMMARY_MARKER,
+    GitHubClient,
+    GitHubGraphQLError,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -639,3 +644,36 @@ async def test_list_review_threads__long_thread__follows_comment_pages():
     assert [n["databaseId"] for n in nodes] == [1, 2, 3]
     assert requests[1]["variables"] == {"id": "T_1", "cursor": "CC_1"}
     assert "authorAssociation" in requests[1]["query"]
+
+
+async def test_list_review_threads__runaway_thread__comment_pages_bounded():
+    node_queries = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal node_queries
+        payload = json.loads(request.content)
+        if "reviewThreads" in payload["query"]:
+            return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [{
+                        "id": "T_1", "isResolved": False, "resolvedBy": None,
+                        "path": "a.py", "line": 3,
+                        "comments": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "C_0"},
+                            "nodes": [{"databaseId": 0, "body": "root"}],
+                        },
+                    }],
+                }}}}})
+        node_queries += 1
+        return httpx.Response(200, json={"data": {"node": {"comments": {
+            "pageInfo": {"hasNextPage": True, "endCursor": f"C_{node_queries}"},
+            "nodes": [{"databaseId": node_queries, "body": "reply"}],
+        }}}})
+
+    threads = await _client(handler).list_review_threads("acme/widgets", 7)
+
+    # A reply-heavy PR must not stall the review job on one thread: the
+    # traversal is bounded, keeping what was fetched so far.
+    assert node_queries == MAX_COMMENT_PAGES
+    assert len(threads[0]["comments"]["nodes"]) == 1 + MAX_COMMENT_PAGES

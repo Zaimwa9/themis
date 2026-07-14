@@ -1,14 +1,22 @@
 """GitHub REST + GraphQL client for themis posting and reads."""
 
 import base64
+import logging
 from typing import Any
 
 import httpx
 
 from themis.github.auth import GITHUB_API_URL
 
+logger = logging.getLogger(__name__)
+
 SUMMARY_MARKER = "<!-- themis:summary -->"
 _PER_PAGE = 100
+# Ceiling on extra comment pages fetched per review thread (100 comments
+# each, on top of the 100 inlined in the threads query). High enough that no
+# real conversation hits it; low enough that one runaway thread cannot stall
+# the review job before it posts.
+MAX_COMMENT_PAGES = 10
 _FAILED_CHECK_CONCLUSIONS = {
     "action_required",
     "cancelled",
@@ -259,10 +267,18 @@ class GitHubClient:
         The acknowledgment rule reads acceptance replies straight from
         threads.json; a windowed comment list would silently drop an
         acceptance in the middle of a long thread and keep its finding
-        open forever."""
+        open forever. The traversal is still bounded (MAX_COMMENT_PAGES)
+        so one runaway thread can never stall the review job."""
         comments = thread.setdefault("comments", {"nodes": []})
         page_info = comments.get("pageInfo") or {}
+        pages = 0
         while page_info.get("hasNextPage"):
+            if pages >= MAX_COMMENT_PAGES:
+                logger.warning(
+                    "themis_thread_comments_truncated thread=%s pages=%d",
+                    thread.get("id"), pages,
+                )
+                break
             data = await self._graphql(
                 _THREAD_COMMENTS_QUERY,
                 {"id": thread["id"], "cursor": page_info.get("endCursor")},
@@ -270,6 +286,7 @@ class GitHubClient:
             page = data["node"]["comments"]
             comments["nodes"].extend(page["nodes"])
             page_info = page.get("pageInfo") or {}
+            pages += 1
         comments.pop("pageInfo", None)
         return thread
 

@@ -300,7 +300,7 @@ asks a question, and replies inside a thread the bot already posted in are
 answered automatically, no mention needed.
 
 A standing finding doesn't hold the verdict hostage forever: resolve the
-bot's thread on GitHub (anyone can), or reply in it accepting the trade-off
+bot's thread on GitHub (the PR author or someone with write access can), or reply in it accepting the trade-off
 (repo owners, org members, and collaborators only), and the next review moves
 that finding to a `⚖️ Acknowledged` one-liner — naming who resolved or
 accepted it — and the verdict is computed from what's still open. If the code
