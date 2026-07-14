@@ -108,6 +108,15 @@ interesting to steal and nowhere to send it:
 your markers. Match means `EngineQuotaError`: Themis stops retrying and
 posts "usage limit reached, mention the bot once it resets".
 
+- Know the trade-off before adding any marker: the scanned tail is
+  agent-visible output, so a prompt-steered agent can echo any text pattern
+  you pick, and a marker echo coinciding with an unrelated nonzero exit
+  misclassifies a retryable failure as exhausted quota. An empty tuple is a
+  legitimate choice (the glm engine ships one): exhaustion then costs one
+  wasted retry and a generic failure comment instead of the tailored quota
+  comment — safe, just less polished. #28 tracks classifying from
+  provider-structured output instead. Only add markers you have validated
+  against real limit-hits.
 - Use only *plan/window exhausted* diagnostics with a documented reset
   (session, hour, week, month). Quote the provider's error-code reference in
   a comment above the tuple.

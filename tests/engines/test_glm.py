@@ -87,33 +87,18 @@ async def test_run__config_dir__isolated(tmp_path, monkeypatch, workspace):
 @pytest.mark.parametrize(
     "message",
     [
+        # True plan exhaustion (Z.ai 1308/1310/1309): retryable by design until
+        # quota can be classified from provider-structured output (#28) —
+        # any text marker here could be echoed by a prompt-steered agent.
         "Usage limit reached for the past 5 hours. Resets at 18:00.",
         "Weekly/Monthly Limit Exhausted. Your limit will reset at Monday.",
-        "Weekly Limit Exhausted. Your limit will reset at Monday.",
-        "Monthly Limit Exhausted. Your limit will reset at the 1st.",
         "Your GLM Coding Plan package has expired.",
-    ],
-)
-async def test_run__plan_exhausted__raises_quota_error(
-    tmp_path, monkeypatch, workspace, message
-):
-    _fake_cli(tmp_path, monkeypatch, f'echo "{message}"; exit 1')
-
-    with pytest.raises(EngineQuotaError):
-        await _run(workspace)
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        # Z.ai code 1302 wording; must stay retryable.
+        # Transient throttling (Z.ai 1302) and generic agent prose.
         "Rate limit reached for requests",
-        # Contains the bare substring "limit exhausted" but no window-qualified
-        # marker; generic agent prose must never match.
         "the retry limit exhausted while calling the API",
     ],
 )
-async def test_run__transient_or_generic_prose__is_retryable_engine_error(
+async def test_run__any_failure__is_retryable_engine_error(
     tmp_path, monkeypatch, workspace, message
 ):
     _fake_cli(tmp_path, monkeypatch, f'echo "{message}"; exit 1')
