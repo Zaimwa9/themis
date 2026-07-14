@@ -2553,3 +2553,67 @@ async def test_review__inline_findings_off__extreme_count_falls_back_to_pointers
     # dropping tail findings past the comment cap.
     assert summary.count("- `a.py:3`") == 500
     assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__code_suggestions_off__tilde_fenced_suggestion_stripped(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Off-by-one.**\n\n"
+        "~~~suggestion\n"
+        "range(n + 1)\n"
+        "~~~\n"
+        "Keep this.\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    assert "suggestion" not in posted
+    assert "Keep this." in posted
+
+
+async def test_review__inline_findings_off__long_paths_do_not_drop_tail(service, gh):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+    long_path = "src/" + "deeply/nested/" * 14 + "module.py"  # ~200 chars
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": long_path, "line": i + 1, "body": f"finding-{i} " + "x" * 400}
+                for i in range(200)
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    async def any_paths(gh_client, repo, pr_number):
+        return None  # fail-open: no path filtering
+
+    async def any_lines(workspace, base_ref):
+        return None
+
+    service.changed_paths = any_paths
+    service.changed_lines = any_lines
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    # Budgeting must use the real pointer lengths: long paths shrink the
+    # share, they never push tail findings past the comment cap.
+    assert summary.count(f"- `{long_path}:") == 200
+    assert len(summary) <= MAX_BODY_LEN

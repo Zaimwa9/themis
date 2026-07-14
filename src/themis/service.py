@@ -946,44 +946,57 @@ def _bot_in_thread(thread: dict[str, Any], bot_login: str) -> bool:
     return False
 
 
-# GFM allows fence lines to be indented up to three spaces.
-_FENCE_LINE = re.compile(r"^ {0,3}(`{3,})([^`\r\n]*?)[ \t]*\r?\n?$")
+# GFM allows fence lines to be indented up to three spaces; a fence is a run
+# of backticks or tildes.
+_FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*?)[ \t]*\r?\n?$")
 
 
 def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
     """Remove real GitHub suggestion blocks; leave quoted ones alone.
 
-    Line-based fence tracking rather than a regex: a ```suggestion fence
+    Line-based fence tracking rather than a regex: a suggestion fence
     inside an enclosing longer fence (a Markdown example quoting one) is
-    prose about a suggestion, not a suggestion block. An unclosed
-    suggestion fence is kept verbatim - never strip what cannot be parsed."""
+    prose about a suggestion, not a suggestion block. A closing fence must
+    match its opener's character, per GFM. An unclosed suggestion fence is
+    kept verbatim - never strip what cannot be parsed."""
     out: list[str] = []
     pending: list[str] = []  # lines of a suggestion block until it closes
-    open_ticks = 0           # enclosing non-suggestion fence length, 0 = none
-    suggestion_ticks = 0     # opening fence length of the pending block
+    open_fence: tuple[str, int] | None = None  # enclosing non-suggestion fence
+    suggestion: tuple[str, int] | None = None  # opening fence of pending block
     removed = 0
     for line in text.splitlines(keepends=True):
         match = _FENCE_LINE.match(line)
-        if suggestion_ticks:
+        fence: tuple[str, int, str] | None = None
+        if match:
+            # GFM strips whitespace around the info string ("```  suggestion"
+            # still renders as a suggestion block), and a backtick fence's
+            # info string cannot itself contain backticks.
+            run, info = match.group(1), match.group(2).strip()
+            if not (run[0] == "`" and "`" in info):
+                fence = (run[0], len(run), info)
+        if suggestion:
             pending.append(line)
-            if match and not match.group(2).strip() and len(match.group(1)) >= suggestion_ticks:
+            if (
+                fence
+                and not fence[2]
+                and fence[0] == suggestion[0]
+                and fence[1] >= suggestion[1]
+            ):
                 pending.clear()
-                suggestion_ticks = 0
+                suggestion = None
                 removed += 1
             continue
-        if match:
-            # GFM strips whitespace around the info string, so "```  suggestion"
-            # still renders as a suggestion block.
-            ticks, info = len(match.group(1)), match.group(2).strip()
-            if open_ticks:
-                if not info and ticks >= open_ticks:
-                    open_ticks = 0
+        if fence:
+            char, length, info = fence
+            if open_fence:
+                if not info and char == open_fence[0] and length >= open_fence[1]:
+                    open_fence = None
             elif info == "suggestion":
-                suggestion_ticks = ticks
+                suggestion = (char, length)
                 pending.append(line)
                 continue
             else:
-                open_ticks = ticks
+                open_fence = (char, length)
         out.append(line)
     out.extend(pending)  # unclosed suggestion fence: keep, strip nothing
     return "".join(out), removed
@@ -1027,8 +1040,13 @@ def _enforce_delivery_modules(
         # drop a whole finding from the tail. A pathological finding count
         # still falls back to the global truncation guard at posting time.
         floor = 600
-        pointer_overhead = 64  # "- `path:line` " plus the truncation marker
-        reserve = len(heading) + len(actions.findings) * (floor + pointer_overhead) + 512
+        marker = "\n[finding truncated to fit the summary comment]"
+        pointers = [f"- `{f['path']}:{f['line']}` " for f in actions.findings]
+        # Real pointer lengths, not an estimate: long paths shrink the share,
+        # they never push tail findings past the cap. `fixed` is everything a
+        # worst-case entry costs beyond its body share.
+        fixed = sum(len(p) + 1 for p in pointers) + len(pointers) * len(marker)
+        reserve = len(heading) + fixed + len(pointers) * floor + 512
         if len(actions.summary) > MAX_BODY_LEN - reserve:
             keep = max(0, MAX_BODY_LEN - reserve)
             actions.summary = (
@@ -1036,21 +1054,16 @@ def _enforce_delivery_modules(
                 + "\n[assessment truncated to keep folded findings visible]"
             )
         budget = MAX_BODY_LEN - len(actions.summary) - len(heading) - 512
-        # The share accounts for each entry's pointer overhead and shrinks
-        # below the reserve floor when there are more findings than the floor
-        # allows in one comment: the `path:line` pointer of every finding
-        # outranks the prose of any single one. When even the minimum share
-        # cannot fit, entries degrade to bare pointers - every finding stays
-        # addressable up to far beyond any real review.
-        share = max(80, budget // len(actions.findings) - pointer_overhead)
-        if len(actions.findings) * (share + pointer_overhead) > budget:
-            share = 0
+        # Equal body share of what remains after the fixed costs; with enough
+        # findings it drops to zero and entries degrade to bare pointers -
+        # every finding stays addressable up to far beyond any real review.
+        share = max(0, (budget - fixed) // len(pointers))
         lines = []
-        for finding in actions.findings:
+        for pointer, finding in zip(pointers, actions.findings, strict=True):
             body = finding["body"]
             if len(body) > share:
-                body = body[:share] + "\n[finding truncated to fit the summary comment]"
-            lines.append(f"- `{finding['path']}:{finding['line']}` {body}")
+                body = body[:share] + marker
+            lines.append(pointer + body)
         actions.summary += heading + "\n".join(lines)
         actions.findings = []
 
