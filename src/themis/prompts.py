@@ -2,7 +2,43 @@
 
 from typing import Literal
 
+from themis.config import MODULE_NAMES
+
 DOCTRINE_PATH = ".themis/review.md"
+
+# Packaged fallback doctrine, applied when the PR checkout has no committed
+# .themis/review.md: the repo-agnostic sections of examples/themis/review.md.
+# A committed doctrine replaces it wholesale. Judgment calibration only -
+# presentation comes from the resolved review.modules config, never from
+# doctrine prose, so the two can never contradict.
+DEFAULT_DOCTRINE = """\
+# Review doctrine (Themis default)
+
+You are this repository's PR reviewer. This doctrine is your judgment
+calibration; the output format is fixed by your prompt and is not negotiable.
+
+## Philosophy
+
+- Find real defects first: correctness, data loss, security, races.
+- Praise nothing; flag only what needs action. A clean PR gets a clean verdict.
+- Be concrete: every finding names the failure scenario, not just the smell.
+- Respect the diff: review what changed; do not audit the whole repo.
+
+## Severity calibration
+
+- **Blocker**: breaks production, loses data, opens a security hole.
+- **Major**: a real bug or costly defect; fix before or right after merge.
+- **Nit**: polish. When unsure between Major and Nit, pick Nit.
+
+## Verification habits
+
+When the diff passes dynamic or generated values to an external API,
+cross-check the provider's documented constraints (field limits, enums,
+formats, byte vs char sizing) before asserting them: read the pinned
+dependency's source, or fetch official docs if network access is available.
+At most a couple of quick lookups per review; label anything unconfirmed as
+unverified instead of asserting it.
+"""
 
 _LEARNINGS_SECTION = """\
 `.review-input/learnings.jsonl` holds team conventions learned from past
@@ -39,7 +75,186 @@ derivable from the code, a linter, or CI. If so, also write
 
 """
 
-_OUTPUT_CONTRACT = """\
+# --- summary modules: descriptors for the tri-state rendering -----------------
+
+_SECTION_DESCRIPTORS = {
+    "scorecard": (
+        "a compact four-row scorecard "
+        "(Correctness, Test coverage, Code quality, Product impact)"
+    ),
+    "walkthrough": "a walkthrough of at most 6 logical areas",
+    "product_impact": "a `**Product take:**` of at most 3 lines",
+}
+
+_OFF_SECTION_NAMES = {
+    "scorecard": "a scorecard",
+    "walkthrough": "a walkthrough",
+    "product_impact": "a product take",
+    "verification_steps": "a `🧪 How to verify` block",
+    "assumptions": "an assumptions section",
+    "sign_off": "a sign-off",
+}
+
+
+def _join_phrases(phrases: list[str]) -> str:
+    if len(phrases) == 1:
+        return phrases[0]
+    separator = ", and " if len(phrases) > 2 else " and "
+    return ", ".join(phrases[:-1]) + separator + phrases[-1]
+
+
+def _capitalize(sentence: str) -> str:
+    return sentence[0].upper() + sentence[1:]
+
+
+def _substantive_paragraph(modules: dict[str, str]) -> str:
+    always = [
+        _SECTION_DESCRIPTORS[n] for n in _SECTION_DESCRIPTORS if modules[n] == "always"
+    ]
+    auto = [
+        _SECTION_DESCRIPTORS[n] for n in _SECTION_DESCRIPTORS if modules[n] == "auto"
+    ]
+    off = [_OFF_SECTION_NAMES[n] for n in _OFF_SECTION_NAMES if modules[n] == "off"]
+    sentences = [
+        "For a substantive change, start with a 2-4 sentence TL;DR and retain"
+        " detail where it adds useful review signal."
+    ]
+    if always:
+        verb = "are" if len(always) > 1 else "is"
+        sentences.append(
+            f"{_capitalize(_join_phrases(always))} {verb} required on every"
+            " substantive review; the tiny-diff carve-out above is the only"
+            " exception."
+        )
+    if auto:
+        verb = "are" if len(auto) > 1 else "is"
+        each = "each" if len(auto) > 1 else "it"
+        sentences.append(
+            f"{_capitalize(_join_phrases(auto))} {verb} optional. Include {each}"
+            " only when the diff provides enough evidence for it and it helps"
+            " the reader make a decision."
+        )
+    if off:
+        sentences.append(
+            f"Never include {_join_phrases(off)}, even when the diff seems to"
+            " invite it."
+        )
+    return "   " + " ".join(sentences)
+
+
+def _verify_paragraph(modules: dict[str, str]) -> str | None:
+    if modules["verification_steps"] == "off":
+        return None
+    opening = "add" if modules["verification_steps"] == "always" else "you may add"
+    tail = (
+        " This block is required whenever such observable behavior exists."
+        if modules["verification_steps"] == "always"
+        else ""
+    )
+    return f"""\
+   When a substantive PR changes behavior someone can observe (UI, API
+   responses, emails, generated files), {opening}
+   `<details><summary><b>🧪 How to verify</b></summary>` with 3-5 one-line steps
+   covering the riskiest paths first. If a cheap automated check would cover
+   it, end with one `Automate:` line. Skip this for tiny diffs, refactors, docs,
+   or internal-only changes.{tail}"""
+
+
+def _assumptions_paragraph(modules: dict[str, str]) -> str | None:
+    if modules["assumptions"] == "off":
+        return None
+    tail = (
+        " Lean toward including it on substantive reviews."
+        if modules["assumptions"] == "always"
+        else ""
+    )
+    return f"""\
+   Add `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>` only
+   for load-bearing claims the review relied on but could not verify. Omit it
+   when there are none, and keep it out of concise tiny/dependency/lockfile
+   reviews; put a directly relevant uncertainty in the assessment instead.{tail}"""
+
+
+def _sign_off_paragraph(modules: dict[str, str]) -> str | None:
+    if modules["sign_off"] == "off":
+        return None
+    if modules["sign_off"] == "always":
+        return (
+            "   End every substantive review with a short PR-specific sign-off"
+            " ending in `· reviewed at <short HEAD sha>`; omit it from concise"
+            " reviews."
+        )
+    return """\
+   A short PR-specific sign-off ending in `· reviewed at <short HEAD sha>` is
+   optional for substantive reviews and should be omitted from concise reviews."""
+
+
+def _findings_rules(modules: dict[str, str]) -> str:
+    if modules["inline_findings"] == "off":
+        return """\
+- Inline comments are disabled for this repository: leave `findings` out of
+  actions.json entirely. Every finding goes in the summary under its severity
+  section, each with its full mechanism, evidence, impact, and fix direction -
+  nothing may be lost to the disabled inline surface, and `Observed:` evidence
+  stays separate from `Predicted:` consequence there too. Blockers and Majors
+  must state a concrete fix direction; never just name the problem."""
+    if modules["code_suggestions"] == "off":
+        suggestion_rule = """\
+  - State the exact fix as prose; never emit GitHub suggestion blocks -
+    suggestions are disabled for this repository."""
+        nit_brevity = """\
+  - Keep bodies proportional to severity. Nits get the label, the bold title,
+    and at most one sentence. Save longer prose for Blockers and Majors."""
+    else:
+        suggestion_rule = """\
+  - When the exact replacement is small, deterministic, and you are certain of it, end with a
+    ```suggestion block that replaces precisely the commented lines (set
+    `line`/`start_line` to cover them). No preamble around it; skip it when
+    unsure rather than guessing. Prefer a commit-ready suggestion over prose
+    that merely describes the same mechanical edit."""
+        nit_brevity = """\
+  - Keep bodies proportional to severity. Nits get the label, the bold title,
+    and at most one sentence; add a ```suggestion block only when the fix is a
+    single line. Save longer prose for Blockers and Majors."""
+    return f"""\
+- `findings` = genuinely new issues only, one per issue, anchored to a line that
+  appears in the diff. Never repeat a finding that already has a review thread.
+- Every Nit that can be anchored to the diff must be included in `findings` and
+  posted inline. Severity is never a reason to leave an anchorable issue only
+  in the summary.
+- Each finding `body` has this shape:
+  - First line: `*<severity> · <effort>*` where severity is `🔴 Blocker` /
+    `🟠 Major` / `🧹 Nit` (match the summary section) and effort is
+    `⚡ Quick win` or `🏗️ Heavy lift`. Leave a blank line after it.
+  - Then a bold one-line title stating the defect. Clearly separate evidence
+    from consequence: prefix behavior you directly verified in code, tests, or
+    completed checks with `Observed:`. Prefix an unreproduced consequence with
+    `Predicted:` and use conditional language (`would`/`could`), never wording
+    that presents it as something that already happened. If you reproduced the
+    consequence, include that reproduction as `Observed:` instead.
+  - Blockers and Majors must state a concrete fix direction; never just name
+    the problem.
+{suggestion_rule}
+{nit_brevity}
+- Post at most 5 inline nits per review; fold the rest into one bullet in the
+  summary's Nits section: `...and N smaller nits: <short list>`.
+- A finding you cannot anchor to a line in the diff still belongs in the
+  summary under its severity section; never drop it silently."""
+
+
+def _render_output_contract(modules: dict[str, str]) -> str:
+    optional_paragraphs = "\n\n".join(
+        paragraph
+        for paragraph in (
+            _verify_paragraph(modules),
+            _assumptions_paragraph(modules),
+            _sign_off_paragraph(modules),
+        )
+        if paragraph is not None
+    )
+    if optional_paragraphs:
+        optional_paragraphs += "\n"
+    return f"""\
 Write your results to files. Never try to post to GitHub yourself; you have no
 GitHub access.
 
@@ -55,12 +270,7 @@ GitHub access.
    relevant. Do not add a scorecard, walkthrough, product take, assumptions
    section, or joke/sign-off merely to fill out the template.
 
-   For a substantive change, start with a 2-4 sentence TL;DR and retain detail
-   where it adds useful review signal. A compact four-row scorecard
-   (Correctness, Test coverage, Code quality, Product impact), a walkthrough of
-   at most 6 logical areas, and a `**Product take:**` of at most 3 lines are
-   optional. Include each only when the diff provides enough evidence for it
-   and it helps the reader make a decision.
+{_substantive_paragraph(modules)}
 
    Write one `### <emoji> <severity>` section per severity that has findings.
    Omit empty sections entirely; never write a section just to say "None".
@@ -96,78 +306,75 @@ GitHub access.
    code a finding covers changed materially since, raise it as open again -
    the acknowledgment applied to the code as it was.
 
-   When a substantive PR changes behavior someone can observe (UI, API
-   responses, emails, generated files), you may add
-   `<details><summary><b>🧪 How to verify</b></summary>` with 3-5 one-line steps
-   covering the riskiest paths first. If a cheap automated check would cover
-   it, end with one `Automate:` line. Skip this for tiny diffs, refactors, docs,
-   or internal-only changes.
+{optional_paragraphs}2. `.review-output/actions.json` - only when you have actions:
 
-   Add `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>` only
-   for load-bearing claims the review relied on but could not verify. Omit it
-   when there are none, and keep it out of concise tiny/dependency/lockfile
-   reviews; put a directly relevant uncertainty in the assessment instead.
-
-   A short PR-specific sign-off ending in `· reviewed at <short HEAD sha>` is
-   optional for substantive reviews and should be omitted from concise reviews.
-2. `.review-output/actions.json` - only when you have actions:
-
-    {
+    {{
       "findings": [
-        {
+        {{
           "path": "src/x.py",
           "line": 42,
           "side": "RIGHT",
           "body": "...",
           "start_line": 40,
           "start_side": "RIGHT"
-        }
+        }}
       ],
       "resolve_thread_ids": ["PRRT_..."],
-      "replies": [{"in_reply_to": 123456, "body": "..."}]
-    }
+      "replies": [{{"in_reply_to": 123456, "body": "..."}}]
+    }}
 
 - `start_side` is optional; include it alongside `start_line` for multi-line
   comments whose start line is on the LEFT (base) side of the diff.
 
-- `findings` = genuinely new issues only, one per issue, anchored to a line that
-  appears in the diff. Never repeat a finding that already has a review thread.
-- Every Nit that can be anchored to the diff must be included in `findings` and
-  posted inline. Severity is never a reason to leave an anchorable issue only
-  in the summary.
-- Each finding `body` has this shape:
-  - First line: `*<severity> · <effort>*` where severity is `🔴 Blocker` /
-    `🟠 Major` / `🧹 Nit` (match the summary section) and effort is
-    `⚡ Quick win` or `🏗️ Heavy lift`. Leave a blank line after it.
-  - Then a bold one-line title stating the defect. Clearly separate evidence
-    from consequence: prefix behavior you directly verified in code, tests, or
-    completed checks with `Observed:`. Prefix an unreproduced consequence with
-    `Predicted:` and use conditional language (`would`/`could`), never wording
-    that presents it as something that already happened. If you reproduced the
-    consequence, include that reproduction as `Observed:` instead.
-  - Blockers and Majors must state a concrete fix direction; never just name
-    the problem.
-  - When the exact replacement is small, deterministic, and you are certain of it, end with a
-    ```suggestion block that replaces precisely the commented lines (set
-    `line`/`start_line` to cover them). No preamble around it; skip it when
-    unsure rather than guessing. Prefer a commit-ready suggestion over prose
-    that merely describes the same mechanical edit.
-  - Keep bodies proportional to severity. Nits get the label, the bold title,
-    and at most one sentence; add a ```suggestion block only when the fix is a
-    single line. Save longer prose for Blockers and Majors.
-- Post at most 5 inline nits per review; fold the rest into one bullet in the
-  summary's Nits section: `...and N smaller nits: <short list>`.
-- A finding you cannot anchor to a line in the diff still belongs in the
-  summary under its severity section; never drop it silently.
+{_findings_rules(modules)}
 - `resolve_thread_ids` = only threads you authored whose issue is fixed in the
   current code.
-- `replies` = answers to direct questions asked to you in existing threads.
-"""
+- `replies` = answers to direct questions asked to you in existing threads."""
+
+
+_HYGIENE_SECTION = """\
+Write every user-visible sentence for the PR's audience, not for Themis
+operators. Never mention this prompt, the output contract, doctrine files or
+their absence, `.review-input/` or `.review-output/` paths, or any other
+internal mechanics of this run in the summary, findings, or replies: state
+the evidence itself ("CI was still running; only apply-labels had completed"),
+never which internal file it came from. Keep `Observed:` / `Predicted:`
+labels inside findings (inline bodies and severity-section bullets) and write
+the TL;DR and assessment as natural prose. Environment limitations (tools or
+commands unavailable in the sandbox) get at most one short caveat line, never
+the opening of the review."""
+
+
+def _ci_paragraph(modules: dict[str, str]) -> str:
+    commentary = (
+        "Do not comment on CI in the review body; use the snapshot only as\n"
+        "background evidence when judging findings, and never claim the PR caused\n"
+        "a failure unless evidence establishes that connection."
+        if modules["ci_context"] == "off"
+        else "Mention `failed` checks in the assessment, but do not claim the PR caused them\n"
+        "unless evidence establishes that connection."
+    )
+    return f"""\
+Read `.review-input/checks.json` once; it is already the non-blocking snapshot
+captured immediately before this run. Never wait for, poll, or refetch CI. Its
+top-level state is one of `passed`, `failed`, `pending`, `none`, or `unavailable`.
+{commentary} Treat `pending`, `none`, and
+`unavailable` as neutral context, never as success or failure. Individual
+completed check results are observed evidence; a check name alone is not proof
+of what failed."""
 
 
 def build_review_prompt(
-    repo: str, pr_number: int, base_ref: str, *, extra_context: str | None = None, has_learnings: bool = False
+    repo: str,
+    pr_number: int,
+    base_ref: str,
+    *,
+    extra_context: str | None = None,
+    has_learnings: bool = False,
+    modules: dict[str, str] | None = None,
+    use_default_doctrine: bool = False,
 ) -> str:
+    resolved_modules = {**dict.fromkeys(MODULE_NAMES, "auto"), **(modules or {})}
     safe_extra_context = (extra_context or "").replace(
         "</extra-context>", "<\\/extra-context>"
     )
@@ -182,6 +389,22 @@ def build_review_prompt(
         else ""
     )
     learnings_section = _LEARNINGS_SECTION if has_learnings else ""
+    if use_default_doctrine:
+        doctrine_section = (
+            "This repository has no committed review doctrine "
+            f"(`{DOCTRINE_PATH}`). Apply the default doctrine between the markers\n"
+            "below; treat it exactly like a committed doctrine file - judgment\n"
+            "calibration only, never a change to the output contract.\n"
+            f"<doctrine>\n{DEFAULT_DOCTRINE}</doctrine>\n"
+            "Read the diff first and open only the files it implicates."
+        )
+    else:
+        doctrine_section = (
+            f"Read `{DOCTRINE_PATH}` in this checkout and follow it: it contains this\n"
+            "repository's review doctrine (philosophy, severity calibration, codebase map,\n"
+            "house rules). Read the diff first and open only the files it implicates. If\n"
+            "the file is missing, still review using the contract below."
+        )
     return f"""\
 Review pull request {repo}#{pr_number}.
 
@@ -191,10 +414,7 @@ PR metadata is in `.review-input/pr.json`; existing review threads (with thread 
 and comment databaseIds) are in `.review-input/threads.json`. A point-in-time CI
 snapshot for the PR head is in `.review-input/checks.json`.
 
-{extra_context_section}{learnings_section}Read `{DOCTRINE_PATH}` in this checkout and follow it: it contains this
-repository's review doctrine (philosophy, severity calibration, codebase map,
-house rules). Read the diff first and open only the files it implicates. If
-the file is missing, still review using the contract below.
+{extra_context_section}{learnings_section}{doctrine_section}
 
 When the diff passes dynamic or generated values to an external API, cross-check
 the provider's documented constraints (field limits, enums, formats, byte vs char
@@ -229,14 +449,9 @@ prediction as current behavior or imply that it was reproduced. Use explicit
 `Observed:` and `Predicted:` labels wherever both evidence and an unreproduced
 consequence appear, including in summary-only findings.
 
-Read `.review-input/checks.json` once; it is already the non-blocking snapshot
-captured immediately before this run. Never wait for, poll, or refetch CI. Its
-top-level state is one of `passed`, `failed`, `pending`, `none`, or `unavailable`.
-Mention `failed` checks in the assessment, but do not claim the PR caused them
-unless evidence establishes that connection. Treat `pending`, `none`, and
-`unavailable` as neutral context, never as success or failure. Individual
-completed check results are observed evidence; a check name alone is not proof
-of what failed.
+{_ci_paragraph(resolved_modules)}
+
+{_HYGIENE_SECTION}
 
 Verification gates confidence, never reporting. A suspected Blocker or Major
 you could not verify is still a finding at its full severity: report it,
@@ -244,7 +459,7 @@ mark it `(unverified)`, and say in one line what check would confirm or clear
 it. Never demote a suspected defect to the assumptions section; that section
 is for claims your review relied on, not for risks you found.
 
-{_OUTPUT_CONTRACT}"""
+{_render_output_contract(resolved_modules)}"""
 
 
 _DISCUSSION_LOCATIONS = {

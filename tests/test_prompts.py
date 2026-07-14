@@ -1,5 +1,6 @@
 import pytest
 
+from themis.config import MODULE_NAMES
 from themis.prompts import build_discussion_prompt, build_review_prompt
 
 
@@ -245,3 +246,114 @@ def test_discussion_prompt__capture_instruction_only_when_enabled():
     assert ".review-output/learning.json" in with_capture
     assert "At most one" in with_capture
     assert "remember" in with_capture
+
+
+# --- review modules rendering + default doctrine + output hygiene ------------
+
+
+def _modules(**overrides) -> dict[str, str]:
+    modules = {name: "auto" for name in MODULE_NAMES}
+    modules.update(overrides)
+    return modules
+
+
+def test_build_review_prompt__no_modules_arg__identical_to_all_auto():
+    assert build_review_prompt("acme/widgets", 7, "main") == build_review_prompt(
+        "acme/widgets", 7, "main", modules=_modules()
+    )
+
+
+def test_build_review_prompt__always_modules__required_on_substantive_reviews():
+    prompt = build_review_prompt(
+        "acme/widgets", 7, "main",
+        modules=_modules(
+            scorecard="always", walkthrough="always", product_impact="always",
+            sign_off="always",
+        ),
+    )
+    flat = " ".join(prompt.split())
+
+    assert "required on every substantive review" in flat
+    assert "Correctness, Test coverage, Code quality, Product impact" in flat
+    assert "End every substantive review with a short PR-specific sign-off" in flat
+    # The tiny-diff carve-out survives `always`.
+    assert "tiny diff, dependency-only update, or" in prompt
+
+
+def test_build_review_prompt__off_body_modules__omitted_and_prohibited():
+    prompt = build_review_prompt(
+        "acme/widgets", 7, "main",
+        modules=_modules(scorecard="off", assumptions="off", sign_off="off"),
+    )
+    flat = " ".join(prompt.split())
+
+    assert "Never include" in flat
+    assert "Correctness, Test coverage, Code quality, Product impact" not in flat
+    assert "🧭 Assumptions & unverified claims" not in prompt
+    assert "reviewed at <short HEAD sha>" not in flat
+    # walkthrough stayed auto and untouched
+    assert "walkthrough" in flat
+
+
+def test_build_review_prompt__inline_findings_off__summary_carries_everything():
+    prompt = build_review_prompt(
+        "acme/widgets", 7, "main", modules=_modules(inline_findings="off")
+    )
+    flat = " ".join(prompt.split())
+
+    assert "Inline comments are disabled for this repository" in flat
+    assert "full mechanism, evidence, impact, and fix direction" in flat
+    assert "at most 5 inline nits" not in flat
+    assert "Every Nit that can be anchored" not in flat
+
+
+def test_build_review_prompt__code_suggestions_off__prose_fixes_only():
+    prompt = build_review_prompt(
+        "acme/widgets", 7, "main", modules=_modules(code_suggestions="off")
+    )
+    flat = " ".join(prompt.split())
+
+    assert "never emit GitHub suggestion blocks" in flat
+    assert "end with a ```suggestion block" not in flat
+    assert "Prefer a commit-ready suggestion" not in flat
+
+
+def test_build_review_prompt__ci_context_off__no_ci_commentary():
+    prompt = build_review_prompt(
+        "acme/widgets", 7, "main", modules=_modules(ci_context="off")
+    )
+    flat = " ".join(prompt.split())
+
+    assert "Do not comment on CI in the review body" in flat
+    assert "Mention `failed` checks in the assessment" not in flat
+    # The snapshot is still read as evidence.
+    assert ".review-input/checks.json" in prompt
+
+
+def test_build_review_prompt__default_doctrine__inlined_when_checkout_has_none():
+    without = build_review_prompt("acme/widgets", 7, "main")
+    with_default = build_review_prompt(
+        "acme/widgets", 7, "main", use_default_doctrine=True
+    )
+
+    assert "Read `.themis/review.md` in this checkout" in without
+    assert "<doctrine>" not in without
+    assert "Read `.themis/review.md` in this checkout" not in with_default
+    assert "<doctrine>" in with_default
+    assert "## Severity calibration" in with_default
+    assert "Find real defects first" in with_default
+    # The repo-specific placeholders of the example doctrine stay out.
+    assert "Codebase map" not in with_default
+    assert "House rules" not in with_default
+
+
+def test_build_review_prompt__output_hygiene_rules_always_present():
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+    flat = " ".join(prompt.split())
+
+    assert "for the PR's audience" in flat
+    assert "doctrine files or their absence" in flat
+    assert "`.review-input/` or `.review-output/` paths" in flat
+    assert "labels inside findings" in flat
+    assert "TL;DR and assessment as natural prose" in flat
+    assert "at most one short caveat line" in flat

@@ -64,6 +64,17 @@ triggers:
 learnings:
   enabled: true            # false = no capture, no injection, no digest PR
   digest_threshold: 10
+review:
+  modules:                 # always | auto | off (booleans accepted: true = auto, false = off)
+    scorecard: auto
+    walkthrough: auto
+    product_impact: auto
+    verification_steps: auto
+    assumptions: auto
+    sign_off: auto
+    ci_context: auto
+    inline_findings: auto
+    code_suggestions: auto
 ```
 
 | Key | Default | Meaning |
@@ -78,9 +89,53 @@ learnings:
 | `triggers.auto_review` | `true` | `false` = mention-only, no automatic review on PR open or ready-for-review |
 | `learnings.enabled` | `true` | per-repo learnings memory; see [docs/learnings.md](learnings.md) |
 | `learnings.digest_threshold` | `10` | pending learnings needed before Themis opens/updates the digest PR (min 1) |
+| `review.modules.<name>` | unset (`auto`) | tri-state presence per optional review section: `always`, `auto`, or `off`; see below |
 
 A partial file deep-merges over the defaults, key by key, so you only need
 to set the fields you want to change.
+
+### Review modules (`review.modules`)
+
+The optional parts of a review are modules, each with a tri-state value:
+
+- `always` — the section must appear on every substantive review. The
+  tiny-diff carve-out survives: dependency-only or lockfile-only updates
+  stay concise regardless.
+- `auto` — adaptive (the default): the reviewer includes the section when
+  the diff provides enough evidence for it.
+- `off` — the section is omitted.
+
+Booleans are accepted as lenient aliases (`true` → `auto`, `false` → `off`),
+and yaml's bare `off` parses as `false`, which lands on the same state. An
+invalid value warns and behaves as unset.
+
+| Module | Controls |
+|---|---|
+| `scorecard` | the Correctness / Test coverage / Code quality / Product impact table |
+| `walkthrough` | the logical-area walkthrough |
+| `product_impact` | the standalone `Product take:` narrative |
+| `verification_steps` | the `🧪 How to verify` details block |
+| `assumptions` | the `🧭 Assumptions & unverified claims` details block |
+| `sign_off` | the PR-specific sign-off with the reviewed-at SHA |
+| `ci_context` | CI commentary in the review body (CI is still collected as evidence) |
+| `inline_findings` | posting findings as inline review comments; `off` folds every finding into the summary with full context, enforced at posting time, not just in the prompt |
+| `code_suggestions` | GitHub ```suggestion blocks inside inline findings; `off` keeps the finding and states the fix as prose, enforced by stripping at posting time |
+
+The core output — verdict line, TL;DR/assessment, and the severity sections —
+is not a module and can never be turned off: configuration must not be able
+to silently hide defects.
+
+### The packaged default doctrine
+
+When the PR checkout has no `.themis/review.md`, Themis applies a built-in
+default doctrine (the repo-agnostic philosophy, severity calibration, and
+verification habits from `examples/themis/review.md`) instead of reviewing
+doctrine-less. In that mode, unset modules are raised so first-contact repos
+get the full-dress review: `scorecard`, `walkthrough`, `product_impact`, and
+`sign_off` resolve to `always` instead of `auto`. Anything set explicitly in
+`review.modules` always wins over that profile, and a committed
+`.themis/review.md` replaces the packaged doctrine wholesale (the same
+precedence rule as `THEMIS_DEFAULT_REPO_CONFIG` vs a committed config file).
 
 ### Instance-level default (`THEMIS_DEFAULT_REPO_CONFIG`)
 

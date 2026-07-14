@@ -20,6 +20,7 @@ from themis.config import (
     RepoConfig,
     Settings,
     parse_repo_config,
+    resolve_modules,
 )
 from themis.engines import Engine, EngineError, EngineQuotaError, EngineUnavailableError
 from themis.events import TRUSTED_ASSOCIATIONS
@@ -46,7 +47,7 @@ from themis.output import (
     parse_output,
     parse_reply,
 )
-from themis.prompts import build_discussion_prompt, build_review_prompt
+from themis.prompts import DOCTRINE_PATH, build_discussion_prompt, build_review_prompt
 from themis.security import redact_outbound
 from themis.remote import RemoteEngine
 from themis.workspace import (
@@ -551,9 +552,21 @@ class ReviewService:
                         )
                     _write_checks_input(workspace, snapshot)
 
+                # The doctrine is read from the PR checkout on purpose (see
+                # docs/configuration.md); without one, the packaged default
+                # doctrine applies and raises the presence profile.
+                use_default_doctrine = not (workspace / DOCTRINE_PATH).exists()
+                if use_default_doctrine:
+                    logger.info(
+                        "themis_default_doctrine_used repo=%s pr=%s", repo, pr_number
+                    )
+                modules = resolve_modules(
+                    repo_config, default_doctrine=use_default_doctrine
+                )
                 prompt = build_review_prompt(
                     repo, pr_number, pr["base"]["ref"], extra_context=extra_context,
-                    has_learnings=bool(learnings),
+                    has_learnings=bool(learnings), modules=modules,
+                    use_default_doctrine=use_default_doctrine,
                 )
                 actions = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
@@ -561,6 +574,7 @@ class ReviewService:
                 )
                 if actions is None:
                     return
+                _enforce_delivery_modules(actions, modules, repo, pr_number)
                 # Codex runs can outlive the 60-min installation token; do every
                 # post-codex GitHub read/write on a freshly minted one.
                 post_gh = self.make_client(await self.get_token(installation_id))
@@ -927,6 +941,46 @@ def _bot_in_thread(thread: dict[str, Any], bot_login: str) -> bool:
         if (node.get("author") or {}).get("login", "") in logins:
             return True
     return False
+
+
+_SUGGESTION_BLOCK = re.compile(r"```suggestion\n.*?```\n?", re.DOTALL)
+
+
+def _enforce_delivery_modules(
+    actions: ReviewActions, modules: dict[str, str], repo: str, pr_number: int
+) -> None:
+    """Backstop for disabled delivery modules: the prompt already forbids
+    them, but an agent that emits them anyway must not reach GitHub with
+    a surface the repo turned off. Findings are folded, never dropped."""
+    if modules.get("code_suggestions") == "off":
+        stripped = 0
+        for finding in actions.findings:
+            body, count = _SUGGESTION_BLOCK.subn("", finding["body"])
+            if count:
+                finding["body"] = body.rstrip()
+                stripped += count
+        summary, count = _SUGGESTION_BLOCK.subn("", actions.summary)
+        if count:
+            actions.summary = summary.rstrip()
+            stripped += count
+        if stripped:
+            logger.warning(
+                "themis_suggestions_stripped repo=%s pr=%s count=%d",
+                repo, pr_number, stripped,
+            )
+    if modules.get("inline_findings") == "off" and actions.findings:
+        logger.warning(
+            "themis_inline_findings_folded repo=%s pr=%s count=%d",
+            repo, pr_number, len(actions.findings),
+        )
+        lines = "\n".join(
+            f"- `{f['path']}:{f['line']}` {f['body']}" for f in actions.findings
+        )
+        actions.summary += (
+            "\n\n##### Findings (inline comments are disabled for this"
+            f" repository)\n{lines}"
+        )
+        actions.findings = []
 
 
 def _keep_bot_authored_resolutions(

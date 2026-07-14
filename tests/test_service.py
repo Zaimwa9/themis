@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import logging
 import json
 import subprocess
 from pathlib import Path
@@ -2189,3 +2190,103 @@ async def test_load_learnings__flushed_pr_open__marker_and_pending_untouched(
     assert await store.load_flushed(REPO) == {
         "ids": [entry.id], "pr": 55, "sha": None,
     }
+
+
+# --- review modules + packaged default doctrine -------------------------------
+
+
+def _capturing_agent(prompts: list):
+    async def agent(*, prompt, workspace, **kwargs) -> str:
+        prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        return "ok"
+    return agent
+
+
+async def test_review__no_doctrine_in_checkout__default_doctrine_full_dress(
+    service, gh, caplog
+):
+    prompts: list[str] = []
+    service.resolve_engine = _resolver(_capturing_agent(prompts))
+
+    with caplog.at_level(logging.INFO):
+        await service.review(REPO, 7, 42, auto=True)
+
+    flat = " ".join(prompts[0].split())
+    assert "<doctrine>" in prompts[0]
+    assert "## Severity calibration" in prompts[0]
+    # The default-doctrine presence profile raises scorecard etc. to `always`.
+    assert "required on every substantive review" in flat
+    assert "themis_default_doctrine_used" in caplog.text
+
+
+async def test_review__doctrine_in_checkout__no_default_doctrine(
+    service, gh, tmp_path
+):
+    doctrine = tmp_path / "ws" / ".themis" / "review.md"
+    doctrine.parent.mkdir(parents=True)
+    doctrine.write_text("# Review doctrine\nbe nice\n")
+    prompts: list[str] = []
+    service.resolve_engine = _resolver(_capturing_agent(prompts))
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    flat = " ".join(prompts[0].split())
+    assert "<doctrine>" not in prompts[0]
+    assert "Read `.themis/review.md` in this checkout" in flat
+    assert "required on every substantive review" not in flat
+
+
+async def test_review__repo_modules_reach_prompt_even_with_committed_doctrine(
+    service, gh, tmp_path
+):
+    doctrine = tmp_path / "ws" / ".themis" / "review.md"
+    doctrine.parent.mkdir(parents=True)
+    doctrine.write_text("# Review doctrine\n")
+    gh.get_file_text.return_value = "review:\n  modules:\n    scorecard: always\n"
+    prompts: list[str] = []
+    service.resolve_engine = _resolver(_capturing_agent(prompts))
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert "required on every substantive review" in " ".join(prompts[0].split())
+
+
+async def test_review__inline_findings_off__findings_folded_into_summary(service, gh):
+    gh.get_file_text.return_value = (
+        "review:\n  modules:\n    inline_findings: 'off'\n"
+    )
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_review.assert_not_awaited()
+    summary = gh.post_summary_comment.await_args.args[2]
+    assert "a.py:3" in summary
+    assert "bug" in summary
+
+
+async def test_review__code_suggestions_off__suggestion_blocks_stripped(service, gh):
+    gh.get_file_text.return_value = (
+        "review:\n  modules:\n    code_suggestions: 'off'\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{
+                "path": "a.py", "line": 3,
+                "body": "**Off-by-one.**\n\n```suggestion\nrange(n + 1)\n```\n",
+            }],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    body = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    assert "```suggestion" not in body
+    assert "Off-by-one" in body

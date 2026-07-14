@@ -43,6 +43,69 @@ class TriggersConfig(BaseModel):
     auto_review: bool = True
 
 
+MODULE_STATES = ("always", "auto", "off")
+
+
+class ReviewModulesConfig(BaseModel):
+    """Tri-state presence control per optional review section.
+
+    `always` = must appear on substantive reviews, `auto` = adaptive (today's
+    behavior), `off` = omit. None = unset, resolved by resolve_modules().
+    Booleans are lenient aliases (true -> auto, false -> off); yaml 1.1 also
+    reads a bare `off` as False, which lands on the same state."""
+
+    scorecard: str | None = None
+    walkthrough: str | None = None
+    product_impact: str | None = None
+    verification_steps: str | None = None
+    assumptions: str | None = None
+    sign_off: str | None = None
+    ci_context: str | None = None
+    inline_findings: str | None = None
+    code_suggestions: str | None = None
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _tri_state_or_unset(cls, value: object) -> object:
+        """An invalid state must not void the rest of the repo config."""
+        if value is True:
+            return "auto"
+        if value is False:
+            return "off"
+        if value is None or value in MODULE_STATES:
+            return value
+        logger.warning("themis_invalid_review_module value=%s", str(value)[:50])
+        return None
+
+
+MODULE_NAMES = tuple(ReviewModulesConfig.model_fields)
+
+# Presence profile applied when the packaged default doctrine is in play:
+# zero-config repos get the full-dress review instead of the leanest format.
+DEFAULT_DOCTRINE_MODULES = {
+    "scorecard": "always",
+    "walkthrough": "always",
+    "product_impact": "always",
+    "sign_off": "always",
+}
+
+
+class ReviewConfig(BaseModel):
+    modules: ReviewModulesConfig = ReviewModulesConfig()
+
+
+def resolve_modules(config: "RepoConfig", *, default_doctrine: bool) -> dict[str, str]:
+    """Effective tri-state per module. Explicit repo values always win; unset
+    modules default to `auto` (adaptive parity with pre-module behavior),
+    raised to the presence profile above when the packaged default doctrine
+    is in use — config stays the single source of truth for delivery."""
+    profile = DEFAULT_DOCTRINE_MODULES if default_doctrine else {}
+    return {
+        name: getattr(config.review.modules, name) or profile.get(name, "auto")
+        for name in MODULE_NAMES
+    }
+
+
 class LearningsConfig(BaseModel):
     enabled: bool = True
     digest_threshold: int = 10
@@ -64,6 +127,7 @@ class RepoConfig(BaseModel):
     limits: LimitsConfig = LimitsConfig()
     triggers: TriggersConfig = TriggersConfig()
     learnings: LearningsConfig = LearningsConfig()
+    review: ReviewConfig = ReviewConfig()
 
     @field_validator("engine", mode="before")
     @classmethod
