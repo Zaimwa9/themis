@@ -943,12 +943,44 @@ def _bot_in_thread(thread: dict[str, Any], bot_login: str) -> bool:
     return False
 
 
-# Fence-line anchored on both ends: a literal ```suggestion inside a line of
-# an ordinary code sample must never start a match and eat through the next
-# closing fence.
-_SUGGESTION_BLOCK = re.compile(
-    r"^```suggestion[ \t]*\n.*?^```[ \t]*$\n?", re.DOTALL | re.MULTILINE
-)
+_FENCE_LINE = re.compile(r"^(`{3,})([^`\r\n]*?)[ \t]*\r?\n?$")
+
+
+def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
+    """Remove real GitHub suggestion blocks; leave quoted ones alone.
+
+    Line-based fence tracking rather than a regex: a ```suggestion fence
+    inside an enclosing longer fence (a Markdown example quoting one) is
+    prose about a suggestion, not a suggestion block. An unclosed
+    suggestion fence is kept verbatim - never strip what cannot be parsed."""
+    out: list[str] = []
+    pending: list[str] = []  # lines of a suggestion block until it closes
+    open_ticks = 0           # enclosing non-suggestion fence length, 0 = none
+    suggestion_ticks = 0     # opening fence length of the pending block
+    removed = 0
+    for line in text.splitlines(keepends=True):
+        match = _FENCE_LINE.match(line)
+        if suggestion_ticks:
+            pending.append(line)
+            if match and not match.group(2) and len(match.group(1)) >= suggestion_ticks:
+                pending.clear()
+                suggestion_ticks = 0
+                removed += 1
+            continue
+        if match:
+            ticks, info = len(match.group(1)), match.group(2)
+            if open_ticks:
+                if not info and ticks >= open_ticks:
+                    open_ticks = 0
+            elif info == "suggestion":
+                suggestion_ticks = ticks
+                pending.append(line)
+                continue
+            else:
+                open_ticks = ticks
+        out.append(line)
+    out.extend(pending)  # unclosed suggestion fence: keep, strip nothing
+    return "".join(out), removed
 
 
 def _enforce_delivery_modules(
@@ -960,11 +992,11 @@ def _enforce_delivery_modules(
     if modules.get("code_suggestions") == "off":
         stripped = 0
         for finding in actions.findings:
-            body, count = _SUGGESTION_BLOCK.subn("", finding["body"])
+            body, count = _strip_suggestion_blocks(finding["body"])
             if count:
                 finding["body"] = body.rstrip()
                 stripped += count
-        summary, count = _SUGGESTION_BLOCK.subn("", actions.summary)
+        summary, count = _strip_suggestion_blocks(actions.summary)
         if count:
             actions.summary = summary.rstrip()
             stripped += count
@@ -983,12 +1015,22 @@ def _enforce_delivery_modules(
             " repository)\n"
         )
         # The summary is the only delivery surface here and it is one GitHub
-        # comment: give every finding an equal share of the remaining budget
-        # so the final length cap can never drop a whole finding from the
-        # tail. The floor keeps each entry meaningful; a pathological count
+        # comment: findings outrank prose on it. Reserve room for every
+        # finding first - trimming the assessment if it hogs the budget -
+        # then give each an equal share so the final length cap can never
+        # drop a whole finding from the tail. A pathological finding count
         # still falls back to the global truncation guard at posting time.
+        floor = 600
+        pointer_overhead = 64  # "- `path:line` " plus the truncation marker
+        reserve = len(heading) + len(actions.findings) * (floor + pointer_overhead) + 512
+        if len(actions.summary) > MAX_BODY_LEN - reserve:
+            keep = max(0, MAX_BODY_LEN - reserve)
+            actions.summary = (
+                actions.summary[:keep]
+                + "\n[assessment truncated to keep folded findings visible]"
+            )
         budget = MAX_BODY_LEN - len(actions.summary) - len(heading) - 512
-        share = max(1000, budget // len(actions.findings))
+        share = max(floor, budget // len(actions.findings))
         lines = []
         for finding in actions.findings:
             body = finding["body"]

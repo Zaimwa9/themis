@@ -2350,3 +2350,62 @@ async def test_review__inline_findings_off__every_folded_finding_stays_visible(
     assert "first" in summary
     assert "second" in summary
     assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__code_suggestions_off__four_backtick_fence_example_survives(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Docs example.**\n\n"
+        "````markdown\n"
+        "```suggestion\n"
+        "example()\n"
+        "```\n"
+        "````\n"
+        "Keep this text.\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    # The suggestion fence is quoted inside an enclosing four-backtick fence:
+    # it is prose about a suggestion, not a suggestion block.
+    assert gh.post_review.await_args.kwargs["comments"][0]["body"] == body
+
+
+async def test_review__inline_findings_off__near_limit_summary_keeps_findings(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\n" + "z" * 64_000)
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": 3, "body": "first " + "x" * 1500},
+                {"path": "b.py", "line": 9, "body": "second " + "y" * 1500},
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    # The summary yields space before folding: findings outrank prose on the
+    # only delivery surface left.
+    assert "a.py:3" in summary
+    assert "b.py:9" in summary
+    assert len(summary) <= MAX_BODY_LEN
