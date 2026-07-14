@@ -124,7 +124,7 @@ extra for `always` to force. Their meaningful settings are `auto` and `off`.
 | `assumptions` | the `🧭 Assumptions & unverified claims` details block |
 | `sign_off` | the PR-specific sign-off with the reviewed-at SHA |
 | `ci_context` | CI commentary in the review body (CI is still collected as evidence) |
-| `inline_findings` | posting findings as inline review comments; `off` folds every finding into the summary with full context, enforced at posting time, not just in the prompt |
+| `inline_findings` | posting findings as inline review comments; `off` folds every finding into the summary — every path/line pointer is kept, and bodies keep as much context as fits GitHub's comment cap — enforced at posting time, not just in the prompt |
 | `code_suggestions` | GitHub ```suggestion blocks inside inline findings; `off` keeps the finding and states the fix as prose, enforced by stripping at posting time |
 
 The core output — verdict line, TL;DR/assessment, and the severity sections —
