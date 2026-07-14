@@ -293,6 +293,29 @@ def test_build_review_prompt__assumptions_always__must_appear():
     assert "Lean toward" not in flat
 
 
+def test_build_review_prompt__verification_steps_always__must_appear():
+    prompt = build_review_prompt(
+        "acme/widgets", 7, "main", modules=_modules(verification_steps="always")
+    )
+    flat = " ".join(prompt.split())
+
+    # `always` must hold for internal-only changes too, not just observable ones.
+    assert "on every substantive review" in flat
+    assert "commands or tests that exercise the changed behavior" in flat
+    assert "you may add" not in flat
+
+
+def test_build_review_prompt__ci_context_always__status_line_required():
+    auto = build_review_prompt("acme/widgets", 7, "main")
+    prompt = build_review_prompt(
+        "acme/widgets", 7, "main", modules=_modules(ci_context="always")
+    )
+    flat = " ".join(prompt.split())
+
+    assert "even when all checks passed" in flat
+    assert "even when all checks passed" not in " ".join(auto.split())
+
+
 def test_build_review_prompt__off_body_modules__omitted_and_prohibited():
     prompt = build_review_prompt(
         "acme/widgets", 7, "main",

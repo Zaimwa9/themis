@@ -145,19 +145,21 @@ def _substantive_paragraph(modules: dict[str, str]) -> str:
 def _verify_paragraph(modules: dict[str, str]) -> str | None:
     if modules["verification_steps"] == "off":
         return None
-    opening = "add" if modules["verification_steps"] == "always" else "you may add"
-    tail = (
-        " This block is required whenever such observable behavior exists."
-        if modules["verification_steps"] == "always"
-        else ""
-    )
-    return f"""\
+    if modules["verification_steps"] == "always":
+        return """\
+   Add `<details><summary><b>🧪 How to verify</b></summary>` with 3-5 one-line
+   steps covering the riskiest paths first, on every substantive review. When
+   the change is internal-only, give the commands or tests that exercise the
+   changed behavior instead of user-visible steps. If a cheap automated check
+   would cover it, end with one `Automate:` line. Skip it only for tiny
+   diffs, dependency-only updates, and lockfile-only updates."""
+    return """\
    When a substantive PR changes behavior someone can observe (UI, API
-   responses, emails, generated files), {opening}
+   responses, emails, generated files), you may add
    `<details><summary><b>🧪 How to verify</b></summary>` with 3-5 one-line steps
    covering the riskiest paths first. If a cheap automated check would cover
    it, end with one `Automate:` line. Skip this for tiny diffs, refactors, docs,
-   or internal-only changes.{tail}"""
+   or internal-only changes."""
 
 
 def _assumptions_paragraph(modules: dict[str, str]) -> str | None:
@@ -348,14 +350,24 @@ the opening of the review."""
 
 
 def _ci_paragraph(modules: dict[str, str]) -> str:
-    commentary = (
-        "Do not comment on CI in the review body; use the snapshot only as\n"
-        "background evidence when judging findings, and never claim the PR caused\n"
-        "a failure unless evidence establishes that connection."
-        if modules["ci_context"] == "off"
-        else "Mention `failed` checks in the assessment, but do not claim the PR caused them\n"
-        "unless evidence establishes that connection."
-    )
+    if modules["ci_context"] == "off":
+        commentary = (
+            "Do not comment on CI in the review body; use the snapshot only as\n"
+            "background evidence when judging findings, and never claim the PR caused\n"
+            "a failure unless evidence establishes that connection."
+        )
+    elif modules["ci_context"] == "always":
+        commentary = (
+            "State the snapshot's overall CI status in one line of the assessment on\n"
+            "every substantive review, even when all checks passed. Mention `failed`\n"
+            "checks explicitly, but do not claim the PR caused them\n"
+            "unless evidence establishes that connection."
+        )
+    else:
+        commentary = (
+            "Mention `failed` checks in the assessment, but do not claim the PR caused them\n"
+            "unless evidence establishes that connection."
+        )
     return f"""\
 Read `.review-input/checks.json` once; it is already the non-blocking snapshot
 captured immediately before this run. Never wait for, poll, or refetch CI. Its
