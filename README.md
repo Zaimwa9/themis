@@ -132,6 +132,22 @@ uv run python -m themis init \
 Detailed options, the tunnel command, recovery, and the manual fallback are in
 [`docs/bootstrap.md`](docs/bootstrap.md).
 
+Creating the GitHub App manually instead? Configure these repository
+permissions:
+
+| Permission | Access |
+|---|---|
+| Checks | Read-only |
+| Contents | Read-only |
+| Issues | Read and write |
+| Pull requests | Read and write |
+| Commit statuses | Read-only |
+
+Subscribe to `pull_request`, `issue_comment`, and
+`pull_request_review_comment`. Actions permission is not required. Existing
+Apps must also be updated with the Checks and Commit statuses permissions before
+Themis can include CI context in reviews.
+
 ### 3. Run and verify
 
 ```bash

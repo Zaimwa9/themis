@@ -4,6 +4,8 @@
 GitHub App with Themis's exact permissions and events, exchanges GitHub's
 one-time code for the App credentials, verifies installation on the requested
 repository, and writes `.env`, `compose.yaml`, and the model credential volume.
+The generated App requests `checks: read` and `statuses: read` so each review
+can capture one CI snapshot without polling. It does not request Actions access.
 
 GitHub still displays two authorization screens: one to create the App and one
 to choose repositories. Those ownership decisions cannot be made through the
@@ -167,10 +169,16 @@ To create the App manually, configure:
 | Setting | Value |
 |---|---|
 | Webhook URL | `https://HOST/webhook` |
+| Checks permission | Read-only |
 | Contents permission | Read-only |
 | Pull requests permission | Read and write |
 | Issues permission | Read and write |
+| Commit statuses permission | Read-only |
 | Events | `pull_request`, `issue_comment`, `pull_request_review_comment` |
+
+Actions permission is not required. If an existing App predates CI-aware
+reviews, add the Checks and Commit statuses permissions before deploying this
+version.
 
 Generate a private key, install the App on the target repositories, and set
 `THEMIS_GH_APP_CLIENT_ID`, `THEMIS_GH_APP_PRIVATE_KEY` (PEM or base64),
