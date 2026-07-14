@@ -163,16 +163,18 @@ def _verify_paragraph(modules: dict[str, str]) -> str | None:
 def _assumptions_paragraph(modules: dict[str, str]) -> str | None:
     if modules["assumptions"] == "off":
         return None
-    tail = (
-        " Lean toward including it on substantive reviews."
-        if modules["assumptions"] == "always"
-        else ""
-    )
-    return f"""\
+    if modules["assumptions"] == "always":
+        return """\
+   Add `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>`
+   listing the load-bearing claims the review relied on but could not verify.
+   Include it on every substantive review: when there are none, its single
+   line states that the review relied on no unverified claims. Keep it out of
+   concise tiny/dependency/lockfile reviews."""
+    return """\
    Add `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>` only
    for load-bearing claims the review relied on but could not verify. Omit it
    when there are none, and keep it out of concise tiny/dependency/lockfile
-   reviews; put a directly relevant uncertainty in the assessment instead.{tail}"""
+   reviews; put a directly relevant uncertainty in the assessment instead."""
 
 
 def _sign_off_paragraph(modules: dict[str, str]) -> str | None:

@@ -276,8 +276,21 @@ def test_build_review_prompt__always_modules__required_on_substantive_reviews():
     assert "required on every substantive review" in flat
     assert "Correctness, Test coverage, Code quality, Product impact" in flat
     assert "End every substantive review with a short PR-specific sign-off" in flat
+    assert "relied on no unverified claims" not in flat  # assumptions stayed auto
     # The tiny-diff carve-out survives `always`.
     assert "tiny diff, dependency-only update, or" in prompt
+
+
+def test_build_review_prompt__assumptions_always__must_appear():
+    prompt = build_review_prompt(
+        "acme/widgets", 7, "main", modules=_modules(assumptions="always")
+    )
+    flat = " ".join(prompt.split())
+
+    # `always` is a documented must-appear guarantee, not a preference.
+    assert "Include it on every substantive review" in flat
+    assert "relied on no unverified claims" in flat
+    assert "Lean toward" not in flat
 
 
 def test_build_review_prompt__off_body_modules__omitted_and_prohibited():
