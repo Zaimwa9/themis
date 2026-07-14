@@ -283,6 +283,8 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
 | `limits.clone_depth` | `50` | shallow clone depth |
 | `triggers.auto_review` | `true` | `false` = mention-only, no auto-review when a PR opens or is marked ready for review |
+| `learnings.enabled` | `true` | `false` disables capturing, injecting, and digesting [learnings](docs/learnings.md) for this repo |
+| `learnings.digest_threshold` | `10` | pending learnings that trigger the digest PR (minimum 1) |
 
 Talk to the bot in a PR: `@<app-slug> review` re-reviews on demand,
 `@<app-slug> review <focus>` steers the review toward a given area (the

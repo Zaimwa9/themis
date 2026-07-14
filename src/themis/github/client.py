@@ -326,6 +326,16 @@ class GitHubClient:
         response.raise_for_status()
         return str(response.json()["object"]["sha"])
 
+    async def find_branch_sha(self, repo: str, branch: str) -> str | None:
+        """Branch tip sha, or None when the branch does not exist."""
+        response = await self._client.get(
+            f"{self._api_url}/repos/{repo}/git/ref/heads/{branch}"
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return str(response.json()["object"]["sha"])
+
     async def upsert_branch(self, repo: str, branch: str, sha: str) -> bool:
         """Fast-forward branch to sha, creating it when absent.
 
@@ -373,7 +383,8 @@ class GitHubClient:
     async def put_file(
         self, repo: str, path: str, *, content: str, message: str,
         branch: str, sha: str | None = None,
-    ) -> None:
+    ) -> str:
+        """Returns the sha of the commit the write created."""
         body: dict[str, Any] = {
             "message": message,
             "content": base64.b64encode(content.encode()).decode(),
@@ -385,6 +396,7 @@ class GitHubClient:
             f"{self._api_url}/repos/{repo}/contents/{path}", json=body
         )
         response.raise_for_status()
+        return str(response.json()["commit"]["sha"])
 
     async def find_open_pr(self, repo: str, head_branch: str) -> int | None:
         owner = repo.split("/", 1)[0]

@@ -148,14 +148,18 @@ class PendingStore:
             if len(remaining) != len(entries):
                 self._write(repo, remaining)
 
-    async def record_flushed(self, repo: str, ids: list[str], pr_number: int) -> None:
+    async def record_flushed(
+        self, repo: str, ids: list[str], pr_number: int, sha: str | None = None
+    ) -> None:
         """Remember which pending ids were sent to which digest PR, so the next
-        read can tell deletions (human-edited out in the PR) from still-pending."""
+        read can tell deletions (human-edited out in the PR) from still-pending.
+        sha is the digest commit we pushed: post-merge branch cleanup deletes
+        the branch only while it still points exactly there."""
         async with self._lock:
             path = self._flushed_path(repo)
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps({"ids": ids, "pr": pr_number}))
+            tmp.write_text(json.dumps({"ids": ids, "pr": pr_number, "sha": sha}))
             os.replace(tmp, path)
 
     async def load_flushed(self, repo: str) -> dict | None:
@@ -201,6 +205,10 @@ class PendingStore:
         if not valid:
             logger.warning("themis_learnings_flushed_invalid repo=%s reason=bad-shape", repo)
             return None
+        sha = raw.get("sha")
+        # Markers written before the sha field (or corrupted): sha None just
+        # skips branch cleanup, never invalidates the marker.
+        raw["sha"] = sha if isinstance(sha, str) else None
         return raw
 
 

@@ -58,7 +58,9 @@ Body:
   "body": "the question text",
   "kind": "thread",
   "in_reply_to_id": null,
-  "mentions_bot": true
+  "mentions_bot": true,
+  "author_association": "MEMBER",
+  "author_login": "dev"
 }
 ```
 
@@ -70,6 +72,10 @@ Body:
   unmentioned thread reply, Themis answers only if it already authored part
   of that thread. Pass `true` for anything the caller already knows is an
   explicit mention.
+- `author_association` / `author_login` (optional): forward the commenter's
+  GitHub values if you want the discussion to be able to create
+  [learnings](learnings.md). Omitted, the caller is treated as untrusted
+  (`"NONE"`) and capture stays off — replies still work.
 
 ```bash
 curl -X POST https://your-themis-host/api/discuss \

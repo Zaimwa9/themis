@@ -573,19 +573,33 @@ async def test_put_file__encodes_content_and_sha():
     def handler(request: httpx.Request) -> httpx.Response:
         captured["path"] = request.url.path
         captured["json"] = json.loads(request.content)
-        return httpx.Response(200, json={})
+        return httpx.Response(200, json={"commit": {"sha": "digest-tip"}})
 
-    await _client(handler).put_file(
+    commit_sha = await _client(handler).put_file(
         "acme/widgets", ".themis/learnings.jsonl",
         content='{"id": "lrn-aaaaaaaa"}\n', message="chore: sync review learnings",
         branch="themis/learnings", sha="f00",
     )
 
+    assert commit_sha == "digest-tip"
     assert captured["path"] == "/repos/acme/widgets/contents/.themis/learnings.jsonl"
     body = captured["json"]
     assert base64.b64decode(body["content"]).decode() == '{"id": "lrn-aaaaaaaa"}\n'
     assert body["branch"] == "themis/learnings"
     assert body["sha"] == "f00"
+
+
+async def test_find_branch_sha__present_and_absent():
+    def some(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"object": {"sha": "abc123"}})
+
+    def none(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={})
+
+    assert await _client(some).find_branch_sha("acme/widgets", "themis/learnings") == (
+        "abc123"
+    )
+    assert await _client(none).find_branch_sha("acme/widgets", "themis/learnings") is None
 
 
 async def test_find_open_pr__present_and_absent():

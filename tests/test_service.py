@@ -1585,6 +1585,7 @@ def _gh_for_digest(gh):
     gh.get_branch_sha.return_value = "base-sha"
     gh.get_file_sha.return_value = None
     gh.find_open_pr.return_value = None
+    gh.put_file.return_value = "digest-tip"
     gh.create_pr.return_value = 99
     return gh
 
@@ -1620,6 +1621,9 @@ async def test_discuss__threshold_reached__digest_pr_opened(service, gh, tmp_pat
     flushed = await store.load_flushed(REPO)
     assert flushed["pr"] == 99
     assert len(flushed["ids"]) == 10
+    # The marker remembers our digest commit so branch cleanup after the
+    # merge can prove the ref is still ours.
+    assert flushed["sha"] == "digest-tip"
 
 
 async def test_discuss__below_threshold__no_digest(service, gh, tmp_path):
@@ -1839,10 +1843,11 @@ async def test_load_learnings__flushed_pr_merged__zombie_ids_dropped(
     zombie = _entry_for_service(1)
     await store.append(REPO, kept)
     await store.append(REPO, zombie)
-    await store.record_flushed(REPO, [kept.id, zombie.id], 55)
+    await store.record_flushed(REPO, [kept.id, zombie.id], 55, sha="digest-tip")
     # Human deleted the zombie's line before merging the digest PR.
     gh.get_file_text.side_effect = _config_and_learnings(learnings_text=to_jsonl([kept]))
     gh.get_pr.return_value = {"number": 55, "state": "closed", "merged": True}
+    gh.find_branch_sha.return_value = "digest-tip"
 
     repo_config = parse_repo_config(None)
     effective, pending = await service._load_learnings(gh, REPO, repo_config)
@@ -1856,6 +1861,51 @@ async def test_load_learnings__flushed_pr_merged__zombie_ids_dropped(
     # The marker proves the branch fed our merged PR; delete it so the next
     # flush recreates it instead of tripping the fast-forward guard.
     gh.delete_branch.assert_awaited_once_with(REPO, DIGEST_BRANCH)
+
+
+async def test_load_learnings__merged_but_branch_tip_not_ours__branch_kept(
+    service, gh, tmp_path
+):
+    """Between merge and reconciliation someone recreated or pushed to the
+    branch: it no longer points at our recorded digest commit, so it is not
+    ours to delete."""
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    entry = _entry_for_service(0)
+    await store.append(REPO, entry)
+    await store.record_flushed(REPO, [entry.id], 55, sha="digest-tip")
+    gh.get_file_text.side_effect = _config_and_learnings(
+        learnings_text=to_jsonl([entry])
+    )
+    gh.get_pr.return_value = {"number": 55, "state": "closed", "merged": True}
+    gh.find_branch_sha.return_value = "someone-elses-commit"
+
+    repo_config = parse_repo_config(None)
+    await service._load_learnings(gh, REPO, repo_config)
+
+    gh.delete_branch.assert_not_awaited()
+    assert await store.load_flushed(REPO) is None
+
+
+async def test_load_learnings__merged_branch_already_gone__no_delete(
+    service, gh, tmp_path
+):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    entry = _entry_for_service(0)
+    await store.append(REPO, entry)
+    await store.record_flushed(REPO, [entry.id], 55, sha="digest-tip")
+    gh.get_file_text.side_effect = _config_and_learnings(
+        learnings_text=to_jsonl([entry])
+    )
+    gh.get_pr.return_value = {"number": 55, "state": "closed", "merged": True}
+    gh.find_branch_sha.return_value = None  # e.g. auto-delete on merge
+
+    repo_config = parse_repo_config(None)
+    await service._load_learnings(gh, REPO, repo_config)
+
+    gh.delete_branch.assert_not_awaited()
+    assert await store.load_flushed(REPO) is None
 
 
 async def test_load_learnings__flushed_pr_closed_unmerged__clears_marker_keeps_pending(
@@ -1895,4 +1945,6 @@ async def test_load_learnings__flushed_pr_open__marker_and_pending_untouched(
     effective, pending = await service._load_learnings(gh, REPO, repo_config)
 
     assert entry.id in {p.id for p in pending}
-    assert await store.load_flushed(REPO) == {"ids": [entry.id], "pr": 55}
+    assert await store.load_flushed(REPO) == {
+        "ids": [entry.id], "pr": 55, "sha": None,
+    }

@@ -143,13 +143,28 @@ async def test_pending_store__discard__no_match__noop(tmp_path):
 async def test_pending_store__record_flushed_then_load__roundtrip(tmp_path):
     store = PendingStore(tmp_path)
 
-    await store.record_flushed("acme/widgets", ["lrn-aaaaaaaa", "lrn-bbbbbbbb"], 42)
+    await store.record_flushed(
+        "acme/widgets", ["lrn-aaaaaaaa", "lrn-bbbbbbbb"], 42, sha="digest-tip"
+    )
 
     assert await store.load_flushed("acme/widgets") == {
-        "ids": ["lrn-aaaaaaaa", "lrn-bbbbbbbb"], "pr": 42,
+        "ids": ["lrn-aaaaaaaa", "lrn-bbbbbbbb"], "pr": 42, "sha": "digest-tip",
     }
     on_disk = tmp_path / "learnings" / "acme__widgets" / "flushed.json"
     assert on_disk.exists()
+
+
+@pytest.mark.asyncio
+async def test_pending_store__load_flushed__marker_without_sha__sha_none(tmp_path):
+    """Markers written before the sha field existed stay readable."""
+    store = PendingStore(tmp_path)
+    path = tmp_path / "learnings" / "acme__widgets" / "flushed.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"ids": ["lrn-aaaaaaaa"], "pr": 42}')
+
+    assert await store.load_flushed("acme/widgets") == {
+        "ids": ["lrn-aaaaaaaa"], "pr": 42, "sha": None,
+    }
 
 
 @pytest.mark.asyncio

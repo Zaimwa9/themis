@@ -269,13 +269,19 @@ class ReviewService:
                             "themis_learnings_rejected_pruned repo=%s count=%d",
                             repo, len(zombies),
                         )
-                    # The marker proves this branch fed our now-merged PR, so
-                    # it is disposable; deleting it lets the next flush
-                    # recreate it cleanly (a squash merge leaves it diverged,
-                    # which the flush's fast-forward guard would refuse).
+                    # Delete our merged digest branch so the next flush can
+                    # recreate it (a squash merge leaves it diverged, which
+                    # the flush's fast-forward guard would refuse) — but only
+                    # while it still points at the exact commit we pushed:
+                    # a recreated or taken-over branch is not ours to remove.
                     # Ordered before clear_flushed: a failed delete keeps the
                     # marker and retries on the next load.
-                    await gh.delete_branch(repo, DIGEST_BRANCH)
+                    ours = flushed["sha"]
+                    if (
+                        ours is not None
+                        and await gh.find_branch_sha(repo, DIGEST_BRANCH) == ours
+                    ):
+                        await gh.delete_branch(repo, DIGEST_BRANCH)
                     await self.pending_store.clear_flushed(repo)
                 elif pr.get("state") == "closed":
                     # Closed without merging: entries stay pending and re-flush
@@ -401,7 +407,7 @@ class ReviewService:
                 )
             content = compose_digest(base_text, to_flush)
             file_sha = await gh.get_file_sha(repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH)
-            await gh.put_file(
+            commit_sha = await gh.put_file(
                 repo, LEARNINGS_REPO_PATH, content=redact_outbound(content),
                 message=DIGEST_PR_TITLE, branch=DIGEST_BRANCH, sha=file_sha,
             )
@@ -411,7 +417,8 @@ class ReviewService:
                     head=DIGEST_BRANCH, base=default_branch,
                 )
             await self.pending_store.record_flushed(
-                repo, sorted(flushed_ids | {e.id for e in to_flush}), pr_number
+                repo, sorted(flushed_ids | {e.id for e in to_flush}), pr_number,
+                sha=commit_sha,
             )
             logger.info("themis_digest_flushed repo=%s count=%d", repo, len(to_flush))
         except (httpx.HTTPError, GitHubGraphQLError, OSError) as error:
