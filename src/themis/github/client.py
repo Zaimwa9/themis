@@ -326,20 +326,39 @@ class GitHubClient:
         response.raise_for_status()
         return str(response.json()["object"]["sha"])
 
-    async def upsert_branch(self, repo: str, branch: str, sha: str) -> None:
-        """Force-move branch to sha, creating it when absent.
+    async def upsert_branch(self, repo: str, branch: str, sha: str) -> bool:
+        """Fast-forward branch to sha, creating it when absent.
 
-        Force on purpose: the digest branch is bot-owned and always rebuilt
-        from the default branch head; stale digest commits are disposable."""
+        Never force: a branch holding commits that are not on the default
+        branch — a human's branch with the same name, or a closed digest
+        PR's edits — must not be reset. GitHub refuses the non-fast-forward
+        move atomically, so no racing push can be lost. Returns False when
+        the branch exists but cannot be fast-forwarded."""
         response = await self._client.patch(
             f"{self._api_url}/repos/{repo}/git/refs/heads/{branch}",
-            json={"sha": sha, "force": True},
+            json={"sha": sha, "force": False},
         )
         if response.status_code in (404, 422):
-            response = await self._client.post(
+            create = await self._client.post(
                 f"{self._api_url}/repos/{repo}/git/refs",
                 json={"ref": f"refs/heads/{branch}", "sha": sha},
             )
+            if create.status_code == 422:
+                # Creation refused because the ref exists, so the PATCH 422
+                # was a rejected non-fast-forward move, not a missing ref.
+                return False
+            create.raise_for_status()
+            return True
+        response.raise_for_status()
+        return True
+
+    async def delete_branch(self, repo: str, branch: str) -> None:
+        """Delete a ref; already-absent (e.g. auto-delete on merge) is fine."""
+        response = await self._client.delete(
+            f"{self._api_url}/repos/{repo}/git/refs/heads/{branch}"
+        )
+        if response.status_code in (404, 422):
+            return
         response.raise_for_status()
 
     async def get_file_sha(self, repo: str, path: str, ref: str) -> str | None:

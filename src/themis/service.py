@@ -269,6 +269,13 @@ class ReviewService:
                             "themis_learnings_rejected_pruned repo=%s count=%d",
                             repo, len(zombies),
                         )
+                    # The marker proves this branch fed our now-merged PR, so
+                    # it is disposable; deleting it lets the next flush
+                    # recreate it cleanly (a squash merge leaves it diverged,
+                    # which the flush's fast-forward guard would refuse).
+                    # Ordered before clear_flushed: a failed delete keeps the
+                    # marker and retries on the next load.
+                    await gh.delete_branch(repo, DIGEST_BRANCH)
                     await self.pending_store.clear_flushed(repo)
                 elif pr.get("state") == "closed":
                     # Closed without merging: entries stay pending and re-flush
@@ -347,8 +354,10 @@ class ReviewService:
     async def _flush_digest(self, gh: Any, repo: str, threshold: int) -> None:
         """Land pending learnings as one digest PR; best-effort.
 
-        With no open digest PR the branch is force-rebuilt from the default
-        head so the PR diff is always exactly the learnings file. While a
+        With no open digest PR the branch is created at (or fast-forwarded
+        to) the default head so the PR diff is always exactly the learnings
+        file; a same-named branch that cannot fast-forward is not provably
+        ours and is left untouched, deferring the flush. While a
         digest PR is open its branch belongs to reviewers: only entries not
         already flushed are appended onto the branch's current file, so
         manual edits and deletions survive later flushes. The digest is a
@@ -369,7 +378,12 @@ class ReviewService:
                 base_sha = await gh.get_branch_sha(repo, default_branch)
                 base_text = await gh.get_file_text(repo, LEARNINGS_REPO_PATH)
                 to_flush = pending
-                await gh.upsert_branch(repo, DIGEST_BRANCH, base_sha)
+                if not await gh.upsert_branch(repo, DIGEST_BRANCH, base_sha):
+                    logger.warning(
+                        "themis_digest_branch_conflict repo=%s branch=%s",
+                        repo, DIGEST_BRANCH,
+                    )
+                    return
             else:
                 flushed = await self.pending_store.load_flushed(repo)
                 flushed_ids = set(flushed["ids"]) if flushed else set()

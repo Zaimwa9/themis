@@ -112,11 +112,16 @@ just a discussion comment.
 
 - After a successful capture, if `len(pending) >= digest_threshold`
   (default **10**), flush:
-  1. No open digest PR: rebuild branch `themis/learnings` at the default
-     branch head, compose the file from the default-branch content + all
-     pending entries (supersedes applied — superseded lines removed), PUT
-     it via the contents API, and open a PR (`chore: sync review
-     learnings`). Never more than one digest PR per repo.
+  1. No open digest PR: create branch `themis/learnings` at the default
+     branch head (fast-forward only — a same-named branch holding commits
+     that are not on the default branch is not provably ours; the flush is
+     deferred with a warning and the buffer kept), compose the file from
+     the default-branch content + all pending entries (supersedes applied —
+     superseded lines removed), PUT it via the contents API, and open a PR
+     (`chore: sync review learnings`). Never more than one digest PR per
+     repo. When a digest PR merges, reconciliation deletes the bot's
+     branch so the next flush recreates it (a squash merge leaves it
+     diverged, which the fast-forward guard would refuse).
   2. Digest PR already open: its branch belongs to reviewers. The flush
      never resets it — it appends only not-yet-flushed entries onto the
      branch's *current* file, so manual edits and deletions on the open PR

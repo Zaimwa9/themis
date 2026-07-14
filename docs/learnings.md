@@ -24,6 +24,13 @@ permission (bootstrap-created Apps request it; older Apps must upgrade —
 see [bootstrap.md](bootstrap.md)). Until the permission is granted the
 digest write fails with a logged warning and learnings simply stay pending.
 
+The `themis/learnings` branch is never force-pushed. If a branch by that
+name already exists with its own commits (yours, or a digest PR you closed
+without merging), Themis leaves it alone, logs
+`themis_digest_branch_conflict`, and keeps the learnings pending; delete or
+rename that branch to let the digest flow resume. After a digest PR merges,
+Themis deletes its own branch automatically.
+
 ## Trust model
 
 - Only comments from authors with `OWNER`, `MEMBER`, or `COLLABORATOR`

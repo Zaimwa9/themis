@@ -481,7 +481,7 @@ async def test_get_branch_sha__returns_object_sha():
     assert await _client(handler).get_branch_sha("acme/widgets", "main") == "abc123"
 
 
-async def test_upsert_branch__exists__force_updates():
+async def test_upsert_branch__exists__fast_forwards_without_force():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -490,11 +490,14 @@ async def test_upsert_branch__exists__force_updates():
         captured["json"] = json.loads(request.content)
         return httpx.Response(200, json={})
 
-    await _client(handler).upsert_branch("acme/widgets", "themis/learnings", "abc123")
+    moved = await _client(handler).upsert_branch(
+        "acme/widgets", "themis/learnings", "abc123"
+    )
 
+    assert moved is True
     assert captured["method"] == "PATCH"
     assert captured["path"] == "/repos/acme/widgets/git/refs/heads/themis/learnings"
-    assert captured["json"] == {"sha": "abc123", "force": True}
+    assert captured["json"] == {"sha": "abc123", "force": False}
 
 
 async def test_upsert_branch__missing__creates_ref():
@@ -509,9 +512,48 @@ async def test_upsert_branch__missing__creates_ref():
         }
         return httpx.Response(201, json={})
 
-    await _client(handler).upsert_branch("acme/widgets", "themis/learnings", "abc123")
+    moved = await _client(handler).upsert_branch(
+        "acme/widgets", "themis/learnings", "abc123"
+    )
 
+    assert moved is True
     assert calls[-1] == ("POST", "/repos/acme/widgets/git/refs")
+
+
+async def test_upsert_branch__exists_not_fast_forward__returns_false():
+    """A branch holding commits that are not on the default branch (a human's,
+    or a closed digest PR's edits) must never be moved."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PATCH":
+            return httpx.Response(422, json={"message": "Update is not a fast forward"})
+        return httpx.Response(422, json={"message": "Reference already exists"})
+
+    moved = await _client(handler).upsert_branch(
+        "acme/widgets", "themis/learnings", "abc123"
+    )
+
+    assert moved is False
+
+
+async def test_delete_branch__sends_delete():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        return httpx.Response(204)
+
+    await _client(handler).delete_branch("acme/widgets", "themis/learnings")
+
+    assert captured["method"] == "DELETE"
+    assert captured["path"] == "/repos/acme/widgets/git/refs/heads/themis/learnings"
+
+
+async def test_delete_branch__already_gone__tolerated():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"message": "Reference does not exist"})
+
+    await _client(handler).delete_branch("acme/widgets", "themis/learnings")
 
 
 async def test_get_file_sha__missing__none():

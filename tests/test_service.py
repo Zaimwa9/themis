@@ -1661,6 +1661,28 @@ async def test_discuss__digest_flush_fails__reply_already_posted(
     assert len(await store.load(REPO)) == 10  # buffer intact for retry
 
 
+async def test_flush_digest__foreign_branch__skips_and_keeps_pending(
+    service, gh, tmp_path, caplog
+):
+    """A pre-existing themis/learnings branch that cannot fast-forward is not
+    provably ours (a human's, or a closed digest PR with edits): never reset
+    it, never write to it."""
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    for i in range(5):
+        await store.append(REPO, _entry_for_service(i))
+    _gh_for_digest(gh)
+    gh.upsert_branch.return_value = False
+
+    await service._flush_digest(gh, REPO, threshold=5)
+
+    gh.put_file.assert_not_awaited()
+    gh.create_pr.assert_not_awaited()
+    assert len(await store.load(REPO)) == 5
+    assert await store.load_flushed(REPO) is None
+    assert "themis_digest_branch_conflict" in caplog.text
+
+
 async def test_flush_digest__below_threshold__no_op(service, gh, tmp_path):
     store = PendingStore(tmp_path / "data")
     service.pending_store = store
@@ -1813,6 +1835,9 @@ async def test_load_learnings__flushed_pr_merged__zombie_ids_dropped(
     assert await store.load_flushed(REPO) is None
     assert zombie.id not in {e.id for e in await store.load(REPO)}
     assert "themis_learnings_rejected_pruned" in caplog.text
+    # The marker proves the branch fed our merged PR; delete it so the next
+    # flush recreates it instead of tripping the fast-forward guard.
+    gh.delete_branch.assert_awaited_once_with(REPO, DIGEST_BRANCH)
 
 
 async def test_load_learnings__flushed_pr_closed_unmerged__clears_marker_keeps_pending(
@@ -1832,6 +1857,9 @@ async def test_load_learnings__flushed_pr_closed_unmerged__clears_marker_keeps_p
     assert entry.id in {p.id for p in pending}
     assert entry.id in {e.id for e in effective}
     assert await store.load_flushed(REPO) is None
+    # Humans closed the PR; the branch (and any edits on it) is theirs to
+    # keep or delete — never remove it on their behalf.
+    gh.delete_branch.assert_not_awaited()
 
 
 async def test_load_learnings__flushed_pr_open__marker_and_pending_untouched(
