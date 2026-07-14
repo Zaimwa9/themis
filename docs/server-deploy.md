@@ -53,7 +53,8 @@ platform supports.
 Set `THEMIS_PUBLIC_URL=https://your-host` and Themis calls
 `PATCH /app/hook/config` at startup to point the App's webhook at
 `${THEMIS_PUBLIC_URL}/webhook`. The App can be created with a throwaway
-placeholder webhook URL (Quickstart step 1) and never touched again.
+placeholder webhook URL (as used by the manifest bootstrap's tunnel mode) and
+never touched again.
 
 If the call fails, wrong permissions, App not installed yet, Themis logs a
 warning and keeps serving; it does not crash on a self-registration

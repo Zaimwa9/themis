@@ -44,7 +44,7 @@ Mount your existing `~/.codex` directly instead of seeding a copy, via
 
 ```yaml
 services:
-  themis:
+  agent:
     volumes:
       - ~/.codex:/data/codex
 ```

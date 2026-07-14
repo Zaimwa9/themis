@@ -8,15 +8,18 @@ import httpx
 import pytest
 
 from themis.config import Settings, parse_repo_config
-from themis.engines import EngineError, EngineQuotaError
+from themis.engines import ENGINE_NAMES, EngineError, EngineQuotaError
 from themis.github.client import GitHubGraphQLError
 from themis.learnings import Learning, PendingStore, to_jsonl
 from themis.service import (
+    DEFAULT_MODELS,
     DIGEST_BRANCH,
     DIGEST_PR_TITLE,
     LEARNING_FOOTER,
     ReviewService,
+    _ENGINE_AUTH_HINTS,
     api_changed_paths,
+    git_changed_lines,
     git_head_sha,
     run_review_job,
 )
@@ -121,6 +124,9 @@ def service(gh: AsyncMock, tmp_path: Path, cleanup_calls: list[Path]) -> ReviewS
     async def changed_paths(gh_client, repo: str, pr_number: int) -> set[str]:
         return {"a.py"}
 
+    async def changed_lines(workspace: Path, base_ref: str) -> set[tuple[str, int, str]]:
+        return {("a.py", 3, "RIGHT")}
+
     async def head_sha(workspace: Path) -> str:
         return "abc123"
 
@@ -134,6 +140,7 @@ def service(gh: AsyncMock, tmp_path: Path, cleanup_calls: list[Path]) -> ReviewS
         cleanup=cleanup_calls.append,
         resolve_engine=_resolver(_review_agent()),
         changed_paths=changed_paths,
+        changed_lines=changed_lines,
         head_sha=head_sha,
     )
 
@@ -388,6 +395,25 @@ async def test_review__all_findings_outside_diff__no_inline_review(service, gh):
     gh.post_review.assert_not_awaited()
     summary = gh.post_summary_comment.await_args.args[2]
     assert "b.py:9" in summary
+
+
+async def test_review__finding_on_unchanged_line_of_changed_file__dropped(service, gh):
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 4, "body": "not a changed line"}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_review.assert_not_awaited()
+    summary = gh.post_summary_comment.await_args.args[2]
+    assert "a.py:4" in summary
+    assert "anchored outside the diff" in summary
 
 
 async def test_review__diff_paths_unavailable__findings_posted_unfiltered(service, gh):
@@ -912,6 +938,37 @@ async def test_git_head_sha__returns_workspace_head(tmp_path):
     assert await git_head_sha(tmp_path) == expected
 
 
+async def test_git_changed_lines__returns_exact_left_and_right_anchors(tmp_path):
+    _run_git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "a.py").write_text("one\nold\nthree\n")
+    unusual_path = 'tab\tquote"backslash\\.py'
+    (tmp_path / unusual_path).write_text("old\n")
+    _run_git(tmp_path, "add", "a.py")
+    _run_git(tmp_path, "add", unusual_path)
+    _run_git(tmp_path, "commit", "-q", "-m", "base")
+    _run_git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (tmp_path / "a.py").write_text("one\nnew\nthree\nfour\n")
+    (tmp_path / unusual_path).write_text("new\n")
+    _run_git(tmp_path, "add", "a.py")
+    _run_git(tmp_path, "add", unusual_path)
+    _run_git(tmp_path, "commit", "-q", "-m", "head")
+
+    anchors = await git_changed_lines(tmp_path, "main")
+
+    assert anchors == {
+        ("a.py", 2, "LEFT"),
+        ("a.py", 2, "RIGHT"),
+        ("a.py", 4, "RIGHT"),
+        (unusual_path, 1, "LEFT"),
+        (unusual_path, 1, "RIGHT"),
+    }
+
+
+async def test_git_changed_lines__missing_merge_base__fails_open(tmp_path):
+    _run_git(tmp_path, "init", "-q", "-b", "main")
+    assert await git_changed_lines(tmp_path, "missing") is None
+
+
 async def test_git_head_sha__git_failure__returns_none(tmp_path):
     assert await git_head_sha(tmp_path) is None
 
@@ -1145,6 +1202,13 @@ async def test_discuss__engine_unavailable__courtesy_comment_no_clone(service, g
     body = gh.post_issue_comment.await_args.args[2]
     assert "credentials" in body
     gh.post_reply.assert_not_awaited()
+
+
+def test_engine_maps_cover_all_engine_names():
+    # A registered engine without a default model or auth hint is a KeyError
+    # at review time; keep the three maps in lockstep.
+    assert set(DEFAULT_MODELS) == set(ENGINE_NAMES)
+    assert set(_ENGINE_AUTH_HINTS) == set(ENGINE_NAMES)
 
 
 LEARNING = Learning(

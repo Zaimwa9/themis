@@ -4,8 +4,9 @@ values of THEMIS_ENGINE and the repo config engine: key."""
 from themis.engines.base import Engine, EngineError, EngineQuotaError, EngineUnavailableError
 from themis.engines.claude import ClaudeEngine
 from themis.engines.codex import CodexEngine
+from themis.engines.glm import GlmEngine
 
-ENGINE_NAMES = ("codex", "claude")
+ENGINE_NAMES = ("codex", "claude", "glm")
 
 __all__ = [
     "ENGINE_NAMES", "Engine", "EngineError", "EngineQuotaError",
@@ -18,4 +19,6 @@ def resolve(name: str, *, codex_sandbox: str = "workspace-write") -> Engine:
         return CodexEngine(sandbox=codex_sandbox)
     if name == "claude":
         return ClaudeEngine()
+    if name == "glm":
+        return GlmEngine()
     raise ValueError(f"unknown engine {name!r}")
