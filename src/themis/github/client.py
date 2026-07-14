@@ -12,11 +12,13 @@ logger = logging.getLogger(__name__)
 
 SUMMARY_MARKER = "<!-- themis:summary -->"
 _PER_PAGE = 100
-# Ceiling on extra comment pages fetched per review thread (100 comments
-# each, on top of the 100 inlined in the threads query). High enough that no
-# real conversation hits it; low enough that one runaway thread cannot stall
-# the review job before it posts.
+# Ceilings on extra comment pages fetched (100 comments each, on top of the
+# 100 inlined in the threads query): per thread, and across the whole review
+# so many busy threads cannot add up to an unbounded pre-review fetch either.
+# High enough that no real conversation hits them; low enough that reply
+# volume can never stall the review job before it posts.
 MAX_COMMENT_PAGES = 10
+MAX_COMMENT_PAGES_TOTAL = 50
 _FAILED_CHECK_CONCLUSIONS = {
     "action_required",
     "cancelled",
@@ -249,6 +251,7 @@ class GitHubClient:
         owner, name = repo.split("/", 1)
         threads: list[dict[str, Any]] = []
         cursor: str | None = None
+        budget = [MAX_COMMENT_PAGES_TOTAL]  # shared across every thread
         while True:
             data = await self._graphql(
                 _THREADS_QUERY,
@@ -256,29 +259,33 @@ class GitHubClient:
             )
             page = data["repository"]["pullRequest"]["reviewThreads"]
             for node in page["nodes"]:
-                threads.append(await self._fill_thread_comments(node))
+                threads.append(await self._fill_thread_comments(node, budget))
             if not page["pageInfo"]["hasNextPage"]:
                 return threads
             cursor = page["pageInfo"]["endCursor"]
 
-    async def _fill_thread_comments(self, thread: dict[str, Any]) -> dict[str, Any]:
+    async def _fill_thread_comments(
+        self, thread: dict[str, Any], budget: list[int]
+    ) -> dict[str, Any]:
         """Fetch every comment page of a thread, root-first.
 
         The acknowledgment rule reads acceptance replies straight from
         threads.json; a windowed comment list would silently drop an
         acceptance in the middle of a long thread and keep its finding
-        open forever. The traversal is still bounded (MAX_COMMENT_PAGES)
-        so one runaway thread can never stall the review job."""
+        open forever. The traversal is still bounded - per thread
+        (MAX_COMMENT_PAGES) and across the review (the shared budget) -
+        so reply volume can never stall the review job."""
         comments = thread.setdefault("comments", {"nodes": []})
         page_info = comments.get("pageInfo") or {}
         pages = 0
         while page_info.get("hasNextPage"):
-            if pages >= MAX_COMMENT_PAGES:
+            if pages >= MAX_COMMENT_PAGES or budget[0] <= 0:
                 logger.warning(
-                    "themis_thread_comments_truncated thread=%s pages=%d",
-                    thread.get("id"), pages,
+                    "themis_thread_comments_truncated thread=%s pages=%d budget=%d",
+                    thread.get("id"), pages, budget[0],
                 )
                 break
+            budget[0] -= 1
             data = await self._graphql(
                 _THREAD_COMMENTS_QUERY,
                 {"id": thread["id"], "cursor": page_info.get("endCursor")},

@@ -6,6 +6,7 @@ import pytest
 
 from themis.github.client import (
     MAX_COMMENT_PAGES,
+    MAX_COMMENT_PAGES_TOTAL,
     SUMMARY_MARKER,
     GitHubClient,
     GitHubGraphQLError,
@@ -677,3 +678,36 @@ async def test_list_review_threads__runaway_thread__comment_pages_bounded():
     # traversal is bounded, keeping what was fetched so far.
     assert node_queries == MAX_COMMENT_PAGES
     assert len(threads[0]["comments"]["nodes"]) == 1 + MAX_COMMENT_PAGES
+
+
+async def test_list_review_threads__many_runaway_threads__review_wide_budget():
+    node_queries = 0
+    threads_nodes = [{
+        "id": f"T_{i}", "isResolved": False, "resolvedBy": None,
+        "path": "a.py", "line": 3,
+        "comments": {
+            "pageInfo": {"hasNextPage": True, "endCursor": f"C_{i}_0"},
+            "nodes": [{"databaseId": i, "body": "root"}],
+        },
+    } for i in range(8)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal node_queries
+        if "reviewThreads" in json.loads(request.content)["query"]:
+            return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": threads_nodes,
+                }}}}})
+        node_queries += 1
+        return httpx.Response(200, json={"data": {"node": {"comments": {
+            "pageInfo": {"hasNextPage": True, "endCursor": f"N_{node_queries}"},
+            "nodes": [{"databaseId": 10_000 + node_queries, "body": "reply"}],
+        }}}})
+
+    threads = await _client(handler).list_review_threads("acme/widgets", 7)
+
+    # 8 runaway threads x 10-page per-thread cap would be 80 extra calls;
+    # the review-wide budget keeps the whole fetch bounded.
+    assert node_queries == MAX_COMMENT_PAGES_TOTAL
+    assert len(threads) == 8
