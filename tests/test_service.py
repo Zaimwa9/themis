@@ -2395,7 +2395,7 @@ async def test_review__inline_findings_off__near_limit_summary_keeps_findings(
         (out / "actions.json").write_text(json.dumps({
             "findings": [
                 {"path": "a.py", "line": 3, "body": "first " + "x" * 1500},
-                {"path": "b.py", "line": 9, "body": "second " + "y" * 1500},
+                {"path": "a.py", "line": 3, "body": "second " + "y" * 1500},
             ],
         }))
         return "ok"
@@ -2406,6 +2406,67 @@ async def test_review__inline_findings_off__near_limit_summary_keeps_findings(
     summary = gh.post_summary_comment.await_args.args[2]
     # The summary yields space before folding: findings outrank prose on the
     # only delivery surface left.
-    assert "a.py:3" in summary
-    assert "b.py:9" in summary
+    assert "first" in summary
+    assert "second" in summary
     assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__inline_findings_off__outside_diff_finding_keeps_caveat(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": 3, "body": "anchored"},
+                {"path": "b.py", "line": 9, "body": "stale anchor"},
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_review.assert_not_awaited()
+    summary = gh.post_summary_comment.await_args.args[2]
+    # Anchor validation still runs first: the unanchorable finding stays
+    # visible but carries its outside-the-diff caveat instead of being folded
+    # as if it pointed at reviewed code.
+    assert "anchored outside the diff" in summary
+    assert "b.py:9" in summary
+    assert "a.py:3" in summary
+
+
+async def test_review__code_suggestions_off__indented_suggestion_fence_stripped(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Off-by-one.**\n\n"
+        "  ```suggestion\n"
+        "  range(n + 1)\n"
+        "  ```\n"
+        "Keep this.\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    # GFM treats fences indented up to 3 spaces as fences; the stripper must
+    # not let a slightly indented suggestion block slip through `off`.
+    assert "```suggestion" not in posted
+    assert "Keep this." in posted

@@ -574,7 +574,6 @@ class ReviewService:
                 )
                 if actions is None:
                     return
-                _enforce_delivery_modules(actions, modules, repo, pr_number)
                 # Codex runs can outlive the 60-min installation token; do every
                 # post-codex GitHub read/write on a freshly minted one.
                 post_gh = self.make_client(await self.get_token(installation_id))
@@ -582,6 +581,10 @@ class ReviewService:
                     await self._drop_findings_outside_diff(
                         actions, post_gh, repo, pr_number, workspace, pr["base"]["ref"]
                     )
+                    # After anchor validation, so a finding on unreviewed code
+                    # keeps its outside-the-diff caveat instead of being folded
+                    # as if it pointed at the diff.
+                    _enforce_delivery_modules(actions, modules, repo, pr_number)
                     _keep_bot_authored_resolutions(
                         actions, threads, self.bot_login, repo, pr_number
                     )
@@ -943,7 +946,8 @@ def _bot_in_thread(thread: dict[str, Any], bot_login: str) -> bool:
     return False
 
 
-_FENCE_LINE = re.compile(r"^(`{3,})([^`\r\n]*?)[ \t]*\r?\n?$")
+# GFM allows fence lines to be indented up to three spaces.
+_FENCE_LINE = re.compile(r"^ {0,3}(`{3,})([^`\r\n]*?)[ \t]*\r?\n?$")
 
 
 def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
