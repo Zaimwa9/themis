@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0](https://github.com/Zaimwa9/themis/compare/v0.1.2...v0.2.0) (2026-07-13)
+
+
+### Features
+
+* automate GitHub App bootstrap ([72a635f](https://github.com/Zaimwa9/themis/commit/72a635fbb3b053cef69fc0fa9cc9fb3f32bba6bf))
+* automate GitHub App bootstrap ([a7d1b15](https://github.com/Zaimwa9/themis/commit/a7d1b159b8ba638cbf2da323a2eae456d59737d6))
+
+
+### Bug Fixes
+
+* decode quoted git diff paths ([5fda16e](https://github.com/Zaimwa9/themis/commit/5fda16ec9dd0fe931b1879e2c7928074756a9269))
+* surface bot mention after bootstrap ([c384316](https://github.com/Zaimwa9/themis/commit/c38431647e9c8e19e5dc09c81280a77deae9c1d7))
+* validate inline review diff anchors ([f6a0aad](https://github.com/Zaimwa9/themis/commit/f6a0aadfca1276f5aed1c9db0c13594b78b03003))
+
 ## [0.1.2](https://github.com/Zaimwa9/themis/compare/v0.1.1...v0.1.2) (2026-07-13)
 
 

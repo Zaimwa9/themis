@@ -1,9 +1,11 @@
 """Themis orchestration: ReviewService + queue job runners."""
 
 import asyncio
+import ast
 import contextlib
 import json
 import logging
+import re
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -102,6 +104,72 @@ async def git_head_sha(workspace: Path) -> str | None:
     return output.strip()
 
 
+_DIFF_HUNK = re.compile(
+    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@"
+)
+
+
+def _diff_path(header: str, prefix: str) -> str | None:
+    path = header[4:]
+    if path.startswith('"'):
+        try:
+            decoded = ast.literal_eval(path)
+        except (SyntaxError, ValueError) as error:
+            raise ValueError("invalid quoted path in git diff") from error
+        if not isinstance(decoded, str):
+            raise ValueError("non-string path in git diff")
+        path = decoded
+    if path == "/dev/null":
+        return None
+    return path.removeprefix(prefix)
+
+
+async def git_changed_lines(
+    workspace: Path, base_ref: str
+) -> set[tuple[str, int, str]] | None:
+    """Exact line anchors accepted by GitHub for the reviewed base...HEAD diff.
+
+    The workspace contains both the PR head and origin/<base_ref>. A local
+    zero-context diff is authoritative and is not subject to the REST Files
+    API's patch truncation. Fail open when the shallow clone lacks a merge base.
+    """
+    returncode, output = await run_git(
+        "-c", "core.quotePath=false", "diff", "--unified=0", "--no-color",
+        "--no-ext-diff", f"origin/{base_ref}...HEAD", "--", cwd=workspace,
+    )
+    if returncode != 0:
+        logger.warning(
+            "themis_changed_lines_failed base=%s output=%s", base_ref, output[-200:]
+        )
+        return None
+
+    anchors: set[tuple[str, int, str]] = set()
+    old_path: str | None = None
+    new_path: str | None = None
+    for line in output.splitlines():
+        try:
+            if line.startswith("--- "):
+                old_path = _diff_path(line, "a/")
+                continue
+            if line.startswith("+++ "):
+                new_path = _diff_path(line, "b/")
+                continue
+        except ValueError as error:
+            logger.warning("themis_changed_lines_failed error=%s", error)
+            return None
+        match = _DIFF_HUNK.match(line)
+        if match is None:
+            continue
+        old_start, old_count, new_start, new_count = match.groups()
+        if old_path:
+            for number in range(int(old_start), int(old_start) + int(old_count or 1)):
+                anchors.add((old_path, number, "LEFT"))
+        if new_path:
+            for number in range(int(new_start), int(new_start) + int(new_count or 1)):
+                anchors.add((new_path, number, "RIGHT"))
+    return anchors
+
+
 @dataclass
 class ReviewService:
     settings: Settings
@@ -113,6 +181,9 @@ class ReviewService:
     cleanup: Callable[[Path], None]
     resolve_engine: Callable[[str], Engine]
     changed_paths: Callable[..., Awaitable[set[str] | None]] = api_changed_paths
+    changed_lines: Callable[[Path, str], Awaitable[set[tuple[str, int, str]] | None]] = (
+        git_changed_lines
+    )
     head_sha: Callable[[Path], Awaitable[str | None]] = git_head_sha
 
     async def _fetch_repo_config(self, gh: Any, repo: str) -> RepoConfig:
@@ -206,7 +277,7 @@ class ReviewService:
                 post_gh = self.make_client(await self.get_token(installation_id))
                 async with post_gh:
                     await self._drop_findings_outside_diff(
-                        actions, post_gh, repo, pr_number
+                        actions, post_gh, repo, pr_number, workspace, pr["base"]["ref"]
                     )
                     _keep_bot_authored_resolutions(
                         actions, threads, self.bot_login, repo, pr_number
@@ -390,20 +461,35 @@ class ReviewService:
 
     async def _drop_findings_outside_diff(
         self, actions: ReviewActions, gh: Any, repo: str, pr_number: int,
+        workspace: Path, base_ref: str,
     ) -> None:
         """GitHub 422s the whole review when one finding anchors outside the diff."""
         if not actions.findings:
             return
-        allowed = await self.changed_paths(gh, repo, pr_number)
-        if allowed is None:
+        allowed_paths = await self.changed_paths(gh, repo, pr_number)
+        allowed_lines = await self.changed_lines(workspace, base_ref)
+        if allowed_paths is None and allowed_lines is None:
             return
-        dropped = [f for f in actions.findings if f["path"] not in allowed]
+
+        def allowed(finding: dict[str, Any]) -> bool:
+            if allowed_paths is not None and finding["path"] not in allowed_paths:
+                return False
+            if allowed_lines is None:
+                return True
+            start = finding.get("start_line", finding["line"])
+            return all(
+                (finding["path"], line, finding["side"]) in allowed_lines
+                for line in range(start, finding["line"] + 1)
+            )
+
+        dropped = [f for f in actions.findings if not allowed(f)]
         if not dropped:
             return
-        actions.findings = [f for f in actions.findings if f["path"] in allowed]
+        actions.findings = [f for f in actions.findings if allowed(f)]
         logger.warning(
-            "themis_findings_outside_diff repo=%s pr=%s count=%d paths=%s",
-            repo, pr_number, len(dropped), [f["path"] for f in dropped],
+            "themis_findings_outside_diff repo=%s pr=%s count=%d anchors=%s",
+            repo, pr_number, len(dropped),
+            [(f["path"], f["line"], f["side"]) for f in dropped],
         )
         lines = "\n".join(f"- `{f['path']}:{f['line']}` {f['body']}" for f in dropped)
         actions.summary += (
@@ -431,8 +517,8 @@ class ReviewService:
                 if error.response.status_code != 422:
                     raise
                 logger.warning(
-                    "themis_inline_post_failed repo=%s pr=%s error=%s",
-                    repo, pr_number, error,
+                    "themis_inline_post_failed repo=%s pr=%s error=%s response=%s",
+                    repo, pr_number, error, redact_outbound(error.response.text[:500]),
                 )
                 lines = "\n".join(
                     f"- `{f['path']}:{f['line']}` {f['body']}" for f in actions.findings
