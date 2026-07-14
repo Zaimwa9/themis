@@ -26,12 +26,39 @@ and agent; there is still no database, Redis, or message broker.
 No clone or build needed: Themis ships as a prebuilt image,
 `ghcr.io/zaimwa9/themis`.
 
-## Quickstart
+## Quickstart (manifest bootstrap — fast to try, not for long-term use)
 
 The bootstrap uses GitHub's App Manifest flow to create the App, generate its
 private key and webhook secret, install it on the requested repository, and
 write a ready-to-run deployment. There are no GitHub settings to copy. GitHub
 still asks the account owner to approve App creation and repository access.
+
+> **Why not long-term?** The manifest flow generates a random App name and must
+> be re-run on every fresh deployment. For a permanent install, create a GitHub
+> App manually with a stable name and slug, then point Themis at it — see
+> [`docs/bootstrap.md`](docs/bootstrap.md) for the manual path.
+
+### Using a coding agent
+
+Copy the prompt below into Claude Code, Codex, or any agent that can run
+shell commands. It handles the entire bootstrap autonomously:
+
+```text
+Set up Themis for this repository using the automated GitHub App Manifest bootstrap:
+
+  https://github.com/Zaimwa9/themis/blob/main/docs/bootstrap.md
+
+  Use the Claude engine and the bundled ngrok tunnel.
+
+  Do not manually create or configure a GitHub App. Run `python -m themis init` with
+  `--engine claude --tunnel`.
+
+  Handle everything autonomously. Only pause when GitHub requires my approval or
+  Claude requires authentication.
+
+  After setup, start the deployment, verify it works, and tell me the bot's @mention
+  and how to trigger a review.
+```
 
 ### 1. Log in to Codex
 
