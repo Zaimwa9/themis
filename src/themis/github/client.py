@@ -9,6 +9,14 @@ from themis.github.auth import GITHUB_API_URL
 
 SUMMARY_MARKER = "<!-- themis:summary -->"
 _PER_PAGE = 100
+_FAILED_CHECK_CONCLUSIONS = {
+    "action_required",
+    "cancelled",
+    "failure",
+    "stale",
+    "startup_failure",
+    "timed_out",
+}
 
 
 class GitHubGraphQLError(Exception):
@@ -126,6 +134,87 @@ class GitHubClient:
         response = await self._client.get(f"{self._api_url}/repos/{repo}/pulls/{number}")
         response.raise_for_status()
         return dict(response.json())
+
+    async def get_ci_snapshot(self, repo: str, commit_sha: str) -> dict[str, Any]:
+        """Return one non-blocking snapshot of checks and legacy statuses.
+
+        Each API is allowed to fail independently. A partial read is marked
+        `unavailable` unless the visible evidence already establishes failure;
+        no retry or polling happens here.
+        """
+        checks: list[dict[str, Any]] = []
+        unavailable_sources: list[str] = []
+
+        try:
+            page = 1
+            while True:
+                response = await self._client.get(
+                    f"{self._api_url}/repos/{repo}/commits/{commit_sha}/check-runs",
+                    params={"filter": "latest", "per_page": _PER_PAGE, "page": page},
+                )
+                response.raise_for_status()
+                batch = response.json().get("check_runs", [])
+                checks.extend({
+                    "type": "check_run",
+                    "name": item.get("name"),
+                    "status": item.get("status"),
+                    "conclusion": item.get("conclusion"),
+                    "details_url": item.get("details_url"),
+                } for item in batch)
+                if len(batch) < _PER_PAGE:
+                    break
+                page += 1
+        except (httpx.HTTPError, ValueError, AttributeError):
+            unavailable_sources.append("check_runs")
+
+        try:
+            statuses = await self._paginate(
+                f"{self._api_url}/repos/{repo}/commits/{commit_sha}/statuses"
+            )
+            # GitHub returns newest first. Keep only the latest status for each
+            # context so an old failure cannot override a later success.
+            seen_contexts: set[str] = set()
+            for item in statuses:
+                context = item.get("context") or "unnamed status"
+                if context in seen_contexts:
+                    continue
+                seen_contexts.add(context)
+                state = item.get("state")
+                checks.append({
+                    "type": "status",
+                    "name": context,
+                    "status": "in_progress" if state == "pending" else "completed",
+                    "conclusion": state,
+                    "details_url": item.get("target_url"),
+                })
+        except (httpx.HTTPError, ValueError, AttributeError):
+            unavailable_sources.append("statuses")
+
+        if any(
+            check["conclusion"] in _FAILED_CHECK_CONCLUSIONS | {"error"}
+            for check in checks
+        ):
+            state = "failed"
+        elif unavailable_sources:
+            # Do not call the aggregate passed/pending/none when one source is
+            # invisible: an unread check may carry the opposite result.
+            state = "unavailable"
+        elif any(
+            check["status"] != "completed" or check["conclusion"] is None
+            for check in checks
+        ):
+            state = "pending"
+        elif checks:
+            state = "passed"
+        else:
+            state = "none"
+
+        return {
+            "state": state,
+            "head_sha": commit_sha,
+            "checks": checks,
+            "unavailable_sources": unavailable_sources,
+        }
 
     async def post_review(
         self, repo: str, number: int, commit_sha: str, comments: list[dict[str, Any]]

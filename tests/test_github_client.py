@@ -111,6 +111,83 @@ async def test_list_pr_files__http_error__raises():
         await _client(handler).list_pr_files("acme/widgets", 7)
 
 
+@pytest.mark.parametrize(
+    ("check_run", "status", "expected"),
+    [
+        ({"name": "tests", "status": "completed", "conclusion": "success"}, None,
+         "passed"),
+        ({"name": "tests", "status": "completed", "conclusion": "failure"}, None,
+         "failed"),
+        ({"name": "tests", "status": "in_progress", "conclusion": None}, None,
+         "pending"),
+        (None, None, "none"),
+    ],
+)
+async def test_get_ci_snapshot__states__aggregates_without_polling(
+    check_run, status, expected
+):
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(200, json={"check_runs": [check_run] if check_run else []})
+        if request.url.path.endswith("/statuses"):
+            return httpx.Response(200, json=[status] if status else [])
+        raise AssertionError(request.url.path)
+
+    snapshot = await _client(handler).get_ci_snapshot("acme/widgets", "abc123")
+
+    assert snapshot["state"] == expected
+    assert snapshot["head_sha"] == "abc123"
+    assert requests == [
+        "/repos/acme/widgets/commits/abc123/check-runs",
+        "/repos/acme/widgets/commits/abc123/statuses",
+    ]
+
+
+async def test_get_ci_snapshot__legacy_statuses__keeps_latest_per_context():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(200, json={"check_runs": []})
+        return httpx.Response(200, json=[
+            {"context": "deploy", "state": "success", "target_url": "new"},
+            {"context": "deploy", "state": "failure", "target_url": "old"},
+        ])
+
+    snapshot = await _client(handler).get_ci_snapshot("acme/widgets", "abc123")
+
+    assert snapshot["state"] == "passed"
+    assert snapshot["checks"] == [{
+        "type": "status", "name": "deploy", "status": "completed",
+        "conclusion": "success", "details_url": "new",
+    }]
+
+
+async def test_get_ci_snapshot__both_sources_fail__is_unavailable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"message": "permission denied"})
+
+    snapshot = await _client(handler).get_ci_snapshot("acme/widgets", "abc123")
+
+    assert snapshot["state"] == "unavailable"
+    assert snapshot["checks"] == []
+    assert snapshot["unavailable_sources"] == ["check_runs", "statuses"]
+
+
+async def test_get_ci_snapshot__one_source_invisible__is_not_reported_as_passed():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(403, json={"message": "missing permission"})
+        return httpx.Response(200, json=[{"context": "build", "state": "success"}])
+
+    snapshot = await _client(handler).get_ci_snapshot("acme/widgets", "abc123")
+
+    assert snapshot["state"] == "unavailable"
+    assert snapshot["checks"][0]["conclusion"] == "success"
+    assert snapshot["unavailable_sources"] == ["check_runs"]
+
+
 async def test_list_review_threads__single_page__returns_nodes():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/graphql"

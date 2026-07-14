@@ -454,13 +454,33 @@ class ReviewService:
             )
             try:
                 _write_inputs(workspace, pr, threads, learnings=learnings)
+
+                async def snapshot_ci() -> None:
+                    snapshot = _unavailable_ci_snapshot(pr["head"]["sha"])
+                    try:
+                        ci_gh = self.make_client(await self.get_token(installation_id))
+                        async with ci_gh:
+                            fetched = await ci_gh.get_ci_snapshot(repo, pr["head"]["sha"])
+                            if not isinstance(fetched, dict):
+                                raise TypeError("CI snapshot is not an object")
+                            snapshot = fetched
+                    except Exception as error:
+                        # CI context improves a review but must never delay or
+                        # prevent it. Cancellation still propagates because
+                        # asyncio.CancelledError is a BaseException.
+                        logger.warning(
+                            "themis_ci_snapshot_failed repo=%s pr=%s error=%s",
+                            repo, pr_number, redact_outbound(str(error))[:200],
+                        )
+                    _write_checks_input(workspace, snapshot)
+
                 prompt = build_review_prompt(
                     repo, pr_number, pr["base"]["ref"], extra_context=extra_context,
                     has_learnings=bool(learnings),
                 )
                 actions = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
-                    parse_output, noun="review",
+                    parse_output, noun="review", before_first_run=snapshot_ci,
                 )
                 if actions is None:
                     return
@@ -594,6 +614,7 @@ class ReviewService:
         prompt: str,
         parser: Callable[[Path], T],
         noun: str,
+        before_first_run: Callable[[], Awaitable[None]] | None = None,
     ) -> T | None:
         """Run the engine + parse, with retries. Returns None when the quota is exhausted."""
         last_error: Exception = EngineError("no attempts ran")
@@ -603,6 +624,9 @@ class ReviewService:
                 shutil.rmtree(output_dir)
             try:
                 async with _agent_slot:
+                    if before_first_run is not None:
+                        await before_first_run()
+                        before_first_run = None
                     agent_output = await engine.run(
                         prompt=prompt,
                         workspace=workspace,
@@ -785,6 +809,21 @@ def _write_inputs(
     (input_dir / "threads.json").write_text(json.dumps(threads, indent=2))
     if learnings:
         (input_dir / "learnings.jsonl").write_text(to_jsonl(learnings))
+
+
+def _unavailable_ci_snapshot(head_sha: str) -> dict[str, Any]:
+    return {
+        "state": "unavailable",
+        "head_sha": head_sha,
+        "checks": [],
+        "unavailable_sources": ["check_runs", "statuses"],
+    }
+
+
+def _write_checks_input(workspace: Path, snapshot: dict[str, Any]) -> None:
+    input_dir = workspace / INPUT_DIR
+    input_dir.mkdir(exist_ok=True)
+    (input_dir / "checks.json").write_text(json.dumps(snapshot, indent=2))
 
 
 def _find_thread(
