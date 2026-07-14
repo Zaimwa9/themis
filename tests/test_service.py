@@ -2619,6 +2619,45 @@ async def test_review__inline_findings_off__long_paths_do_not_drop_tail(service,
     assert len(summary) <= MAX_BODY_LEN
 
 
+async def test_review__inline_findings_off__redaction_expansion_keeps_all_pointers(
+    service, gh, monkeypatch
+):
+    # An 8-char secret redacts to the 10-char "[redacted]" marker, so
+    # redaction can EXPAND text. Budgeting on pre-redaction lengths would
+    # overflow the posting cap and the final chop would drop tail pointers.
+    monkeypatch.setenv("THEMIS_API_TOKEN", "hunter22")
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+    body = ("hunter22 " * 400).strip()
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": i + 1, "body": body} for i in range(100)
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    async def any_paths(gh_client, repo, pr_number):
+        return None  # fail-open: no path filtering
+
+    async def any_lines(workspace, base_ref):
+        return None
+
+    service.changed_paths = any_paths
+    service.changed_lines = any_lines
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    assert summary.count("- `a.py:") == 100
+    assert "hunter22" not in summary
+    assert len(summary) <= MAX_BODY_LEN
+
+
 async def test_review__code_suggestions_off__suggestion_only_body_keeps_placeholder(
     service, gh
 ):

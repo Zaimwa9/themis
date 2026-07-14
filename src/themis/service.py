@@ -576,6 +576,12 @@ class ReviewService:
                     return
                 # Codex runs can outlive the 60-min installation token; do every
                 # post-codex GitHub read/write on a freshly minted one.
+                # Redact before anything measures text: redaction can EXPAND
+                # (a short secret becomes the longer marker), so budgets
+                # computed on pre-redaction lengths would overflow the posting
+                # cap and drop tail findings. _post_review_results redacts
+                # again as the posting-path backstop; that is idempotent.
+                _redact_actions(actions)
                 post_gh = self.make_client(await self.get_token(installation_id))
                 async with post_gh:
                     await self._drop_findings_outside_diff(
@@ -835,11 +841,7 @@ class ReviewService:
     async def _post_review_results(
         self, gh: Any, repo: str, pr_number: int, commit_sha: str, actions: ReviewActions
     ) -> None:
-        actions.summary = redact_outbound(actions.summary)
-        for finding in actions.findings:
-            finding["body"] = redact_outbound(finding["body"])
-        for reply in actions.replies:
-            reply["body"] = redact_outbound(reply["body"])
+        _redact_actions(actions)
         summary = actions.summary
         if actions.findings:
             try:
@@ -949,6 +951,14 @@ def _bot_in_thread(thread: dict[str, Any], bot_login: str) -> bool:
 # GFM allows fence lines to be indented up to three spaces; a fence is a run
 # of backticks or tildes.
 _FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*?)[ \t]*\r?\n?$")
+
+
+def _redact_actions(actions: ReviewActions) -> None:
+    actions.summary = redact_outbound(actions.summary)
+    for finding in actions.findings:
+        finding["body"] = redact_outbound(finding["body"])
+    for reply in actions.replies:
+        reply["body"] = redact_outbound(reply["body"])
 
 
 def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
