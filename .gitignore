@@ -7,3 +7,5 @@ docker-compose.override.yml
 .ruff_cache/
 dist/
 .DS_Store
+docs/superpowers/
+.superpowers/
