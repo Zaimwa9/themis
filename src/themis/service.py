@@ -1013,7 +1013,13 @@ def _enforce_delivery_modules(
         for finding in actions.findings:
             body, count = _strip_suggestion_blocks(finding["body"])
             if count:
-                finding["body"] = body.rstrip()
+                # A suggestion-only body must not strip to empty: GitHub
+                # rejects the whole review batch on an empty comment body.
+                finding["body"] = body.rstrip() or (
+                    "Suggested change omitted (`code_suggestions` is disabled"
+                    " for this repository); the fix targets the lines this"
+                    " comment anchors to."
+                )
                 stripped += count
         summary, count = _strip_suggestion_blocks(actions.summary)
         if count:

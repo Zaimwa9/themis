@@ -2617,3 +2617,30 @@ async def test_review__inline_findings_off__long_paths_do_not_drop_tail(service,
     # share, they never push tail findings past the comment cap.
     assert summary.count(f"- `{long_path}:") == 200
     assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__code_suggestions_off__suggestion_only_body_keeps_placeholder(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{
+                "path": "a.py", "line": 3,
+                "body": "```suggestion\nrange(n + 1)\n```\n",
+            }],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    # A suggestion-only body must never strip to empty: GitHub rejects the
+    # whole batch on an empty comment body and every finding gets demoted.
+    assert posted.strip()
+    assert "```suggestion" not in posted
