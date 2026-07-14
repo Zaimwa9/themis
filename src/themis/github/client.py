@@ -1,5 +1,6 @@
 """GitHub REST + GraphQL client for themis posting and reads."""
 
+import base64
 from typing import Any
 
 import httpx
@@ -294,17 +295,125 @@ class GitHubClient:
         response = await self._client.post(url, json={"content": content})
         response.raise_for_status()
 
-    async def get_file_text(self, repo: str, path: str) -> str | None:
-        """File content from the repo's default branch, or None when absent.
+    async def get_file_text(
+        self, repo: str, path: str, ref: str | None = None
+    ) -> str | None:
+        """File content, or None when absent.
 
-        Default branch on purpose: per-repo behavior config must not be
-        overridable from inside the PR under review.
+        Defaults to the repo's default branch on purpose: per-repo behavior
+        config must not be overridable from inside the PR under review. An
+        explicit ref is for bot-owned branches (the learnings digest).
         """
         response = await self._client.get(
             f"{self._api_url}/repos/{repo}/contents/{path}",
             headers={"Accept": "application/vnd.github.raw+json"},
+            params={"ref": ref} if ref is not None else None,
         )
         if response.status_code == 404:
             return None
         response.raise_for_status()
         return response.text
+
+    async def get_default_branch(self, repo: str) -> str:
+        response = await self._client.get(f"{self._api_url}/repos/{repo}")
+        response.raise_for_status()
+        return str(response.json()["default_branch"])
+
+    async def get_branch_sha(self, repo: str, branch: str) -> str:
+        response = await self._client.get(
+            f"{self._api_url}/repos/{repo}/git/ref/heads/{branch}"
+        )
+        response.raise_for_status()
+        return str(response.json()["object"]["sha"])
+
+    async def find_branch_sha(self, repo: str, branch: str) -> str | None:
+        """Branch tip sha, or None when the branch does not exist."""
+        response = await self._client.get(
+            f"{self._api_url}/repos/{repo}/git/ref/heads/{branch}"
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return str(response.json()["object"]["sha"])
+
+    async def upsert_branch(self, repo: str, branch: str, sha: str) -> bool:
+        """Fast-forward branch to sha, creating it when absent.
+
+        Never force: a branch holding commits that are not on the default
+        branch — a human's branch with the same name, or a closed digest
+        PR's edits — must not be reset. GitHub refuses the non-fast-forward
+        move atomically, so no racing push can be lost. Returns False when
+        the branch exists but cannot be fast-forwarded."""
+        response = await self._client.patch(
+            f"{self._api_url}/repos/{repo}/git/refs/heads/{branch}",
+            json={"sha": sha, "force": False},
+        )
+        if response.status_code in (404, 422):
+            create = await self._client.post(
+                f"{self._api_url}/repos/{repo}/git/refs",
+                json={"ref": f"refs/heads/{branch}", "sha": sha},
+            )
+            if create.status_code == 422:
+                # Creation refused because the ref exists, so the PATCH 422
+                # was a rejected non-fast-forward move, not a missing ref.
+                return False
+            create.raise_for_status()
+            return True
+        response.raise_for_status()
+        return True
+
+    async def delete_branch(self, repo: str, branch: str) -> None:
+        """Delete a ref; already-absent (e.g. auto-delete on merge) is fine."""
+        response = await self._client.delete(
+            f"{self._api_url}/repos/{repo}/git/refs/heads/{branch}"
+        )
+        if response.status_code in (404, 422):
+            return
+        response.raise_for_status()
+
+    async def get_file_sha(self, repo: str, path: str, ref: str) -> str | None:
+        response = await self._client.get(
+            f"{self._api_url}/repos/{repo}/contents/{path}", params={"ref": ref}
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return str(response.json()["sha"])
+
+    async def put_file(
+        self, repo: str, path: str, *, content: str, message: str,
+        branch: str, sha: str | None = None,
+    ) -> str:
+        """Returns the sha of the commit the write created."""
+        body: dict[str, Any] = {
+            "message": message,
+            "content": base64.b64encode(content.encode()).decode(),
+            "branch": branch,
+        }
+        if sha is not None:
+            body["sha"] = sha
+        response = await self._client.put(
+            f"{self._api_url}/repos/{repo}/contents/{path}", json=body
+        )
+        response.raise_for_status()
+        return str(response.json()["commit"]["sha"])
+
+    async def find_open_pr(self, repo: str, head_branch: str) -> int | None:
+        owner = repo.split("/", 1)[0]
+        response = await self._client.get(
+            f"{self._api_url}/repos/{repo}/pulls",
+            params={"head": f"{owner}:{head_branch}", "state": "open"},
+        )
+        response.raise_for_status()
+        pulls = response.json()
+        return int(pulls[0]["number"]) if pulls else None
+
+    async def create_pr(
+        self, repo: str, *, title: str, body: str, head: str, base: str
+    ) -> int:
+        response = await self._client.post(
+            f"{self._api_url}/repos/{repo}/pulls",
+            json={"title": title, "body": body, "head": head, "base": base},
+        )
+        response.raise_for_status()
+        return int(response.json()["number"])

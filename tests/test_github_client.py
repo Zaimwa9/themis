@@ -1,3 +1,4 @@
+import base64
 import json
 
 import httpx
@@ -428,6 +429,27 @@ async def test_get_file_text_returns_raw_content():
     assert text == "model:\n  name: gpt-5.4\n"
 
 
+async def test_get_file_text_with_ref__queries_that_ref():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["ref"] == "themis/learnings"
+        assert request.headers["Accept"] == "application/vnd.github.raw+json"
+        return httpx.Response(200, text='{"id": "lrn-00000001"}')
+
+    text = await _client(handler).get_file_text(
+        "acme/widgets", ".themis/learnings.jsonl", ref="themis/learnings"
+    )
+
+    assert text == '{"id": "lrn-00000001"}'
+
+
+async def test_get_file_text_without_ref__no_ref_param():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "ref" not in request.url.params
+        return httpx.Response(200, text="x")
+
+    assert await _client(handler).get_file_text("acme/widgets", "f.txt") == "x"
+
+
 async def test_get_file_text_missing_file_returns_none():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"message": "Not Found"})
@@ -441,3 +463,166 @@ async def test_get_file_text_server_error_raises():
 
     with pytest.raises(httpx.HTTPStatusError):
         await _client(handler).get_file_text("acme/widgets", ".themis/config.yaml")
+
+
+async def test_get_default_branch__returns_field():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/acme/widgets"
+        return httpx.Response(200, json={"default_branch": "main"})
+
+    assert await _client(handler).get_default_branch("acme/widgets") == "main"
+
+
+async def test_get_branch_sha__returns_object_sha():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/acme/widgets/git/ref/heads/main"
+        return httpx.Response(200, json={"object": {"sha": "abc123"}})
+
+    assert await _client(handler).get_branch_sha("acme/widgets", "main") == "abc123"
+
+
+async def test_upsert_branch__exists__fast_forwards_without_force():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={})
+
+    moved = await _client(handler).upsert_branch(
+        "acme/widgets", "themis/learnings", "abc123"
+    )
+
+    assert moved is True
+    assert captured["method"] == "PATCH"
+    assert captured["path"] == "/repos/acme/widgets/git/refs/heads/themis/learnings"
+    assert captured["json"] == {"sha": "abc123", "force": False}
+
+
+async def test_upsert_branch__missing__creates_ref():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "PATCH":
+            return httpx.Response(422, json={"message": "Reference does not exist"})
+        assert json.loads(request.content) == {
+            "ref": "refs/heads/themis/learnings", "sha": "abc123",
+        }
+        return httpx.Response(201, json={})
+
+    moved = await _client(handler).upsert_branch(
+        "acme/widgets", "themis/learnings", "abc123"
+    )
+
+    assert moved is True
+    assert calls[-1] == ("POST", "/repos/acme/widgets/git/refs")
+
+
+async def test_upsert_branch__exists_not_fast_forward__returns_false():
+    """A branch holding commits that are not on the default branch (a human's,
+    or a closed digest PR's edits) must never be moved."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PATCH":
+            return httpx.Response(422, json={"message": "Update is not a fast forward"})
+        return httpx.Response(422, json={"message": "Reference already exists"})
+
+    moved = await _client(handler).upsert_branch(
+        "acme/widgets", "themis/learnings", "abc123"
+    )
+
+    assert moved is False
+
+
+async def test_delete_branch__sends_delete():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        return httpx.Response(204)
+
+    await _client(handler).delete_branch("acme/widgets", "themis/learnings")
+
+    assert captured["method"] == "DELETE"
+    assert captured["path"] == "/repos/acme/widgets/git/refs/heads/themis/learnings"
+
+
+async def test_delete_branch__already_gone__tolerated():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"message": "Reference does not exist"})
+
+    await _client(handler).delete_branch("acme/widgets", "themis/learnings")
+
+
+async def test_get_file_sha__missing__none():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["ref"] == "themis/learnings"
+        return httpx.Response(404, json={})
+
+    sha = await _client(handler).get_file_sha(
+        "acme/widgets", ".themis/learnings.jsonl", ref="themis/learnings"
+    )
+    assert sha is None
+
+
+async def test_put_file__encodes_content_and_sha():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"commit": {"sha": "digest-tip"}})
+
+    commit_sha = await _client(handler).put_file(
+        "acme/widgets", ".themis/learnings.jsonl",
+        content='{"id": "lrn-aaaaaaaa"}\n', message="chore: sync review learnings",
+        branch="themis/learnings", sha="f00",
+    )
+
+    assert commit_sha == "digest-tip"
+    assert captured["path"] == "/repos/acme/widgets/contents/.themis/learnings.jsonl"
+    body = captured["json"]
+    assert base64.b64decode(body["content"]).decode() == '{"id": "lrn-aaaaaaaa"}\n'
+    assert body["branch"] == "themis/learnings"
+    assert body["sha"] == "f00"
+
+
+async def test_find_branch_sha__present_and_absent():
+    def some(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"object": {"sha": "abc123"}})
+
+    def none(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={})
+
+    assert await _client(some).find_branch_sha("acme/widgets", "themis/learnings") == (
+        "abc123"
+    )
+    assert await _client(none).find_branch_sha("acme/widgets", "themis/learnings") is None
+
+
+async def test_find_open_pr__present_and_absent():
+    def some(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["head"] == "acme:themis/learnings"
+        assert request.url.params["state"] == "open"
+        return httpx.Response(200, json=[{"number": 12}])
+
+    def none(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    assert await _client(some).find_open_pr("acme/widgets", "themis/learnings") == 12
+    assert await _client(none).find_open_pr("acme/widgets", "themis/learnings") is None
+
+
+async def test_create_pr__returns_number():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["head"] == "themis/learnings" and body["base"] == "main"
+        return httpx.Response(201, json={"number": 13})
+
+    number = await _client(handler).create_pr(
+        "acme/widgets", title="chore: sync review learnings", body="digest",
+        head="themis/learnings", base="main",
+    )
+    assert number == 13

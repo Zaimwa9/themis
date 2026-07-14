@@ -37,6 +37,8 @@ class DiscussRequest(BaseModel):
     kind: Literal["conversation", "thread"]
     in_reply_to_id: int | None = None
     mentions_bot: bool = True
+    author_association: str = "NONE"
+    author_login: str = ""
 
 
 def _job_id(job: ReviewJob | DiscussJob) -> str:
@@ -67,6 +69,8 @@ def _enqueue(
                 installation_id=job.installation_id, comment_id=job.comment_id,
                 body=job.body, kind=job.kind, in_reply_to_id=job.in_reply_to_id,
                 mentions_bot=job.mentions_bot,
+                author_association=job.author_association,
+                author_login=job.author_login,
             )
     return queue.enqueue(_job_id(job), run)
 
@@ -178,6 +182,7 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             repo=body.repo, pr_number=body.pr_number, installation_id=installation_id,
             comment_id=body.comment_id, body=body.body, kind=body.kind,
             in_reply_to_id=body.in_reply_to_id, mentions_bot=body.mentions_bot,
+            author_association=body.author_association, author_login=body.author_login,
         )
         enqueued = _enqueue(settings, queue, request.app.state.bot_slug, job)
         if not _skip_ack(job):

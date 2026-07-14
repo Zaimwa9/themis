@@ -1,5 +1,6 @@
 """Webhook + trigger API routes."""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -51,6 +52,26 @@ def make_client(settings=None):
     app.state.bot_slug = "test-reviewer"
     app.include_router(create_router(settings, queue))
     return TestClient(app), queue
+
+
+def _make_client_capturing(settings=None):
+    """make_client variant that also retains the enqueued run callables."""
+    settings = settings or make_settings()
+    queue = RecordingQueue()
+    runs = []
+    original_enqueue = queue.enqueue
+
+    def enqueue(job_id, run):
+        accepted = original_enqueue(job_id, run)
+        if accepted:
+            runs.append(run)
+        return accepted
+
+    queue.enqueue = enqueue
+    app = FastAPI()
+    app.state.bot_slug = "test-reviewer"
+    app.include_router(create_router(settings, queue))
+    return TestClient(app), runs
 
 
 def sign(secret: str, body: bytes) -> str:
@@ -448,3 +469,56 @@ def test_api_discuss_unmentioned_thread_reply_skips_ack(monkeypatch):
     assert response.status_code == 202
     assert queue.enqueued == ["discuss:99"]
     ack.assert_not_awaited()
+
+
+# --- author trust fields -----------------------------------------------------
+
+
+def test_webhook_thread_reply_forwards_author_trust_to_discussion_job(monkeypatch):
+    job = AsyncMock()
+    monkeypatch.setattr("themis.router.run_discussion_job", job)
+    monkeypatch.setattr("themis.router._ack", AsyncMock())
+    client, runs = _make_client_capturing()
+    payload_dict = review_comment_payload(
+        body="@test-reviewer remember: use the manager", in_reply_to=555
+    )
+    payload_dict["comment"]["author_association"] = "MEMBER"
+    payload_dict["comment"]["user"] = {"login": "dev"}
+    payload = json.dumps(payload_dict).encode()
+
+    response = client.post(
+        "/webhook",
+        content=payload,
+        headers={
+            "x-hub-signature-256": sign("hush", payload),
+            "x-github-event": "pull_request_review_comment",
+        },
+    )
+
+    assert response.status_code == 200
+    asyncio.run(runs[0]())
+    assert job.await_args.kwargs["author_association"] == "MEMBER"
+    assert job.await_args.kwargs["author_login"] == "dev"
+
+
+def test_api_discuss_association_defaults_untrusted(monkeypatch):
+    job = AsyncMock()
+    monkeypatch.setattr("themis.router.run_discussion_job", job)
+    monkeypatch.setattr("themis.router._ack", AsyncMock())
+    monkeypatch.setattr("themis.router.make_app_jwt", lambda client_id, pem: "jwt")
+    monkeypatch.setattr(
+        "themis.router.get_repo_installation_id", AsyncMock(return_value=42)
+    )
+    client, runs = _make_client_capturing(make_settings(api_token="tok"))
+
+    response = client.post(
+        "/api/discuss",
+        json={"repo": "acme/widgets", "pr_number": 7, "comment_id": 1,
+              "body": "hi", "kind": "conversation"},
+        headers={"Authorization": "Bearer tok"},
+    )
+
+    assert response.status_code == 202
+    asyncio.run(runs[0]())
+    assert job.await_args.kwargs["author_association"] == "NONE"
+    assert job.await_args.kwargs["author_login"] == ""

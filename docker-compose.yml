@@ -13,10 +13,12 @@ services:
       THEMIS_TUNNEL_API: ${THEMIS_TUNNEL_API:-}
       THEMIS_WEBHOOK_ENABLED: ${THEMIS_WEBHOOK_ENABLED:-true}
       THEMIS_API_TOKEN: ${THEMIS_API_TOKEN:-}
+      THEMIS_DATA_ROOT: /data/themis
     ports:
       - "8000:8000"
     volumes:
       - workspaces:/tmp/themis
+      - themis-data:/data/themis
     depends_on:
       agent:
         condition: service_healthy
@@ -57,3 +59,4 @@ services:
 volumes:
   workspaces:
   codex-home:
+  themis-data:

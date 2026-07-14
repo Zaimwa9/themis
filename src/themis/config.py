@@ -43,12 +43,27 @@ class TriggersConfig(BaseModel):
     auto_review: bool = True
 
 
+class LearningsConfig(BaseModel):
+    enabled: bool = True
+    digest_threshold: int = 10
+
+    @field_validator("digest_threshold", mode="before")
+    @classmethod
+    def _threshold_at_least_one(cls, value: object) -> object:
+        """A nonsense threshold must not void the rest of the repo config."""
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+            return value
+        logger.warning("themis_invalid_digest_threshold value=%s", str(value)[:50])
+        return 10
+
+
 class RepoConfig(BaseModel):
     engine: str | None = None
     web_access: bool = False
     model: ModelConfig = ModelConfig()
     limits: LimitsConfig = LimitsConfig()
     triggers: TriggersConfig = TriggersConfig()
+    learnings: LearningsConfig = LearningsConfig()
 
     @field_validator("engine", mode="before")
     @classmethod
@@ -102,6 +117,7 @@ class Settings:
     tunnel_api: str | None
     agent_url: str
     agent_token: str = field(repr=False)
+    data_root: Path = field(default_factory=lambda: Path.home() / ".themis")
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -172,4 +188,5 @@ def load_settings() -> Settings:
         tunnel_api=os.getenv("THEMIS_TUNNEL_API") or None,
         agent_url=os.getenv("THEMIS_AGENT_URL") or "http://agent:8001",
         agent_token=os.environ["THEMIS_AGENT_TOKEN"],
+        data_root=Path(os.getenv("THEMIS_DATA_ROOT") or "~/.themis").expanduser(),
     )

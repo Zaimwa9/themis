@@ -120,7 +120,10 @@ def build_manifest(options: BootstrapOptions, state: str) -> dict[str, object]:
         "public": False,
         "default_permissions": {
             "checks": "read",
-            "contents": "read",
+            # Write, not read: the learnings digest pushes a bot-owned branch
+            # and file via the Contents API. Existing Apps must accept the
+            # permission upgrade in their settings before digests can flush.
+            "contents": "write",
             "pull_requests": "write",
             "issues": "write",
             "statuses": "read",
@@ -199,10 +202,12 @@ def _compose_text(image: str) -> str:
       THEMIS_TUNNEL_API: ${{THEMIS_TUNNEL_API:-}}
       THEMIS_WEBHOOK_ENABLED: ${{THEMIS_WEBHOOK_ENABLED:-true}}
       THEMIS_API_TOKEN: ${{THEMIS_API_TOKEN:-}}
+      THEMIS_DATA_ROOT: /data/themis
     ports:
       - \"8000:8000\"
     volumes:
       - workspaces:/tmp/themis
+      - themis-data:/data/themis
     depends_on:
       agent:
         condition: service_healthy
@@ -258,6 +263,7 @@ def _compose_text(image: str) -> str:
 volumes:
   workspaces:
   codex-home:
+  themis-data:
 """
 
 

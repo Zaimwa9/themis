@@ -12,7 +12,7 @@ _PR_ACTIONS = {"opened", "ready_for_review"}
 # Comment authors whose `review <context>` text may steer the review prompt.
 # Anyone allowed to comment can still trigger a review; only these roles can
 # shape it — the context text becomes engine instructions.
-_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,8 @@ class DiscussJob:
     kind: Literal["conversation", "thread"]
     in_reply_to_id: int | None
     mentions_bot: bool
+    author_association: str = "NONE"
+    author_login: str = ""
 
 
 def parse_event(
@@ -106,7 +108,7 @@ def _parse_issue_comment(
     if command.lower().strip(".!?") == "review":
         extra_context = remainder[0].strip() if remainder else ""
         association = payload["comment"].get("author_association", "")
-        if extra_context and association not in _TRUSTED_ASSOCIATIONS:
+        if extra_context and association not in TRUSTED_ASSOCIATIONS:
             logger.info(
                 "themis_extra_context_dropped association=%s", association or "unknown"
             )
@@ -125,6 +127,8 @@ def _parse_issue_comment(
         kind="conversation",
         in_reply_to_id=None,
         mentions_bot=True,
+        author_association=payload["comment"].get("author_association") or "NONE",
+        author_login=(payload["comment"].get("user") or {}).get("login", ""),
     )
 
 
@@ -148,4 +152,6 @@ def _parse_review_comment(payload: dict[str, Any], mention: str) -> DiscussJob |
         kind="thread",
         in_reply_to_id=in_reply_to,
         mentions_bot=mentions,
+        author_association=comment.get("author_association") or "NONE",
+        author_login=(comment.get("user") or {}).get("login", ""),
     )

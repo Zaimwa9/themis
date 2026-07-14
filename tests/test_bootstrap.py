@@ -65,7 +65,7 @@ def test_build_manifest_contains_exact_permissions_events_and_callbacks(tmp_path
     }
     assert manifest["default_permissions"] == {
         "checks": "read",
-        "contents": "read",
+        "contents": "write",
         "pull_requests": "write",
         "issues": "write",
         "statuses": "read",
@@ -173,7 +173,12 @@ def test_write_deployment_keeps_secrets_out_of_compose_and_sets_modes(tmp_path):
         "THEMIS_TUNNEL_API": "${THEMIS_TUNNEL_API:-}",
         "THEMIS_WEBHOOK_ENABLED": "${THEMIS_WEBHOOK_ENABLED:-true}",
         "THEMIS_API_TOKEN": "${THEMIS_API_TOKEN:-}",
+        "THEMIS_DATA_ROOT": "/data/themis",
     }
+    # Pending learnings must survive container recreation (data lives under
+    # THEMIS_DATA_ROOT), so the controller needs a named volume, like codex-home.
+    assert "themis-data:/data/themis" in compose["services"]["themis"]["volumes"]
+    assert "themis-data" in compose["volumes"]
     assert compose["services"]["agent"]["environment"] == {
         "THEMIS_AGENT_TOKEN": "${THEMIS_AGENT_TOKEN}",
         "THEMIS_WORKSPACE_ROOT": "/tmp/themis",

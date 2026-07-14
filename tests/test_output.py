@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from themis.output import OutputError, ReviewActions, _read_capped, parse_output, parse_reply
+from themis.output import OUTPUT_DIR, OUTPUT_FILES, OutputError, ReviewActions, _read_capped, parse_output, parse_learning, parse_reply
 
 
 def _write(workspace: Path, summary: str = "ok", actions: dict | None = None) -> None:
@@ -358,3 +358,57 @@ def test_read_capped__dangling_symlink__raises_output_error(tmp_path: Path):
 
     with pytest.raises(OutputError):
         _read_capped(dangling, workspace)
+
+
+def _write_learning(tmp_path, payload) -> None:
+    out = tmp_path / OUTPUT_DIR
+    out.mkdir(exist_ok=True)
+    raw = payload if isinstance(payload, str) else json.dumps(payload)
+    (out / "learning.json").write_text(raw)
+
+
+def test_parse_learning__absent__none(tmp_path):
+    (tmp_path / OUTPUT_DIR).mkdir(exist_ok=True)
+    assert parse_learning(tmp_path) is None
+
+
+def test_parse_learning__valid__parsed(tmp_path):
+    _write_learning(tmp_path, {
+        "text": " Prefer X. ", "paths": ["src/a.py"],
+        "supersedes": "lrn-aaaaaaaa", "confidence": "high",
+    })
+    assert parse_learning(tmp_path) == {
+        "text": "Prefer X.", "paths": ["src/a.py"],
+        "supersedes": "lrn-aaaaaaaa", "confidence": "high",
+    }
+
+
+def test_parse_learning__minimal__defaults(tmp_path):
+    _write_learning(tmp_path, {"text": "Rule."})
+    assert parse_learning(tmp_path) == {
+        "text": "Rule.", "paths": [], "supersedes": None, "confidence": "low",
+    }
+
+
+@pytest.mark.parametrize("payload", [
+    "not json",
+    [],
+    {"text": ""},
+    {"text": 42},
+    {"text": "x" * 501},
+    {"text": "ok", "paths": "notalist"},
+    {"text": "ok", "paths": ["/etc/passwd"]},
+    {"text": "ok", "paths": ["../up.py"]},
+    {"text": "ok", "supersedes": "not-an-id"},
+    {"text": "ok", "confidence": "certain"},
+    {"text": "ok", "paths": [123]},
+    {"text": "ok", "supersedes": 123},
+])
+def test_parse_learning__invalid__raises(tmp_path, payload):
+    _write_learning(tmp_path, payload)
+    with pytest.raises(OutputError):
+        parse_learning(tmp_path)
+
+
+def test_output_files__includes_learning_json():
+    assert "learning.json" in OUTPUT_FILES

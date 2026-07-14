@@ -9,6 +9,7 @@ import re
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -21,13 +22,27 @@ from themis.config import (
     parse_repo_config,
 )
 from themis.engines import Engine, EngineError, EngineQuotaError, EngineUnavailableError
+from themis.events import TRUSTED_ASSOCIATIONS
 from themis.github.auth import get_installation_token, make_app_jwt
 from themis.github.client import GitHubClient, GitHubGraphQLError
+from themis.learnings import (
+    LEARNINGS_REPO_PATH,
+    Learning,
+    PendingStore,
+    compose_digest,
+    effective_set,
+    is_duplicate,
+    new_learning,
+    parse_jsonl,
+    prune_merged,
+    to_jsonl,
+)
 from themis.output import (
     MAX_BODY_LEN,
     OUTPUT_DIR,
     OutputError,
     ReviewActions,
+    parse_learning,
     parse_output,
     parse_reply,
 )
@@ -75,6 +90,19 @@ _ENGINE_AUTH_HINTS = {
     "claude": "CLAUDE_CODE_OAUTH_TOKEN",
     "glm": "GLM_API_KEY",
 }
+LEARNING_FOOTER = (
+    "\n\n🧠 Learning recorded — lands in `.themis/learnings.jsonl` "
+    "via the next digest PR."
+)
+DIGEST_BRANCH = "themis/learnings"
+DIGEST_PR_TITLE = "chore: sync review learnings"
+DIGEST_PR_BODY = (
+    "Review learnings captured from PR discussions, landing into "
+    "`.themis/learnings.jsonl`.\n\n"
+    "Edit or delete lines before merging — the merged file is what future "
+    "reviews read. Closing without merging leaves the entries pending.\n\n"
+    "See `docs/learnings.md` in the Themis repository for how this works."
+)
 
 # One agent run at a time so reviews never monopolize the shared worker.
 # Note: this bounds agent runs per worker process only; running several worker
@@ -185,6 +213,7 @@ class ReviewService:
         git_changed_lines
     )
     head_sha: Callable[[Path], Awaitable[str | None]] = git_head_sha
+    pending_store: PendingStore | None = None
 
     async def _fetch_repo_config(self, gh: Any, repo: str) -> RepoConfig:
         """Behavior config from the target repo's default branch; defaults on
@@ -197,6 +226,238 @@ class ReviewService:
             )
             text = None
         return parse_repo_config(text)
+
+    async def _load_learnings(
+        self, gh: Any, repo: str, repo_config: RepoConfig
+    ) -> tuple[list[Learning], list[Learning]]:
+        """(effective, pending) for injection; prunes merged pending entries.
+
+        Empty when the feature is off or unconfigured. Any failure degrades
+        to no learnings: memory must never block a review."""
+        if self.pending_store is None or not repo_config.learnings.enabled:
+            return [], []
+        try:
+            repo_text = await gh.get_file_text(repo, LEARNINGS_REPO_PATH)
+        except httpx.HTTPError as error:
+            logger.warning(
+                "themis_learnings_fetch_failed repo=%s error=%s", repo, error
+            )
+            repo_text = None
+        repo_entries = parse_jsonl(repo_text)
+        try:
+            pending = await self.pending_store.load(repo)
+            pruned = prune_merged(pending, repo_entries)
+            if len(pruned) != len(pending):
+                await self.pending_store.replace(repo, pruned)
+                pending = pruned
+        except OSError as error:
+            logger.warning(
+                "themis_learnings_store_failed repo=%s error=%s", repo, error
+            )
+            pending = []
+        try:
+            flushed = await self.pending_store.load_flushed(repo)
+            # pr None = branch written but create_pr failed; the marker stays
+            # so the next flush can prove the orphaned branch is ours.
+            if flushed is not None and flushed["pr"] is not None:
+                pr = await gh.get_pr(repo, flushed["pr"])
+                if pr.get("merged"):
+                    repo_ids = {e.id for e in repo_entries}
+                    zombies = {i for i in flushed["ids"] if i not in repo_ids}
+                    if zombies:
+                        await self.pending_store.discard(repo, zombies)
+                        pending = [p for p in pending if p.id not in zombies]
+                        logger.info(
+                            "themis_learnings_rejected_pruned repo=%s count=%d",
+                            repo, len(zombies),
+                        )
+                    # Delete our merged digest branch so the next flush can
+                    # recreate it (a squash merge leaves it diverged, which
+                    # the flush's fast-forward guard would refuse) — but only
+                    # while it still points at the exact commit we pushed:
+                    # a recreated or taken-over branch is not ours to remove.
+                    # Ordered before clear_flushed: a failed delete keeps the
+                    # marker and retries on the next load.
+                    ours = flushed["sha"]
+                    if (
+                        ours is not None
+                        and await gh.find_branch_sha(repo, DIGEST_BRANCH) == ours
+                    ):
+                        await gh.delete_branch(repo, DIGEST_BRANCH)
+                    await self.pending_store.clear_flushed(repo)
+                elif pr.get("state") == "closed":
+                    # Closed without merging: entries stay pending and re-flush
+                    # at the next threshold crossing.
+                    await self.pending_store.clear_flushed(repo)
+        except (httpx.HTTPError, OSError) as error:
+            logger.warning(
+                "themis_learnings_flushed_check_failed repo=%s error=%s", repo, error
+            )
+        return effective_set(repo_entries, pending), pending
+
+    def _gate_learning(
+        self,
+        workspace: Path,
+        repo: str,
+        pr_number: int,
+        author_login: str,
+        effective: list[Learning],
+        pending: list[Learning],
+    ) -> Learning | None:
+        """Gate the agent's learning proposal; persistence happens separately,
+        only after the 🧠-footered reply lands (see _persist_learning).
+
+        Every rejection is logged, never raised: a bad proposal must not
+        fail the discussion job whose reply already exists."""
+        try:
+            proposal = parse_learning(workspace)
+        except OutputError as error:
+            logger.warning(
+                "themis_learning_rejected repo=%s reason=invalid error=%s",
+                repo, redact_outbound(str(error))[:200],
+            )
+            return None
+        if proposal is None:
+            return None
+        if proposal["confidence"] != "high":
+            logger.info("themis_learning_rejected repo=%s reason=low-confidence", repo)
+            return None
+        if is_duplicate(proposal["text"], effective):
+            logger.info("themis_learning_rejected repo=%s reason=duplicate", repo)
+            return None
+        supersedes = proposal["supersedes"]
+        if supersedes and supersedes not in {e.id for e in effective}:
+            # The model names the replacement target; never let it retire a
+            # convention that is not currently live (unknown, already
+            # superseded, or hallucinated ids would silently drop rules).
+            logger.info(
+                "themis_learning_rejected repo=%s reason=supersede-not-effective",
+                repo,
+            )
+            return None
+        if supersedes and any(p.supersedes == supersedes for p in pending):
+            logger.info("themis_learning_rejected repo=%s reason=supersede-race", repo)
+            return None
+        return new_learning(
+            text=proposal["text"],
+            paths=tuple(proposal["paths"]),
+            learnt_from=author_login,
+            pr=pr_number,
+            created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            supersedes=supersedes,
+        )
+
+    async def _persist_learning(self, repo: str, learning: Learning) -> bool:
+        """Store a gated learning; called only after its reply posted, so a
+        failed reply never retains memory the commenter was not shown.
+
+        The inverse failure (footer posted, store write fails) merely
+        over-promises: the warning below surfaces it and the human can
+        re-state the rule."""
+        assert self.pending_store is not None  # gated by caller
+        try:
+            await self.pending_store.append(repo, learning)
+        except OSError as error:
+            logger.warning(
+                "themis_learning_store_failed repo=%s error=%s", repo, error
+            )
+            return False
+        logger.info("themis_learning_captured repo=%s id=%s", repo, learning.id)
+        return True
+
+    async def _flush_digest(self, gh: Any, repo: str, threshold: int) -> None:
+        """Land pending learnings as one digest PR; best-effort.
+
+        With no open digest PR the branch is created at (or fast-forwarded
+        to) the default head so the PR diff is always exactly the learnings
+        file; a same-named branch that cannot fast-forward is not provably
+        ours and is left untouched, deferring the flush. An open PR from the
+        reserved branch counts as our digest PR only when the flushed marker
+        recorded its number — anything else is a human's PR and is never
+        committed onto. While our digest PR is open its branch belongs to
+        reviewers: only entries not already flushed are appended onto the
+        branch's current file, so manual edits and deletions survive later
+        flushes. The digest is a
+        GitHub-facing write, so it goes through outbound redaction like
+        every posted surface. Failures leave the buffer intact and never
+        fail the job that triggered the flush. The threshold check lives
+        here (not in the caller) so an I/O error while loading the pending
+        count can never escape unguarded."""
+        assert self.pending_store is not None
+        try:
+            pending = await self.pending_store.load(repo)
+            if len(pending) < threshold:
+                return
+            default_branch = await gh.get_default_branch(repo)
+            pr_number = await gh.find_open_pr(repo, DIGEST_BRANCH)
+            flushed = await self.pending_store.load_flushed(repo)
+            flushed_ids: set[str] = set()
+            commit_sha: str | None = None
+            if pr_number is None:
+                base_sha = await gh.get_branch_sha(repo, default_branch)
+                if await gh.upsert_branch(repo, DIGEST_BRANCH, base_sha):
+                    base_text = await gh.get_file_text(repo, LEARNINGS_REPO_PATH)
+                    to_flush = pending
+                else:
+                    # Not fast-forwardable. If the tip is the very commit our
+                    # marker recorded, this is our own orphan (an earlier
+                    # flush wrote the branch but create_pr failed): resume it.
+                    # Anything else is not provably ours — leave it alone.
+                    tip = await gh.find_branch_sha(repo, DIGEST_BRANCH)
+                    if flushed is None or tip is None or flushed["sha"] != tip:
+                        logger.warning(
+                            "themis_digest_branch_conflict repo=%s branch=%s",
+                            repo, DIGEST_BRANCH,
+                        )
+                        return
+                    commit_sha = tip
+                    flushed_ids = set(flushed["ids"])
+                    to_flush = [e for e in pending if e.id not in flushed_ids]
+                    base_text = await gh.get_file_text(
+                        repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH
+                    )
+            else:
+                if flushed is None or flushed["pr"] != pr_number:
+                    # An open PR from the reserved branch that our marker did
+                    # not record is someone else's PR — never commit onto it.
+                    logger.warning(
+                        "themis_digest_branch_conflict repo=%s branch=%s",
+                        repo, DIGEST_BRANCH,
+                    )
+                    return
+                flushed_ids = set(flushed["ids"])
+                to_flush = [e for e in pending if e.id not in flushed_ids]
+                if not to_flush:
+                    return
+                base_text = await gh.get_file_text(
+                    repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH
+                )
+            if to_flush:
+                content = compose_digest(base_text, to_flush)
+                file_sha = await gh.get_file_sha(
+                    repo, LEARNINGS_REPO_PATH, ref=DIGEST_BRANCH
+                )
+                commit_sha = await gh.put_file(
+                    repo, LEARNINGS_REPO_PATH, content=redact_outbound(content),
+                    message=DIGEST_PR_TITLE, branch=DIGEST_BRANCH, sha=file_sha,
+                )
+            all_ids = sorted(flushed_ids | {e.id for e in to_flush})
+            if pr_number is None:
+                # Marker before create_pr: if PR creation fails, the sha lets
+                # the next flush prove the orphaned branch is ours and resume.
+                await self.pending_store.record_flushed(
+                    repo, all_ids, None, sha=commit_sha
+                )
+                pr_number = await gh.create_pr(
+                    repo, title=DIGEST_PR_TITLE, body=DIGEST_PR_BODY,
+                    head=DIGEST_BRANCH, base=default_branch,
+                )
+            await self.pending_store.record_flushed(
+                repo, all_ids, pr_number, sha=commit_sha
+            )
+            logger.info("themis_digest_flushed repo=%s count=%d", repo, len(to_flush))
+        except (httpx.HTTPError, GitHubGraphQLError, OSError) as error:
+            logger.warning("themis_digest_flush_failed repo=%s error=%s", repo, error)
 
     def _engine_for(self, repo_config: RepoConfig) -> Engine:
         return self.resolve_engine(repo_config.engine or self.settings.engine)
@@ -254,6 +515,7 @@ class ReviewService:
                     repo, pr_number, error,
                 )
             threads = await gh.list_review_threads(repo, pr_number)
+            learnings, _ = await self._load_learnings(gh, repo, repo_config)
             workspace = await self.prepare(
                 root=self.settings.workspace_root,
                 clone_url=clone_url_for(repo, token),
@@ -262,7 +524,7 @@ class ReviewService:
                 depth=repo_config.limits.clone_depth,
             )
             try:
-                _write_inputs(workspace, pr, threads)
+                _write_inputs(workspace, pr, threads, learnings=learnings)
 
                 async def snapshot_ci() -> None:
                     snapshot = _unavailable_ci_snapshot(pr["head"]["sha"])
@@ -284,7 +546,8 @@ class ReviewService:
                     _write_checks_input(workspace, snapshot)
 
                 prompt = build_review_prompt(
-                    repo, pr_number, pr["base"]["ref"], extra_context=extra_context
+                    repo, pr_number, pr["base"]["ref"], extra_context=extra_context,
+                    has_learnings=bool(learnings),
                 )
                 actions = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
@@ -322,6 +585,8 @@ class ReviewService:
         kind: str,
         in_reply_to_id: int | None,
         mentions_bot: bool,
+        author_association: str = "NONE",
+        author_login: str = "",
     ) -> None:
         token = await self.get_token(installation_id)
         gh = self.make_client(token)
@@ -349,6 +614,12 @@ class ReviewService:
                 reply_anchor = thread["comments"]["nodes"][0]["databaseId"]
             pr = await gh.get_pr(repo, pr_number)
             repo_config = await self._fetch_repo_config(gh, repo)
+            learnings, pending = await self._load_learnings(gh, repo, repo_config)
+            capture = (
+                self.pending_store is not None
+                and repo_config.learnings.enabled
+                and author_association in TRUSTED_ASSOCIATIONS
+            )
             engine = self._engine_for(repo_config)
             if not await self._ensure_engine_available(
                 engine, installation_id, repo, pr_number, "reply"
@@ -362,11 +633,15 @@ class ReviewService:
                 depth=repo_config.limits.clone_depth,
             )
             try:
-                _write_inputs(workspace, pr, [thread] if thread else [])
+                _write_inputs(
+                    workspace, pr, [thread] if thread else [], learnings=learnings
+                )
                 prompt = build_discussion_prompt(
                     question=body,
                     kind=kind,
                     thread_context=json.dumps(thread, indent=2) if thread else "",
+                    has_learnings=bool(learnings),
+                    capture=capture,
                 )
                 reply = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
@@ -374,7 +649,14 @@ class ReviewService:
                 )
                 if reply is None:
                     return
+                captured = None
+                if capture:
+                    captured = self._gate_learning(
+                        workspace, repo, pr_number, author_login, learnings, pending
+                    )
                 reply = redact_outbound(reply)
+                if captured is not None:
+                    reply += LEARNING_FOOTER
                 # Codex runs can outlive the 60-min installation token; post with
                 # a fresh one.
                 post_gh = self.make_client(await self.get_token(installation_id))
@@ -385,6 +667,12 @@ class ReviewService:
                         )
                     else:
                         await post_gh.post_issue_comment(repo, pr_number, reply)
+                    if captured is not None and await self._persist_learning(
+                        repo, captured
+                    ):
+                        await self._flush_digest(
+                            post_gh, repo, repo_config.learnings.digest_threshold
+                        )
             finally:
                 self.cleanup(workspace)
 
@@ -578,7 +866,8 @@ class ReviewService:
 
 
 def _write_inputs(
-    workspace: Path, pr: dict[str, Any], threads: list[dict[str, Any]]
+    workspace: Path, pr: dict[str, Any], threads: list[dict[str, Any]],
+    learnings: list[Learning] | None = None,
 ) -> None:
     input_dir = workspace / INPUT_DIR
     input_dir.mkdir(exist_ok=True)
@@ -591,6 +880,8 @@ def _write_inputs(
         "head_sha": pr["head"]["sha"],
     }, indent=2))
     (input_dir / "threads.json").write_text(json.dumps(threads, indent=2))
+    if learnings:
+        (input_dir / "learnings.jsonl").write_text(to_jsonl(learnings))
 
 
 def _unavailable_ci_snapshot(head_sha: str) -> dict[str, Any]:
@@ -698,6 +989,7 @@ def build_service(settings: Settings, bot_slug: str) -> ReviewService:
         prepare=prepare_workspace,
         cleanup=remove_workspace,
         resolve_engine=lambda name: RemoteEngine(name, settings.agent_url, settings.agent_token),
+        pending_store=PendingStore(settings.data_root),
     )
 
 
@@ -725,6 +1017,7 @@ async def run_discussion_job(
     settings: Settings, bot_slug: str, *, repo: str, pr_number: int,
     installation_id: int, comment_id: int, body: str, kind: str,
     in_reply_to_id: int | None, mentions_bot: bool,
+    author_association: str = "NONE", author_login: str = "",
 ) -> None:
     service = build_service(settings, bot_slug)
     await asyncio.to_thread(sweep_stale, settings.workspace_root)
@@ -733,6 +1026,7 @@ async def run_discussion_job(
             repo=repo, pr_number=pr_number, installation_id=installation_id,
             comment_id=comment_id, body=body, kind=kind,
             in_reply_to_id=in_reply_to_id, mentions_bot=mentions_bot,
+            author_association=author_association, author_login=author_login,
         )
     except asyncio.CancelledError:
         await _post_cancelled_comment(service, repo, pr_number, installation_id)

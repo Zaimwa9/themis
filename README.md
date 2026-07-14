@@ -178,7 +178,7 @@ organization that owns the target repos or on your personal account:
 | Webhook URL | `https://HOST/webhook`; any placeholder works if you set `THEMIS_PUBLIC_URL` later, Themis re-registers it at startup |
 | Webhook secret | a long random string, goes in `THEMIS_GH_WEBHOOK_SECRET` |
 | Checks permission | Read-only |
-| Contents permission | Read-only |
+| Contents permission | Read and write (write publishes learnings digest PRs) |
 | Issues permission | Read and write |
 | Pull requests permission | Read and write |
 | Commit statuses permission | Read-only |
@@ -186,7 +186,8 @@ organization that owns the target repos or on your personal account:
 
 Actions permission is not required. Existing Apps must be updated with the
 Checks and Commit statuses permissions before Themis can include CI context
-in reviews.
+in reviews, and with Contents write before it can open learnings digest PRs;
+each installation must then accept the permission upgrade GitHub sends it.
 
 Then generate a private key (App settings > Private keys) and install the App
 on the target repositories (App settings > Install App).
@@ -266,6 +267,12 @@ How the doctrine is consumed and how to write one that works:
 [`docs/doctrine.md`](docs/doctrine.md). This repo reviews itself with its own
 [`.themis/review.md`](.themis/review.md).
 
+Themis also learns as you use it: correct it in a PR thread (or say
+`@themis remember <rule>`) and, if you're a repo owner/member/collaborator,
+it saves the convention and applies it to future reviews — landing it in
+`.themis/learnings.jsonl` through a digest PR you review like any other.
+See [`docs/learnings.md`](docs/learnings.md).
+
 | Key | Default | Meaning |
 |---|---|---|
 | `engine` | instance `THEMIS_ENGINE` | `codex`, `claude`, or `glm`, overrides the instance's default engine for this repo |
@@ -276,6 +283,8 @@ How the doctrine is consumed and how to write one that works:
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
 | `limits.clone_depth` | `50` | shallow clone depth |
 | `triggers.auto_review` | `true` | `false` = mention-only, no auto-review when a PR opens or is marked ready for review |
+| `learnings.enabled` | `true` | `false` disables capturing, injecting, and digesting [learnings](docs/learnings.md) for this repo |
+| `learnings.digest_threshold` | `10` | pending learnings that trigger the digest PR (minimum 1) |
 
 Talk to the bot in a PR: `@<app-slug> review` re-reviews on demand,
 `@<app-slug> review <focus>` steers the review toward a given area (the
@@ -321,6 +330,7 @@ failing silently. The claude and glm paths need no volume: key in
 - [`docs/local-tunnel.md`](docs/local-tunnel.md): the ngrok tunnel profile in depth.
 - [`docs/headless.md`](docs/headless.md): bring your own webhook handler, the `/api/review` and `/api/discuss` contracts.
 - [`docs/doctrine.md`](docs/doctrine.md): the review doctrine, how it works and how to write a good one.
+- [`docs/learnings.md`](docs/learnings.md): per-repo memory — how Themis learns conventions from PR discussions and lands them via digest PRs.
 - [`docs/configuration.md`](docs/configuration.md): the full env and `.themis/config.yaml` reference.
 - [`docs/security.md`](docs/security.md): the trust model and bot-side guardrails.
 - [`docs/contributing-engines.md`](docs/contributing-engines.md): adding a new engine / model provider.

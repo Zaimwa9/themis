@@ -1,6 +1,7 @@
 """Parse and validate the files codex writes to .review-output/."""
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -9,10 +10,13 @@ OUTPUT_DIR = ".review-output"
 # Every file the engine may write under OUTPUT_DIR. The agent service redacts
 # exactly this set before results cross back to the controller; extend it in
 # lockstep with any new parsed file.
-OUTPUT_FILES = ("summary.md", "actions.json", "reply.md")
+OUTPUT_FILES = ("summary.md", "actions.json", "reply.md", "learning.json")
 MAX_BODY_LEN = 65000
 MAX_FILE_SIZE = 1_000_000
 VALID_SIDES = ("LEFT", "RIGHT")
+MAX_LEARNING_TEXT = 500
+VALID_CONFIDENCE = ("high", "low")
+_LEARNING_ID_RE = re.compile(r"lrn-[0-9a-f]{8}")
 
 
 class OutputError(Exception):
@@ -102,6 +106,49 @@ def parse_reply(workspace: Path) -> str:
         raise OutputError("reply.md is empty")
     _check_body_len("reply.md", reply)
     return reply
+
+
+def parse_learning(workspace: Path) -> dict[str, Any] | None:
+    """Validated learning candidate from learning.json, or None when absent.
+
+    Raises OutputError on invalid content; the caller treats that as
+    no-capture, never as a job failure."""
+    path = workspace / OUTPUT_DIR / "learning.json"
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(_read_capped(path, workspace))
+    except json.JSONDecodeError as error:
+        raise OutputError(f"learning.json is not valid JSON: {error}") from error
+    if not isinstance(raw, dict):
+        raise OutputError(f"learning.json root must be an object, got {type(raw).__name__}")
+
+    text = raw.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise OutputError(f"learning missing or invalid 'text': {raw!r}")
+    text = text.strip()
+    if len(text) > MAX_LEARNING_TEXT:
+        raise OutputError(f"learning 'text' exceeds {MAX_LEARNING_TEXT} characters")
+
+    paths_raw = raw.get("paths", [])
+    if not isinstance(paths_raw, list):
+        raise OutputError(f"learning 'paths' must be a list, got {type(paths_raw).__name__}")
+    for entry in paths_raw:
+        if not isinstance(entry, str):
+            raise OutputError(f"learning path must be a string: {entry!r}")
+        _validate_path(entry)
+
+    supersedes = raw.get("supersedes")
+    if supersedes is not None and (
+        not isinstance(supersedes, str) or not _LEARNING_ID_RE.fullmatch(supersedes)
+    ):
+        raise OutputError(f"learning has invalid 'supersedes': {supersedes!r}")
+
+    confidence = raw.get("confidence", "low")
+    if confidence not in VALID_CONFIDENCE:
+        raise OutputError(f"learning has invalid 'confidence': {confidence!r}")
+
+    return {"text": text, "paths": list(paths_raw), "supersedes": supersedes, "confidence": confidence}
 
 
 def _is_valid_int(value: Any) -> bool:

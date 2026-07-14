@@ -29,6 +29,7 @@ Two planes:
 | `THEMIS_WORKSPACE_ROOT` | no | `/tmp/themis` | scratch root for PR clones |
 | `THEMIS_ROLE` | no | `controller` | role when `python -m themis` gets no argument; `controller` or `agent` |
 | `PORT` | no | role default | listen port (`8000` controller, `8001` agent) |
+| `THEMIS_DATA_ROOT` | no | `~/.themis` | durable store for pending learnings (compose mounts a volume at `/data/themis`) |
 | `NGROK_AUTHTOKEN` | only with the `tunnel` compose profile | none | used only by the compose tunnel profile's ngrok sidecar |
 
 Names and defaults come straight from `../src/themis/config.py`, except
@@ -57,6 +58,9 @@ limits:
   clone_depth: 50
 triggers:
   auto_review: true
+learnings:
+  enabled: true            # false = no capture, no injection, no digest PR
+  digest_threshold: 10
 ```
 
 | Key | Default | Meaning |
@@ -69,6 +73,8 @@ triggers:
 | `limits.max_attempts` | `2` | attempts before Themis gives up and posts a failure comment |
 | `limits.clone_depth` | `50` | git fetch depth for the shallow PR clone |
 | `triggers.auto_review` | `true` | `false` = mention-only, no automatic review on PR open or ready-for-review |
+| `learnings.enabled` | `true` | per-repo learnings memory; see [docs/learnings.md](learnings.md) |
+| `learnings.digest_threshold` | `10` | pending learnings needed before Themis opens/updates the digest PR (min 1) |
 
 A partial file deep-merges over the defaults, key by key, so you only need
 to set the fields you want to change.
