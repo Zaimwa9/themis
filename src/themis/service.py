@@ -310,6 +310,15 @@ class ReviewService:
             logger.info("themis_learning_rejected repo=%s reason=duplicate", repo)
             return None
         supersedes = proposal["supersedes"]
+        if supersedes and supersedes not in {e.id for e in effective}:
+            # The model names the replacement target; never let it retire a
+            # convention that is not currently live (unknown, already
+            # superseded, or hallucinated ids would silently drop rules).
+            logger.info(
+                "themis_learning_rejected repo=%s reason=supersede-not-effective",
+                repo,
+            )
+            return None
         if supersedes and any(p.supersedes == supersedes for p in pending):
             logger.info("themis_learning_rejected repo=%s reason=supersede-race", repo)
             return None

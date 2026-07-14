@@ -1483,6 +1483,63 @@ async def test_discuss__duplicate_of_repo_learning__discarded(service, gh, tmp_p
     assert await store.load(REPO) == []
 
 
+async def test_discuss__supersedes_unknown_id__discarded(service, gh, tmp_path):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    gh.get_file_text.side_effect = _config_and_learnings(
+        learnings_text=to_jsonl([LEARNING])
+    )
+    service.resolve_engine = _resolver(_learning_reply_agent(
+        {"text": "Use the new helper.", "confidence": "high",
+         "supersedes": "lrn-deadbeef"}
+    ))
+
+    await service.discuss(**_discuss_kwargs())
+
+    assert await store.load(REPO) == []
+
+
+async def test_discuss__supersedes_already_replaced_id__discarded(
+    service, gh, tmp_path
+):
+    replacement = Learning(
+        id="lrn-bbbbbbbb", text="Prefer the v2 manager method.", paths=("a.py",),
+        learnt_from="dev", pr=5, created_at="2026-07-11T00:00:00+00:00",
+        supersedes=LEARNING.id,
+    )
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    gh.get_file_text.side_effect = _config_and_learnings(
+        learnings_text=to_jsonl([LEARNING, replacement])
+    )
+    service.resolve_engine = _resolver(_learning_reply_agent(
+        {"text": "Use the new helper.", "confidence": "high",
+         "supersedes": LEARNING.id}
+    ))
+
+    await service.discuss(**_discuss_kwargs())
+
+    assert await store.load(REPO) == []
+
+
+async def test_discuss__supersedes_effective_id__captured(service, gh, tmp_path):
+    store = PendingStore(tmp_path / "data")
+    service.pending_store = store
+    gh.get_file_text.side_effect = _config_and_learnings(
+        learnings_text=to_jsonl([LEARNING])
+    )
+    service.resolve_engine = _resolver(_learning_reply_agent(
+        {"text": "Use the new helper.", "confidence": "high",
+         "supersedes": LEARNING.id}
+    ))
+
+    await service.discuss(**_discuss_kwargs())
+
+    pending = await store.load(REPO)
+    assert len(pending) == 1
+    assert pending[0].supersedes == LEARNING.id
+
+
 async def test_discuss__invalid_learning_json__reply_still_posts(
     service, gh, tmp_path, caplog
 ):
