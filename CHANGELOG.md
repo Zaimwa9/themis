@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.3.0](https://github.com/Zaimwa9/themis/compare/v0.2.0...v0.3.0) (2026-07-14)
+
+
+### Features
+
+* drop qwen engine; Coding Plan ToS forbids unattended use ([#21](https://github.com/Zaimwa9/themis/issues/21)) ([8445c14](https://github.com/Zaimwa9/themis/commit/8445c144e9686fbea340ef2d304c954c4acf0319))
+* GLM engine via Claude Code API mode ([e2b15fd](https://github.com/Zaimwa9/themis/commit/e2b15fd2898cbfe6fe3e01f51e037112b65ee57e))
+* glm engine via Claude Code API mode ([#20](https://github.com/Zaimwa9/themis/issues/20)) ([ab1f4b8](https://github.com/Zaimwa9/themis/commit/ab1f4b868cf01dcefbf51cd96d7f2bdb3451fca4))
+* make reviews adaptive and CI-aware ([d5536cc](https://github.com/Zaimwa9/themis/commit/d5536ccaf1942a69b02f483631990e72314f478d))
+* make reviews adaptive and CI-aware ([af1a42a](https://github.com/Zaimwa9/themis/commit/af1a42a341d0a6fed8454e43528021bcce90dbe2))
+* qwen engine via Claude Code API mode ([#21](https://github.com/Zaimwa9/themis/issues/21)) ([f395170](https://github.com/Zaimwa9/themis/commit/f395170db89b4168623005aa6921d487ab2568e8))
+* register glm and qwen engines; redact provider keys ([#20](https://github.com/Zaimwa9/themis/issues/20), [#21](https://github.com/Zaimwa9/themis/issues/21)) ([e49e7e6](https://github.com/Zaimwa9/themis/commit/e49e7e644bd8743c83a38de4eb6a94f85b93a981))
+* wire glm through the bootstrap flow and resolve README merge ([109d98a](https://github.com/Zaimwa9/themis/commit/109d98a220227450c0b1d95c1f82b9dea2ee6c70))
+
+
+### Bug Fixes
+
+* drop glm text quota markers; ambiguous failures stay retryable ([bb7cb41](https://github.com/Zaimwa9/themis/commit/bb7cb412811867b98ef58683adbc49acf04e9aad))
+* window-qualify glm exhaustion marker to avoid generic-output matches ([4705339](https://github.com/Zaimwa9/themis/commit/470533978b1f446392271dda5c4fbca9caf40b0e))
+
+
+### Documentation
+
+* add CI permissions to manual App setup ([92d1a63](https://github.com/Zaimwa9/themis/commit/92d1a63e65fc0acb710ba363dbbebcdabb327bae))
+* design spec for GLM and Qwen engines ([#20](https://github.com/Zaimwa9/themis/issues/20), [#21](https://github.com/Zaimwa9/themis/issues/21)) ([4e49dde](https://github.com/Zaimwa9/themis/commit/4e49dde2333ec86743d1209e10bec1dc34cd2152))
+* extend GLM/Qwen coverage across Quickstart deployment sample and Engines notes ([2e68437](https://github.com/Zaimwa9/themis/commit/2e68437fed5c30588d6c57e42b712db68d8e8c49))
+* glm and qwen engine setup, config, and security posture ([#20](https://github.com/Zaimwa9/themis/issues/20), [#21](https://github.com/Zaimwa9/themis/issues/21)) ([6ca6766](https://github.com/Zaimwa9/themis/commit/6ca676650d3c15c2809c439da248a55671cea22a))
+* guide for contributing a new engine / model provider ([4160042](https://github.com/Zaimwa9/themis/commit/4160042e1ac16da903d164ffd53ccb331867ec6c))
+* implementation plan for GLM and Qwen engines ([#20](https://github.com/Zaimwa9/themis/issues/20), [#21](https://github.com/Zaimwa9/themis/issues/21)) ([eea7d06](https://github.com/Zaimwa9/themis/commit/eea7d061329974f6d37dedd22c60e13dbbe7bff0))
+* mark implementation plan as historical, superseded scope ([204d10d](https://github.com/Zaimwa9/themis/commit/204d10d87320c270c69726b515bb37d1d333e738))
+* mention ngrok token as a permitted pause in agent prompt ([c7f9ecb](https://github.com/Zaimwa9/themis/commit/c7f9ecbf067437788afad93078bb5614ac21f4fa))
+* reframe manifest quickstart as testing-only, add agent prompt ([77e0d90](https://github.com/Zaimwa9/themis/commit/77e0d909efb1e5d2649105f6480084030c2182e0))
+* reframe manifest quickstart as testing-only, add agent prompt ([cb4cbb6](https://github.com/Zaimwa9/themis/commit/cb4cbb6c6aa745ccd89f49435e417bf63ee2449a))
+
+
+### Refactoring
+
+* parameterize ClaudeEngine for API-mode subclasses ([#20](https://github.com/Zaimwa9/themis/issues/20), [#21](https://github.com/Zaimwa9/themis/issues/21)) ([ba9c3ba](https://github.com/Zaimwa9/themis/commit/ba9c3baca8ba7bc8ec2e5ef5c05074fadca37907))
+
 ## [0.2.0](https://github.com/Zaimwa9/themis/compare/v0.1.2...v0.2.0) (2026-07-13)
 
 
