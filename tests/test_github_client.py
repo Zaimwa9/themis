@@ -4,7 +4,13 @@ import json
 import httpx
 import pytest
 
-from themis.github.client import SUMMARY_MARKER, GitHubClient, GitHubGraphQLError
+from themis.github.client import (
+    MAX_COMMENT_PAGES,
+    MAX_COMMENT_PAGES_TOTAL,
+    SUMMARY_MARKER,
+    GitHubClient,
+    GitHubGraphQLError,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -206,6 +212,27 @@ async def test_list_review_threads__single_page__returns_nodes():
     assert threads[0]["id"] == "T_1"
 
 
+async def test_list_review_threads__query_requests_acknowledgment_fields():
+    queries = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        queries.append(json.loads(request.content)["query"])
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "reviewThreads": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [],
+            }}}}})
+
+    await _client(handler).list_review_threads("acme/widgets", 7)
+
+    # The acknowledgment rule (resolved threads, maintainer acceptance replies)
+    # reads these straight from threads.json; dropping any of them silently
+    # disables it.
+    assert "isResolved" in queries[0]
+    assert "resolvedBy { login }" in queries[0]
+    assert "authorAssociation" in queries[0]
+
+
 async def test_list_review_threads__two_pages__follows_cursor_and_returns_all():
     requests = []
 
@@ -228,52 +255,6 @@ async def test_list_review_threads__two_pages__follows_cursor_and_returns_all():
 
     assert [t["id"] for t in threads] == ["T_1", "T_2"]
     assert requests[1]["cursor"] == "CUR_1"
-
-
-async def test_list_review_threads__root_outside_tail__merges_root_first_no_dupes():
-    root = {"author": {"login": "themis-reviewer"}, "body": "A",
-            "databaseId": 1, "createdAt": "2026-01-01T00:00:00Z"}
-    tail = [{"author": {"login": "dev"}, "body": body, "databaseId": did,
-             "createdAt": "2026-01-02T00:00:00Z"}
-            for body, did in (("B", 2), ("C", 3))]
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
-            "reviewThreads": {
-                "pageInfo": {"hasNextPage": False, "endCursor": None},
-                "nodes": [{"id": "T_1", "isResolved": False, "path": "a.py", "line": 3,
-                           "resolvedBy": None,
-                           "rootComments": {"nodes": [root]},
-                           "comments": {"nodes": tail}}],
-            }}}}})
-
-    threads = await _client(handler).list_review_threads("acme/widgets", 7)
-
-    nodes = threads[0]["comments"]["nodes"]
-    assert [n["databaseId"] for n in nodes] == [1, 2, 3]
-    assert "rootComments" not in threads[0]
-
-
-async def test_list_review_threads__root_also_in_tail__deduped():
-    root = {"author": {"login": "themis-reviewer"}, "body": "A",
-            "databaseId": 1, "createdAt": "2026-01-01T00:00:00Z"}
-    tail = [root, {"author": {"login": "dev"}, "body": "B", "databaseId": 2,
-                   "createdAt": "2026-01-02T00:00:00Z"}]
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
-            "reviewThreads": {
-                "pageInfo": {"hasNextPage": False, "endCursor": None},
-                "nodes": [{"id": "T_1", "isResolved": False, "path": "a.py", "line": 3,
-                           "resolvedBy": None,
-                           "rootComments": {"nodes": [root]},
-                           "comments": {"nodes": tail}}],
-            }}}}})
-
-    threads = await _client(handler).list_review_threads("acme/widgets", 7)
-
-    nodes = threads[0]["comments"]["nodes"]
-    assert [n["databaseId"] for n in nodes] == [1, 2]
 
 
 async def test_list_review_threads__graphql_errors__raises():
@@ -626,3 +607,107 @@ async def test_create_pr__returns_number():
         head="themis/learnings", base="main",
     )
     assert number == 13
+
+
+async def test_list_review_threads__long_thread__follows_comment_pages():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if "reviewThreads" in payload["query"]:
+            return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [{
+                        "id": "T_1", "isResolved": False, "resolvedBy": None,
+                        "path": "a.py", "line": 3,
+                        "comments": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "CC_1"},
+                            "nodes": [
+                                {"databaseId": 1, "body": "finding"},
+                                {"databaseId": 2, "body": "accepted - wont fix",
+                                 "authorAssociation": "OWNER"},
+                            ],
+                        },
+                    }],
+                }}}}})
+        return httpx.Response(200, json={"data": {"node": {"comments": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": [{"databaseId": 3, "body": "tail"}],
+        }}}})
+
+    threads = await _client(handler).list_review_threads("acme/widgets", 7)
+
+    # An early acceptance must never be windowed out: the acknowledgment rule
+    # reads it from threads.json, so every comment page is fetched.
+    nodes = threads[0]["comments"]["nodes"]
+    assert [n["databaseId"] for n in nodes] == [1, 2, 3]
+    assert requests[1]["variables"] == {"id": "T_1", "cursor": "CC_1"}
+    assert "authorAssociation" in requests[1]["query"]
+
+
+async def test_list_review_threads__runaway_thread__comment_pages_bounded():
+    node_queries = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal node_queries
+        payload = json.loads(request.content)
+        if "reviewThreads" in payload["query"]:
+            return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [{
+                        "id": "T_1", "isResolved": False, "resolvedBy": None,
+                        "path": "a.py", "line": 3,
+                        "comments": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "C_0"},
+                            "nodes": [{"databaseId": 0, "body": "root"}],
+                        },
+                    }],
+                }}}}})
+        node_queries += 1
+        return httpx.Response(200, json={"data": {"node": {"comments": {
+            "pageInfo": {"hasNextPage": True, "endCursor": f"C_{node_queries}"},
+            "nodes": [{"databaseId": node_queries, "body": "reply"}],
+        }}}})
+
+    threads = await _client(handler).list_review_threads("acme/widgets", 7)
+
+    # A reply-heavy PR must not stall the review job on one thread: the
+    # traversal is bounded, keeping what was fetched so far.
+    assert node_queries == MAX_COMMENT_PAGES
+    assert len(threads[0]["comments"]["nodes"]) == 1 + MAX_COMMENT_PAGES
+
+
+async def test_list_review_threads__many_runaway_threads__review_wide_budget():
+    node_queries = 0
+    threads_nodes = [{
+        "id": f"T_{i}", "isResolved": False, "resolvedBy": None,
+        "path": "a.py", "line": 3,
+        "comments": {
+            "pageInfo": {"hasNextPage": True, "endCursor": f"C_{i}_0"},
+            "nodes": [{"databaseId": i, "body": "root"}],
+        },
+    } for i in range(8)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal node_queries
+        if "reviewThreads" in json.loads(request.content)["query"]:
+            return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": threads_nodes,
+                }}}}})
+        node_queries += 1
+        return httpx.Response(200, json={"data": {"node": {"comments": {
+            "pageInfo": {"hasNextPage": True, "endCursor": f"N_{node_queries}"},
+            "nodes": [{"databaseId": 10_000 + node_queries, "body": "reply"}],
+        }}}})
+
+    threads = await _client(handler).list_review_threads("acme/widgets", 7)
+
+    # 8 runaway threads x 10-page per-thread cap would be 80 extra calls;
+    # the review-wide budget keeps the whole fetch bounded.
+    assert node_queries == MAX_COMMENT_PAGES_TOTAL
+    assert len(threads) == 8

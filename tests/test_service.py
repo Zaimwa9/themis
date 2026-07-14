@@ -915,28 +915,38 @@ async def test_discuss__reaction_fails__reply_still_posted(service, gh):
 
 
 async def test_discuss__long_thread_bot_root_outside_tail__proceeds(service):
-    # A 50+ comment thread: the bot authored the ROOT, which falls outside the
-    # recent `last: 50` tail. Through the real client the root is merged back in,
-    # so an unmentioned reply must still be answered (previously silently dropped).
+    # A 100+ comment thread authored by the bot: the reply being answered sits
+    # on the SECOND comment page. Through the real client every page is
+    # fetched, so an unmentioned reply must still be answered (a windowed
+    # comment list would silently drop it).
     from themis.github.client import GitHubClient
 
     root = {"author": {"login": "test-reviewer"}, "body": "bug",
             "databaseId": 11, "createdAt": "2026-01-01T00:00:00Z"}
-    tail = [{"author": {"login": "dev"}, "body": f"c{i}", "databaseId": 100 + i,
-             "createdAt": "2026-01-02T00:00:00Z"} for i in range(50)]
+    fillers = [{"author": {"login": "dev"}, "body": f"c{i}", "databaseId": 1000 + i,
+                "createdAt": "2026-01-02T00:00:00Z"} for i in range(99)]
+    reply = {"author": {"login": "dev"}, "body": "I still disagree",
+             "databaseId": 149, "createdAt": "2026-01-03T00:00:00Z"}
     captured = {"replied": None}
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/graphql":
-            return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
-                "reviewThreads": {
-                    "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [{"id": "T_1", "isResolved": False, "path": "a.py",
-                               "line": 3, "resolvedBy": None,
-                               "rootComments": {"nodes": [root]},
-                               "comments": {"nodes": tail}}],
-                }}}}})
+            if "reviewThreads" in json.loads(request.content)["query"]:
+                return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+                    "reviewThreads": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": [{"id": "T_1", "isResolved": False, "path": "a.py",
+                                   "line": 3, "resolvedBy": None,
+                                   "comments": {
+                                       "pageInfo": {"hasNextPage": True,
+                                                    "endCursor": "CC_1"},
+                                       "nodes": [root, *fillers]}}],
+                    }}}}})
+            return httpx.Response(200, json={"data": {"node": {"comments": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [reply],
+            }}}})
         if path == "/repos/acme/widgets/pulls/7":
             return httpx.Response(200, json={
                 "number": 7, "state": "open", "draft": False, "user": {"login": "dev"},
