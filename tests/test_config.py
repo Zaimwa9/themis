@@ -6,10 +6,12 @@ import logging
 import pytest
 
 from themis.config import (
+    MODULE_NAMES,
     RepoConfig,
     SettingsError,
     load_settings,
     parse_repo_config,
+    resolve_modules,
 )
 
 REQUIRED = {
@@ -265,3 +267,92 @@ def test_load_settings__default_repo_config_non_mapping_rejected(monkeypatch):
 def test_load_settings__default_repo_config_blank_is_none(monkeypatch):
     _set_env(monkeypatch, extra={"THEMIS_DEFAULT_REPO_CONFIG": ""})
     assert load_settings().default_repo_config is None
+
+
+# --- review modules (tri-state: always | auto | off) -------------------------
+
+
+def test_repo_config__review_modules_unset_resolve_all_auto():
+    resolved = resolve_modules(parse_repo_config(None), default_doctrine=False)
+    assert set(resolved) == set(MODULE_NAMES)
+    assert all(state == "auto" for state in resolved.values())
+
+
+def test_repo_config__review_modules_tri_state_values():
+    config = parse_repo_config(
+        "review:\n  modules:\n    scorecard: always\n    walkthrough: 'off'\n"
+    )
+    resolved = resolve_modules(config, default_doctrine=False)
+    assert resolved["scorecard"] == "always"
+    assert resolved["walkthrough"] == "off"
+    assert resolved["product_impact"] == "auto"
+
+
+def test_repo_config__review_modules_boolean_aliases():
+    # yaml 1.1 also parses a bare `off` as False, which aliases to "off" - the
+    # unquoted spelling users will write must land on the same state.
+    config = parse_repo_config(
+        "review:\n  modules:\n    scorecard: true\n    sign_off: false\n    walkthrough: off\n"
+    )
+    resolved = resolve_modules(config, default_doctrine=False)
+    assert resolved["scorecard"] == "auto"
+    assert resolved["sign_off"] == "off"
+    assert resolved["walkthrough"] == "off"
+
+
+def test_repo_config__review_modules_invalid_value_degrades_and_keeps_rest(caplog):
+    text = "engine: claude\nreview:\n  modules:\n    scorecard: sometimes\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.engine == "claude"  # rest of the config preserved
+    resolved = resolve_modules(config, default_doctrine=False)
+    assert resolved["scorecard"] == "auto"
+    assert "themis_invalid_review_module" in caplog.text
+
+
+def test_resolve_modules__default_doctrine_raises_presence():
+    resolved = resolve_modules(parse_repo_config(None), default_doctrine=True)
+    assert resolved["scorecard"] == "always"
+    assert resolved["walkthrough"] == "always"
+    assert resolved["product_impact"] == "always"
+    assert resolved["sign_off"] == "always"
+    assert resolved["verification_steps"] == "auto"
+    assert resolved["assumptions"] == "auto"
+    assert resolved["ci_context"] == "auto"
+    assert resolved["inline_findings"] == "auto"
+    assert resolved["code_suggestions"] == "auto"
+
+
+def test_resolve_modules__explicit_value_beats_default_doctrine_profile():
+    config = parse_repo_config("review:\n  modules:\n    scorecard: false\n")
+    resolved = resolve_modules(config, default_doctrine=True)
+    assert resolved["scorecard"] == "off"
+    assert resolved["walkthrough"] == "always"
+
+
+def test_repo_config__review_modules_wrong_container_keeps_rest(caplog):
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config("engine: claude\nreview:\n  modules: nonsense\n")
+    assert config.engine == "claude"  # rest of the config preserved
+    resolved = resolve_modules(config, default_doctrine=False)
+    assert all(state == "auto" for state in resolved.values())
+    assert "themis_invalid_review_modules" in caplog.text
+
+
+def test_repo_config__review_wrong_container_keeps_rest(caplog):
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config("engine: claude\nreview: 7\n")
+    assert config.engine == "claude"
+    resolved = resolve_modules(config, default_doctrine=False)
+    assert all(state == "auto" for state in resolved.values())
+    assert "themis_invalid_review_config" in caplog.text
+
+
+def test_repo_config__null_review_containers_keep_rest():
+    # `review:` with nothing under it (children commented out) is yaml null;
+    # it must behave as unset, not void the rest of the config.
+    for text in ("engine: claude\nreview:\n", "engine: claude\nreview:\n  modules:\n"):
+        config = parse_repo_config(text)
+        assert config.engine == "claude", text
+        resolved = resolve_modules(config, default_doctrine=False)
+        assert all(state == "auto" for state in resolved.values())

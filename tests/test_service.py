@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import logging
 import json
 import subprocess
 from pathlib import Path
@@ -2189,3 +2190,526 @@ async def test_load_learnings__flushed_pr_open__marker_and_pending_untouched(
     assert await store.load_flushed(REPO) == {
         "ids": [entry.id], "pr": 55, "sha": None,
     }
+
+
+# --- review modules + packaged default doctrine -------------------------------
+
+
+def _capturing_agent(prompts: list):
+    async def agent(*, prompt, workspace, **kwargs) -> str:
+        prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        return "ok"
+    return agent
+
+
+async def test_review__no_doctrine_in_checkout__default_doctrine_full_dress(
+    service, gh, caplog
+):
+    prompts: list[str] = []
+    service.resolve_engine = _resolver(_capturing_agent(prompts))
+
+    with caplog.at_level(logging.INFO):
+        await service.review(REPO, 7, 42, auto=True)
+
+    flat = " ".join(prompts[0].split())
+    assert "<doctrine>" in prompts[0]
+    assert "## Severity calibration" in prompts[0]
+    # The default-doctrine presence profile raises scorecard etc. to `always`.
+    assert "required on every substantive review" in flat
+    assert "themis_default_doctrine_used" in caplog.text
+
+
+async def test_review__doctrine_in_checkout__no_default_doctrine(
+    service, gh, tmp_path
+):
+    doctrine = tmp_path / "ws" / ".themis" / "review.md"
+    doctrine.parent.mkdir(parents=True)
+    doctrine.write_text("# Review doctrine\nbe nice\n")
+    prompts: list[str] = []
+    service.resolve_engine = _resolver(_capturing_agent(prompts))
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    flat = " ".join(prompts[0].split())
+    assert "<doctrine>" not in prompts[0]
+    assert "Read `.themis/review.md` in this checkout" in flat
+    assert "required on every substantive review" not in flat
+
+
+async def test_review__repo_modules_reach_prompt_even_with_committed_doctrine(
+    service, gh, tmp_path
+):
+    doctrine = tmp_path / "ws" / ".themis" / "review.md"
+    doctrine.parent.mkdir(parents=True)
+    doctrine.write_text("# Review doctrine\n")
+    gh.get_file_text.return_value = "review:\n  modules:\n    scorecard: always\n"
+    prompts: list[str] = []
+    service.resolve_engine = _resolver(_capturing_agent(prompts))
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert "required on every substantive review" in " ".join(prompts[0].split())
+
+
+async def test_review__inline_findings_off__findings_folded_into_summary(service, gh):
+    gh.get_file_text.return_value = (
+        "review:\n  modules:\n    inline_findings: 'off'\n"
+    )
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_review.assert_not_awaited()
+    summary = gh.post_summary_comment.await_args.args[2]
+    assert "a.py:3" in summary
+    assert "bug" in summary
+
+
+async def test_review__code_suggestions_off__suggestion_blocks_stripped(service, gh):
+    gh.get_file_text.return_value = (
+        "review:\n  modules:\n    code_suggestions: 'off'\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{
+                "path": "a.py", "line": 3,
+                "body": "**Off-by-one.**\n\n```suggestion\nrange(n + 1)\n```\n",
+            }],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    body = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    assert "```suggestion" not in body
+    assert "Off-by-one" in body
+
+
+async def test_review__code_suggestions_off__literal_marker_in_code_sample_survives(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Regex too broad.**\n\n"
+        "Inline mention of ```suggestion\n"
+        "must stay as prose.\n\n"
+        "```python\n"
+        "code_sample()\n"
+        "```\n"
+        "Keep this text.\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    # The literal marker sits inside a line of an ordinary code sample; only
+    # real suggestion fences (marker alone on a fence line) may be stripped.
+    assert posted == body
+
+
+async def test_review__inline_findings_off__every_folded_finding_stays_visible(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": 3, "body": "first " + "x" * 64_000},
+                {"path": "a.py", "line": 3, "body": "second " + "y" * 64_000},
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    # Both findings must remain visible under the comment cap; tail truncation
+    # dropping the second finding would break the never-dropped promise.
+    assert "first" in summary
+    assert "second" in summary
+    assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__code_suggestions_off__four_backtick_fence_example_survives(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Docs example.**\n\n"
+        "````markdown\n"
+        "```suggestion\n"
+        "example()\n"
+        "```\n"
+        "````\n"
+        "Keep this text.\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    # The suggestion fence is quoted inside an enclosing four-backtick fence:
+    # it is prose about a suggestion, not a suggestion block.
+    assert gh.post_review.await_args.kwargs["comments"][0]["body"] == body
+
+
+async def test_review__inline_findings_off__near_limit_summary_keeps_findings(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\n" + "z" * 64_000)
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": 3, "body": "first " + "x" * 1500},
+                {"path": "a.py", "line": 3, "body": "second " + "y" * 1500},
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    # The summary yields space before folding: findings outrank prose on the
+    # only delivery surface left.
+    assert "first" in summary
+    assert "second" in summary
+    assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__inline_findings_off__outside_diff_finding_keeps_caveat(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": 3, "body": "anchored"},
+                {"path": "b.py", "line": 9, "body": "stale anchor"},
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_review.assert_not_awaited()
+    summary = gh.post_summary_comment.await_args.args[2]
+    # Anchor validation still runs first: the unanchorable finding stays
+    # visible but carries its outside-the-diff caveat instead of being folded
+    # as if it pointed at reviewed code.
+    assert "anchored outside the diff" in summary
+    assert "b.py:9" in summary
+    assert "a.py:3" in summary
+
+
+async def test_review__code_suggestions_off__indented_suggestion_fence_stripped(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Off-by-one.**\n\n"
+        "  ```suggestion\n"
+        "  range(n + 1)\n"
+        "  ```\n"
+        "Keep this.\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    # GFM treats fences indented up to 3 spaces as fences; the stripper must
+    # not let a slightly indented suggestion block slip through `off`.
+    assert "```suggestion" not in posted
+    assert "Keep this." in posted
+
+
+async def test_review__inline_findings_off__many_findings_all_stay_visible(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": 3, "body": f"finding-{i} " + "x" * 700}
+                for i in range(120)
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    # A fixed per-finding floor must never overflow the single comment: with
+    # many findings the share shrinks instead, so every entry stays visible.
+    assert summary.count("- `a.py:3`") == 120
+    assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__code_suggestions_off__padded_info_string_stripped(service, gh):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Off-by-one.**\n\n"
+        "```  suggestion\n"
+        "range(n + 1)\n"
+        "```\n"
+        "Keep this.\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    # GFM strips whitespace around the info string, so a padded fence still
+    # renders as an apply-able suggestion; `off` must catch it too.
+    assert "suggestion" not in posted
+    assert "Keep this." in posted
+
+
+async def test_review__inline_findings_off__extreme_count_falls_back_to_pointers(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": 3, "body": f"finding-{i} " + "x" * 300}
+                for i in range(500)
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    # When even the floor cannot fit, entries degrade to pointers rather than
+    # dropping tail findings past the comment cap.
+    assert summary.count("- `a.py:3`") == 500
+    assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__code_suggestions_off__tilde_fenced_suggestion_stripped(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Off-by-one.**\n\n"
+        "~~~suggestion\n"
+        "range(n + 1)\n"
+        "~~~\n"
+        "Keep this.\n"
+    )
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    assert "suggestion" not in posted
+    assert "Keep this." in posted
+
+
+async def test_review__inline_findings_off__long_paths_do_not_drop_tail(service, gh):
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+    long_path = "src/" + "deeply/nested/" * 14 + "module.py"  # ~200 chars
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": long_path, "line": i + 1, "body": f"finding-{i} " + "x" * 400}
+                for i in range(200)
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    async def any_paths(gh_client, repo, pr_number):
+        return None  # fail-open: no path filtering
+
+    async def any_lines(workspace, base_ref):
+        return None
+
+    service.changed_paths = any_paths
+    service.changed_lines = any_lines
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    # Budgeting must use the real pointer lengths: long paths shrink the
+    # share, they never push tail findings past the comment cap.
+    assert summary.count(f"- `{long_path}:") == 200
+    assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__inline_findings_off__redaction_expansion_keeps_all_pointers(
+    service, gh, monkeypatch
+):
+    # An 8-char secret redacts to the 10-char "[redacted]" marker, so
+    # redaction can EXPAND text. Budgeting on pre-redaction lengths would
+    # overflow the posting cap and the final chop would drop tail pointers.
+    monkeypatch.setenv("THEMIS_API_TOKEN", "hunter22")
+    gh.get_file_text.return_value = "review:\n  modules:\n    inline_findings: 'off'\n"
+    body = ("hunter22 " * 400).strip()
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [
+                {"path": "a.py", "line": i + 1, "body": body} for i in range(100)
+            ],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    async def any_paths(gh_client, repo, pr_number):
+        return None  # fail-open: no path filtering
+
+    async def any_lines(workspace, base_ref):
+        return None
+
+    service.changed_paths = any_paths
+    service.changed_lines = any_lines
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    summary = gh.post_summary_comment.await_args.args[2]
+    assert summary.count("- `a.py:") == 100
+    assert "hunter22" not in summary
+    assert len(summary) <= MAX_BODY_LEN
+
+
+async def test_review__code_suggestions_off__suggestion_only_body_keeps_placeholder(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{
+                "path": "a.py", "line": 3,
+                "body": "```suggestion\nrange(n + 1)\n```\n",
+            }],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    # A suggestion-only body must never strip to empty: GitHub rejects the
+    # whole batch on an empty comment body and every finding gets demoted.
+    assert posted.strip()
+    assert "```suggestion" not in posted
+
+
+async def test_review__code_suggestions_off__unclosed_suggestion_fence_stripped(
+    service, gh
+):
+    gh.get_file_text.return_value = "review:\n  modules:\n    code_suggestions: 'off'\n"
+    body = (
+        "**Off-by-one.**\n\n"
+        "```suggestion\n"
+        "range(n + 1)\n"
+    )  # no closing fence: GFM extends it to end of comment
+
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({
+            "findings": [{"path": "a.py", "line": 3, "body": body}],
+        }))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    posted = gh.post_review.await_args.kwargs["comments"][0]["body"]
+    # An unclosed suggestion fence still renders as an apply-able suggestion
+    # (an unclosed fence runs to end of comment), so it must be stripped too.
+    assert "```suggestion" not in posted
+    assert "range(n + 1)" not in posted
+    assert "Off-by-one." in posted

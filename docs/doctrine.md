@@ -13,9 +13,13 @@ your codebase, your severity bar, and your house rules.
 - The doctrine calibrates judgment only. The output format (verdict line,
   scoring table, severity sections, inline finding shape) is fixed by Themis's
   own prompt and cannot be changed from the doctrine.
-- If the file is missing or unreadable, the review still runs with the
-  built-in contract and default judgment. A broken `.themis/` never blocks a
-  review.
+- If the file is missing, Themis applies a packaged default doctrine (the
+  repo-agnostic philosophy, severity calibration, and verification habits
+  from the starter kit) and raises the presentation to full dress —
+  scorecard, walkthrough, product take, and sign-off resolve to `always`
+  unless `review.modules` in `.themis/config.yaml` says otherwise. A
+  committed doctrine replaces the packaged one wholesale, and a broken
+  `.themis/` never blocks a review.
 - `.themis/config.yaml` (same directory) holds behavior knobs: engine, model,
   timeouts, auto-review. Unlike the doctrine, it is read from the repo's
   **default branch**, so a PR cannot flip its own settings (for example

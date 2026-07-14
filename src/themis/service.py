@@ -20,6 +20,7 @@ from themis.config import (
     RepoConfig,
     Settings,
     parse_repo_config,
+    resolve_modules,
 )
 from themis.engines import Engine, EngineError, EngineQuotaError, EngineUnavailableError
 from themis.events import TRUSTED_ASSOCIATIONS
@@ -46,7 +47,7 @@ from themis.output import (
     parse_output,
     parse_reply,
 )
-from themis.prompts import build_discussion_prompt, build_review_prompt
+from themis.prompts import DOCTRINE_PATH, build_discussion_prompt, build_review_prompt
 from themis.security import redact_outbound
 from themis.remote import RemoteEngine
 from themis.workspace import (
@@ -551,9 +552,21 @@ class ReviewService:
                         )
                     _write_checks_input(workspace, snapshot)
 
+                # The doctrine is read from the PR checkout on purpose (see
+                # docs/configuration.md); without one, the packaged default
+                # doctrine applies and raises the presence profile.
+                use_default_doctrine = not (workspace / DOCTRINE_PATH).exists()
+                if use_default_doctrine:
+                    logger.info(
+                        "themis_default_doctrine_used repo=%s pr=%s", repo, pr_number
+                    )
+                modules = resolve_modules(
+                    repo_config, default_doctrine=use_default_doctrine
+                )
                 prompt = build_review_prompt(
                     repo, pr_number, pr["base"]["ref"], extra_context=extra_context,
-                    has_learnings=bool(learnings),
+                    has_learnings=bool(learnings), modules=modules,
+                    use_default_doctrine=use_default_doctrine,
                 )
                 actions = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
@@ -563,11 +576,21 @@ class ReviewService:
                     return
                 # Codex runs can outlive the 60-min installation token; do every
                 # post-codex GitHub read/write on a freshly minted one.
+                # Redact before anything measures text: redaction can EXPAND
+                # (a short secret becomes the longer marker), so budgets
+                # computed on pre-redaction lengths would overflow the posting
+                # cap and drop tail findings. _post_review_results redacts
+                # again as the posting-path backstop; that is idempotent.
+                _redact_actions(actions)
                 post_gh = self.make_client(await self.get_token(installation_id))
                 async with post_gh:
                     await self._drop_findings_outside_diff(
                         actions, post_gh, repo, pr_number, workspace, pr["base"]["ref"]
                     )
+                    # After anchor validation, so a finding on unreviewed code
+                    # keeps its outside-the-diff caveat instead of being folded
+                    # as if it pointed at the diff.
+                    _enforce_delivery_modules(actions, modules, repo, pr_number)
                     _keep_bot_authored_resolutions(
                         actions, threads, self.bot_login, repo, pr_number
                     )
@@ -818,11 +841,7 @@ class ReviewService:
     async def _post_review_results(
         self, gh: Any, repo: str, pr_number: int, commit_sha: str, actions: ReviewActions
     ) -> None:
-        actions.summary = redact_outbound(actions.summary)
-        for finding in actions.findings:
-            finding["body"] = redact_outbound(finding["body"])
-        for reply in actions.replies:
-            reply["body"] = redact_outbound(reply["body"])
+        _redact_actions(actions)
         summary = actions.summary
         if actions.findings:
             try:
@@ -927,6 +946,144 @@ def _bot_in_thread(thread: dict[str, Any], bot_login: str) -> bool:
         if (node.get("author") or {}).get("login", "") in logins:
             return True
     return False
+
+
+# GFM allows fence lines to be indented up to three spaces; a fence is a run
+# of backticks or tildes.
+_FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*?)[ \t]*\r?\n?$")
+
+
+def _redact_actions(actions: ReviewActions) -> None:
+    actions.summary = redact_outbound(actions.summary)
+    for finding in actions.findings:
+        finding["body"] = redact_outbound(finding["body"])
+    for reply in actions.replies:
+        reply["body"] = redact_outbound(reply["body"])
+
+
+def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
+    """Remove real GitHub suggestion blocks; leave quoted ones alone.
+
+    Line-based fence tracking rather than a regex: a suggestion fence
+    inside an enclosing longer fence (a Markdown example quoting one) is
+    prose about a suggestion, not a suggestion block. A closing fence must
+    match its opener's character, per GFM. An unclosed suggestion fence
+    extends to end of text, per GFM, so it still renders apply-able and is
+    stripped like a closed one."""
+    out: list[str] = []
+    pending: list[str] = []  # lines of a suggestion block until it closes
+    open_fence: tuple[str, int] | None = None  # enclosing non-suggestion fence
+    suggestion: tuple[str, int] | None = None  # opening fence of pending block
+    removed = 0
+    for line in text.splitlines(keepends=True):
+        match = _FENCE_LINE.match(line)
+        fence: tuple[str, int, str] | None = None
+        if match:
+            # GFM strips whitespace around the info string ("```  suggestion"
+            # still renders as a suggestion block), and a backtick fence's
+            # info string cannot itself contain backticks.
+            run, info = match.group(1), match.group(2).strip()
+            if not (run[0] == "`" and "`" in info):
+                fence = (run[0], len(run), info)
+        if suggestion:
+            pending.append(line)
+            if (
+                fence
+                and not fence[2]
+                and fence[0] == suggestion[0]
+                and fence[1] >= suggestion[1]
+            ):
+                pending.clear()
+                suggestion = None
+                removed += 1
+            continue
+        if fence:
+            char, length, info = fence
+            if open_fence:
+                if not info and char == open_fence[0] and length >= open_fence[1]:
+                    open_fence = None
+            elif info == "suggestion":
+                suggestion = (char, length)
+                pending.append(line)
+                continue
+            else:
+                open_fence = (char, length)
+        out.append(line)
+    if suggestion:  # unclosed fence runs to EOF: everything pending is inside
+        removed += 1
+    return "".join(out), removed
+
+
+def _enforce_delivery_modules(
+    actions: ReviewActions, modules: dict[str, str], repo: str, pr_number: int
+) -> None:
+    """Backstop for disabled delivery modules: the prompt already forbids
+    them, but an agent that emits them anyway must not reach GitHub with
+    a surface the repo turned off. Findings are folded, never dropped."""
+    if modules.get("code_suggestions") == "off":
+        stripped = 0
+        for finding in actions.findings:
+            body, count = _strip_suggestion_blocks(finding["body"])
+            if count:
+                # A suggestion-only body must not strip to empty: GitHub
+                # rejects the whole review batch on an empty comment body.
+                finding["body"] = body.rstrip() or (
+                    "Suggested change omitted (`code_suggestions` is disabled"
+                    " for this repository); the fix targets the lines this"
+                    " comment anchors to."
+                )
+                stripped += count
+        summary, count = _strip_suggestion_blocks(actions.summary)
+        if count:
+            actions.summary = summary.rstrip()
+            stripped += count
+        if stripped:
+            logger.warning(
+                "themis_suggestions_stripped repo=%s pr=%s count=%d",
+                repo, pr_number, stripped,
+            )
+    if modules.get("inline_findings") == "off" and actions.findings:
+        logger.warning(
+            "themis_inline_findings_folded repo=%s pr=%s count=%d",
+            repo, pr_number, len(actions.findings),
+        )
+        heading = (
+            "\n\n##### Findings (inline comments are disabled for this"
+            " repository)\n"
+        )
+        # The summary is the only delivery surface here and it is one GitHub
+        # comment: findings outrank prose on it. Reserve room for every
+        # finding first - trimming the assessment if it hogs the budget -
+        # then give each an equal share so the final length cap can never
+        # drop a whole finding from the tail. A pathological finding count
+        # still falls back to the global truncation guard at posting time.
+        floor = 600
+        marker = "\n[finding truncated to fit the summary comment]"
+        pointers = [f"- `{f['path']}:{f['line']}` " for f in actions.findings]
+        # Real pointer lengths, not an estimate: long paths shrink the share,
+        # they never push tail findings past the cap. `fixed` is everything a
+        # worst-case entry costs beyond its body share.
+        fixed = sum(len(p) + 1 for p in pointers) + len(pointers) * len(marker)
+        reserve = len(heading) + fixed + len(pointers) * floor + 512
+        if len(actions.summary) > MAX_BODY_LEN - reserve:
+            keep = max(0, MAX_BODY_LEN - reserve)
+            actions.summary = (
+                actions.summary[:keep]
+                + "\n[assessment truncated to keep folded findings visible]"
+            )
+        budget = MAX_BODY_LEN - len(actions.summary) - len(heading) - 512
+        # Equal body share of what remains after the fixed costs; with enough
+        # findings it drops to zero and entries degrade to bare pointers -
+        # every finding stays addressable up to far beyond any real review.
+        share = max(0, (budget - fixed) // len(pointers))
+        lines = []
+        for pointer, finding in zip(pointers, actions.findings, strict=True):
+            body = finding["body"]
+            if len(body) > share:
+                body = body[:share] + marker
+            lines.append(pointer + body)
+        actions.summary += heading + "\n".join(lines)
+        actions.findings = []
 
 
 def _keep_bot_authored_resolutions(
