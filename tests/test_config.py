@@ -328,3 +328,21 @@ def test_resolve_modules__explicit_value_beats_default_doctrine_profile():
     resolved = resolve_modules(config, default_doctrine=True)
     assert resolved["scorecard"] == "off"
     assert resolved["walkthrough"] == "always"
+
+
+def test_repo_config__review_modules_wrong_container_keeps_rest(caplog):
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config("engine: claude\nreview:\n  modules: nonsense\n")
+    assert config.engine == "claude"  # rest of the config preserved
+    resolved = resolve_modules(config, default_doctrine=False)
+    assert all(state == "auto" for state in resolved.values())
+    assert "themis_invalid_review_modules" in caplog.text
+
+
+def test_repo_config__review_wrong_container_keeps_rest(caplog):
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config("engine: claude\nreview: 7\n")
+    assert config.engine == "claude"
+    resolved = resolve_modules(config, default_doctrine=False)
+    assert all(state == "auto" for state in resolved.values())
+    assert "themis_invalid_review_config" in caplog.text

@@ -93,6 +93,16 @@ DEFAULT_DOCTRINE_MODULES = {
 class ReviewConfig(BaseModel):
     modules: ReviewModulesConfig = ReviewModulesConfig()
 
+    @field_validator("modules", mode="before")
+    @classmethod
+    def _modules_mapping_or_default(cls, value: object) -> object:
+        """A malformed modules container must not void the rest of the repo
+        config (engine, limits, ...); presentation settings degrade alone."""
+        if value is None or isinstance(value, dict | ReviewModulesConfig):
+            return value
+        logger.warning("themis_invalid_review_modules value=%s", str(value)[:50])
+        return ReviewModulesConfig()
+
 
 def resolve_modules(config: "RepoConfig", *, default_doctrine: bool) -> dict[str, str]:
     """Effective tri-state per module. Explicit repo values always win; unset
@@ -138,6 +148,16 @@ class RepoConfig(BaseModel):
             return value
         logger.warning("themis_invalid_repo_engine value=%s", str(value)[:50])
         return None
+
+    @field_validator("review", mode="before")
+    @classmethod
+    def _review_mapping_or_default(cls, value: object) -> object:
+        """Same isolation as the modules container: a malformed review
+        section degrades to defaults without taking engine/limits with it."""
+        if value is None or isinstance(value, dict | ReviewConfig):
+            return value
+        logger.warning("themis_invalid_review_config value=%s", str(value)[:50])
+        return ReviewConfig()
 
 
 def parse_repo_config(text: str | None) -> RepoConfig:
