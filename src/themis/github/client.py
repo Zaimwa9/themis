@@ -38,10 +38,8 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
           resolvedBy { login }
           path
           line
-          rootComments: comments(first: 1) {
-            nodes { author { login } authorAssociation body databaseId createdAt }
-          }
-          comments(last: 50) {
+          comments(first: 100) {
+            pageInfo { hasNextPage endCursor }
             nodes { author { login } authorAssociation body databaseId createdAt }
           }
         }
@@ -51,26 +49,18 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
 }
 """
 
-def _merge_thread_comments(thread: dict[str, Any]) -> dict[str, Any]:
-    """Collapse the rootComments+comments aliases into a single comment list.
-
-    reviewThreads fetches the root comment (first: 1) and the recent tail
-    (last: 50) separately so neither is lost in long threads. Consumers read
-    thread["comments"]["nodes"]; normalize to root-first + tail, deduped by
-    databaseId (the root reappears in the tail on short threads)."""
-    root_nodes = thread.pop("rootComments", {}).get("nodes", [])
-    tail_nodes = thread.get("comments", {}).get("nodes", [])
-    merged: list[dict[str, Any]] = []
-    seen: set[int] = set()
-    for node in (*root_nodes, *tail_nodes):
-        database_id = node.get("databaseId")
-        if database_id is not None:
-            if database_id in seen:
-                continue
-            seen.add(database_id)
-        merged.append(node)
-    thread["comments"] = {"nodes": merged}
-    return thread
+_THREAD_COMMENTS_QUERY = """
+query($id: ID!, $cursor: String) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { author { login } authorAssociation body databaseId createdAt }
+      }
+    }
+  }
+}
+"""
 
 
 _RESOLVE_MUTATION = """
@@ -257,10 +247,31 @@ class GitHubClient:
                 {"owner": owner, "name": name, "number": number, "cursor": cursor},
             )
             page = data["repository"]["pullRequest"]["reviewThreads"]
-            threads.extend(_merge_thread_comments(node) for node in page["nodes"])
+            for node in page["nodes"]:
+                threads.append(await self._fill_thread_comments(node))
             if not page["pageInfo"]["hasNextPage"]:
                 return threads
             cursor = page["pageInfo"]["endCursor"]
+
+    async def _fill_thread_comments(self, thread: dict[str, Any]) -> dict[str, Any]:
+        """Fetch every comment page of a thread, root-first.
+
+        The acknowledgment rule reads acceptance replies straight from
+        threads.json; a windowed comment list would silently drop an
+        acceptance in the middle of a long thread and keep its finding
+        open forever."""
+        comments = thread.setdefault("comments", {"nodes": []})
+        page_info = comments.get("pageInfo") or {}
+        while page_info.get("hasNextPage"):
+            data = await self._graphql(
+                _THREAD_COMMENTS_QUERY,
+                {"id": thread["id"], "cursor": page_info.get("endCursor")},
+            )
+            page = data["node"]["comments"]
+            comments["nodes"].extend(page["nodes"])
+            page_info = page.get("pageInfo") or {}
+        comments.pop("pageInfo", None)
+        return thread
 
     async def resolve_thread(self, thread_id: str) -> None:
         await self._graphql(_RESOLVE_MUTATION, {"threadId": thread_id})
