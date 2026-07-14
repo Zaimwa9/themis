@@ -1,5 +1,12 @@
 # GLM and Qwen Engines Implementation Plan
 
+> **Historical artifact — does not describe the shipped scope.** This plan
+> was executed on 2026-07-13; review then removed the qwen engine (Coding
+> Plan ToS forbids unattended backend use — see the spec's status update and
+> #21) and dropped glm's text quota markers (#28). The shipped scope is the
+> glm engine only. Kept for process history; the tasks below are as
+> originally written.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add `glm` and `qwen` review engines that reuse the hardened Claude Code harness in API mode against Z.ai's and DashScope's Anthropic-compatible endpoints (issues #20, #21).
