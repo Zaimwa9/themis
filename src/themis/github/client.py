@@ -39,10 +39,10 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
           path
           line
           rootComments: comments(first: 1) {
-            nodes { author { login } body databaseId createdAt }
+            nodes { author { login } authorAssociation body databaseId createdAt }
           }
           comments(last: 50) {
-            nodes { author { login } body databaseId createdAt }
+            nodes { author { login } authorAssociation body databaseId createdAt }
           }
         }
       }

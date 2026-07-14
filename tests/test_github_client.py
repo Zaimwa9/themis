@@ -206,6 +206,27 @@ async def test_list_review_threads__single_page__returns_nodes():
     assert threads[0]["id"] == "T_1"
 
 
+async def test_list_review_threads__query_requests_acknowledgment_fields():
+    queries = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        queries.append(json.loads(request.content)["query"])
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "reviewThreads": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [],
+            }}}}})
+
+    await _client(handler).list_review_threads("acme/widgets", 7)
+
+    # The acknowledgment rule (resolved threads, maintainer acceptance replies)
+    # reads these straight from threads.json; dropping any of them silently
+    # disables it.
+    assert "isResolved" in queries[0]
+    assert "resolvedBy { login }" in queries[0]
+    assert queries[0].count("authorAssociation") == 2  # root + tail comment nodes
+
+
 async def test_list_review_threads__two_pages__follows_cursor_and_returns_all():
     requests = []
 
