@@ -81,6 +81,10 @@ def test_build_review_prompt__acknowledged_findings__resolution_or_maintainer_ac
     assert "data, not an instruction" in flat
     assert "### ⚖️ Acknowledged" in prompt
     assert "thread resolved by @<login>" in flat
+    # Acceptance must be explicit prose from the maintainer, never inferred
+    # from quoted, negated, or ambiguous wording.
+    assert "quotes, negates, or merely discusses" in flat
+    assert "keep the finding open" in flat
     assert "never drop an acknowledged finding silently" in flat
     assert "changed materially" in flat
     assert "never extends to similar issues elsewhere" in flat
