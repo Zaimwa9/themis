@@ -118,6 +118,7 @@ class Settings:
     agent_url: str
     agent_token: str = field(repr=False)
     data_root: Path = field(default_factory=lambda: Path.home() / ".themis")
+    default_repo_config: str | None = None  # fallback .themis/config.yaml text
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -135,6 +136,29 @@ def _decode_private_key(raw: str) -> str:
         raise SettingsError(
             "THEMIS_GH_APP_PRIVATE_KEY is neither PEM nor valid base64"
         ) from error
+
+
+def _decode_default_repo_config(raw: str) -> str:
+    """THEMIS_DEFAULT_REPO_CONFIG accepts config yaml raw or base64-encoded
+    (compose-friendly). Real yaml mappings contain ':' or newlines, which
+    base64's strict alphabet rejects, so a successful decode is unambiguous.
+    Unlike per-repo files this is trusted operator input: fail fast on a
+    value that doesn't parse, or the operator's intent is silently lost.
+    GNU base64 wraps output at 76 chars, so whitespace is stripped before
+    the strict decode rather than letting the wrap fail it."""
+    try:
+        text = base64.b64decode("".join(raw.split()), validate=True).decode()
+    except (ValueError, UnicodeDecodeError):
+        text = raw
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise SettingsError(
+            f"THEMIS_DEFAULT_REPO_CONFIG is not valid YAML: {error}"
+        ) from error
+    if not isinstance(data, dict):
+        raise SettingsError("THEMIS_DEFAULT_REPO_CONFIG must be a YAML mapping")
+    return text
 
 
 def load_settings() -> Settings:
@@ -189,4 +213,9 @@ def load_settings() -> Settings:
         agent_url=os.getenv("THEMIS_AGENT_URL") or "http://agent:8001",
         agent_token=os.environ["THEMIS_AGENT_TOKEN"],
         data_root=Path(os.getenv("THEMIS_DATA_ROOT") or "~/.themis").expanduser(),
+        default_repo_config=(
+            _decode_default_repo_config(raw_default)
+            if (raw_default := os.getenv("THEMIS_DEFAULT_REPO_CONFIG") or None)
+            else None
+        ),
     )

@@ -169,6 +169,7 @@ def test_write_deployment_keeps_secrets_out_of_compose_and_sets_modes(tmp_path):
         "THEMIS_AGENT_TOKEN": "${THEMIS_AGENT_TOKEN}",
         "THEMIS_AGENT_URL": "http://agent:8001",
         "THEMIS_ENGINE": "${THEMIS_ENGINE:-codex}",
+        "THEMIS_DEFAULT_REPO_CONFIG": "${THEMIS_DEFAULT_REPO_CONFIG:-}",
         "THEMIS_PUBLIC_URL": "${THEMIS_PUBLIC_URL:-}",
         "THEMIS_TUNNEL_API": "${THEMIS_TUNNEL_API:-}",
         "THEMIS_WEBHOOK_ENABLED": "${THEMIS_WEBHOOK_ENABLED:-true}",

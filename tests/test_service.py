@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
@@ -755,6 +756,67 @@ async def test_repo_config_fetch_failure__review_completes_on_defaults(service, 
     assert len(prepare_calls) == 1
     assert prepare_calls[0]["depth"] == 50  # RepoConfig default clone_depth
     gh.post_summary_comment.assert_awaited_once()
+
+
+async def test_default_repo_config__used_when_repo_file_absent(service, gh):
+    """With no .themis/config.yaml in the target repo, the instance-level
+    THEMIS_DEFAULT_REPO_CONFIG drives behavior (here: auto_review off)."""
+    service.settings = dataclasses.replace(
+        service.settings, default_repo_config="triggers:\n  auto_review: false\n"
+    )
+    original_prepare = service.prepare
+    prepare_calls: list[dict] = []
+
+    async def recording_prepare(**kwargs):
+        prepare_calls.append(kwargs)
+        return await original_prepare(**kwargs)
+    service.prepare = recording_prepare
+
+    await service.review(REPO, 7, 42, auto=True)
+    assert prepare_calls == []
+
+    await service.review(REPO, 7, 42, auto=False)
+    assert len(prepare_calls) == 1
+
+
+async def test_default_repo_config__repo_file_wins(service, gh):
+    """A .themis/config.yaml in the target repo replaces the instance default
+    entirely; no per-key merge between the two."""
+    service.settings = dataclasses.replace(
+        service.settings, default_repo_config="limits:\n  clone_depth: 9\n"
+    )
+    gh.get_file_text.return_value = "limits:\n  clone_depth: 7\n"
+    original_prepare = service.prepare
+    prepare_calls: list[dict] = []
+
+    async def recording_prepare(**kwargs):
+        prepare_calls.append(kwargs)
+        return await original_prepare(**kwargs)
+    service.prepare = recording_prepare
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert prepare_calls[0]["depth"] == 7
+
+
+async def test_default_repo_config__used_on_fetch_failure(service, gh):
+    """When the repo config read dies, the instance default is a better
+    fallback than hardcoded RepoConfig defaults."""
+    service.settings = dataclasses.replace(
+        service.settings, default_repo_config="limits:\n  clone_depth: 9\n"
+    )
+    gh.get_file_text.side_effect = _http_error(500)
+    original_prepare = service.prepare
+    prepare_calls: list[dict] = []
+
+    async def recording_prepare(**kwargs):
+        prepare_calls.append(kwargs)
+        return await original_prepare(**kwargs)
+    service.prepare = recording_prepare
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert prepare_calls[0]["depth"] == 9
 
 
 async def test_discuss__repo_config_drives_clone_depth(service, gh):

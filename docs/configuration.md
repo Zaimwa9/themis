@@ -18,6 +18,7 @@ Two planes:
 | `THEMIS_AGENT_TOKEN` | yes | none | controller-to-agent bearer token; use the same random value in both containers |
 | `THEMIS_AGENT_URL` | no | `http://agent:8001` | internal URL of the isolated agent service |
 | `THEMIS_ENGINE` | no | `codex` | instance default review engine; `codex`, `claude`, or `glm` |
+| `THEMIS_DEFAULT_REPO_CONFIG` | no | unset | `.themis/config.yaml` content (raw yaml or base64 of it) used for repos that have no `.themis/config.yaml`; see below |
 | `CODEX_HOME` | no | `/data/codex` | codex auth/state directory |
 | `THEMIS_CODEX_SANDBOX` | no | `workspace-write` | codex sandbox mode; `danger-full-access` for runtimes without Landlock |
 | `CLAUDE_CODE_OAUTH_TOKEN` | agent only | unset | Claude Max token from `claude setup-token`; never set it on the controller |
@@ -35,8 +36,10 @@ Two planes:
 Names and defaults come straight from `../src/themis/config.py`, except
 `PORT` and `THEMIS_ROLE` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and
 `CLAUDE_CODE_OAUTH_TOKEN` and `GLM_API_KEY` (read directly by
-the engine adapters in `../src/themis/engines/`, not part of `Settings`). There is no model, limit, or mention configuration
-in the environment; the
+the engine adapters in `../src/themis/engines/`, not part of `Settings`). Model, limit, and trigger configuration
+lives in `.themis/config.yaml` (or its `THEMIS_DEFAULT_REPO_CONFIG`
+fallback, below), not in dedicated environment variables. There is no
+mention configuration at all: the
 mention handle is derived at startup from `GET /app` (the App's slug), so it
 can never drift from the App's actual name.
 
@@ -78,6 +81,28 @@ learnings:
 
 A partial file deep-merges over the defaults, key by key, so you only need
 to set the fields you want to change.
+
+### Instance-level default (`THEMIS_DEFAULT_REPO_CONFIG`)
+
+When you can't (or don't want to) commit `.themis/config.yaml` to a target
+repo — trying Themis on a repo you can't push to yet — set
+`THEMIS_DEFAULT_REPO_CONFIG` on the controller to the config content, raw
+yaml or base64-encoded. A shell assignment is not seen by a later
+`docker compose up`; put the encoded value in the deployment's `.env`
+(single line, like the private key):
+
+```bash
+printf 'triggers:\n  auto_review: false\n' | base64 | tr -d '\n'
+# then in .env next to the compose file:
+# THEMIS_DEFAULT_REPO_CONFIG=dHJpZ2dlcnM6CiAgYXV0b19yZXZpZXc6IGZhbHNlCg==
+```
+
+Resolution order per repo: `.themis/config.yaml` in the repo if present,
+else `THEMIS_DEFAULT_REPO_CONFIG`, else built-in defaults. A repo file
+replaces the instance default wholesale — the two are never merged key by
+key. A value that isn't valid yaml (or isn't a mapping) fails startup;
+what's inside is handled leniently like a repo file: unknown keys are
+ignored and invalid values degrade to defaults with a warning.
 
 A malformed `.themis/config.yaml`, invalid YAML, wrong types, not a
 mapping, logs a warning and Themis proceeds on full defaults. A broken
