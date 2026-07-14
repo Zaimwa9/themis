@@ -143,9 +143,11 @@ def _decode_default_repo_config(raw: str) -> str:
     (compose-friendly). Real yaml mappings contain ':' or newlines, which
     base64's strict alphabet rejects, so a successful decode is unambiguous.
     Unlike per-repo files this is trusted operator input: fail fast on a
-    value that doesn't parse, or the operator's intent is silently lost."""
+    value that doesn't parse, or the operator's intent is silently lost.
+    GNU base64 wraps output at 76 chars, so whitespace is stripped before
+    the strict decode rather than letting the wrap fail it."""
     try:
-        text = base64.b64decode(raw, validate=True).decode()
+        text = base64.b64decode("".join(raw.split()), validate=True).decode()
     except (ValueError, UnicodeDecodeError):
         text = raw
     try:

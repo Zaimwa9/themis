@@ -238,6 +238,16 @@ def test_load_settings__default_repo_config_base64_decoded(monkeypatch):
     assert load_settings().default_repo_config == yaml_text
 
 
+def test_load_settings__default_repo_config_wrapped_base64_decoded(monkeypatch):
+    """GNU base64 wraps output at 76 chars; the wrap must not push a valid
+    encoded config onto the raw-yaml path (where it fails as a non-mapping)."""
+    yaml_text = "triggers:\n  auto_review: false\nlearnings:\n  enabled: false\n"
+    encoded = base64.encodebytes(yaml_text.encode()).decode()
+    assert "\n" in encoded.strip()  # the wrap this test is about
+    _set_env(monkeypatch, extra={"THEMIS_DEFAULT_REPO_CONFIG": encoded})
+    assert load_settings().default_repo_config == yaml_text
+
+
 def test_load_settings__default_repo_config_invalid_yaml_rejected(monkeypatch):
     """Instance config is trusted operator input: a broken value means the
     operator's intent is lost entirely, so fail fast instead of degrading."""
