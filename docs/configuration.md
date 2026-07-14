@@ -109,6 +109,12 @@ Booleans are accepted as lenient aliases (`true` → `auto`, `false` → `off`),
 and yaml's bare `off` parses as `false`, which lands on the same state. An
 invalid value warns and behaves as unset.
 
+For the two delivery modules (`inline_findings`, `code_suggestions`),
+`always` is equivalent to `auto`: delivery is already mandatory whenever it
+applies (every anchorable finding is posted inline; a suggestion block is
+attached whenever the exact fix is small and certain), so there is nothing
+extra for `always` to force. Their meaningful settings are `auto` and `off`.
+
 | Module | Controls |
 |---|---|
 | `scorecard` | the Correctness / Test coverage / Code quality / Product impact table |
