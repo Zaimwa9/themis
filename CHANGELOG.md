@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.0](https://github.com/Zaimwa9/themis/compare/v0.3.0...v0.4.0) (2026-07-14)
+
+
+### Features
+
+* instance-level repo-config fallback via THEMIS_DEFAULT_REPO_CONFIG ([#35](https://github.com/Zaimwa9/themis/issues/35)) ([cd4688f](https://github.com/Zaimwa9/themis/commit/cd4688f470111f19b05eec36196c13659257e0e7))
+* per-repo learnings memory with human-reviewed digest PRs ([#24](https://github.com/Zaimwa9/themis/issues/24)) ([392f7cc](https://github.com/Zaimwa9/themis/commit/392f7cce1a1b65ce91e7531a8cf26489d55afbe3))
+
+
+### Bug Fixes
+
+* sync uv.lock on release PRs from the release workflow ([36c0888](https://github.com/Zaimwa9/themis/commit/36c0888e061b42b987c50fb1435e7b41fd509e79)), closes [#15](https://github.com/Zaimwa9/themis/issues/15)
+* sync uv.lock with 0.3.0 release version bump ([e9bf2e3](https://github.com/Zaimwa9/themis/commit/e9bf2e34c97f90276fa023eabc6008c8c4b6d3aa))
+* validate synced release branch in-job; document required App fields ([2f254cd](https://github.com/Zaimwa9/themis/commit/2f254cd5690605a0096594fb95b332458cece59a))
+
+
+### Documentation
+
+* add AGENTS.md agent guide, imported by CLAUDE.md ([76c8406](https://github.com/Zaimwa9/themis/commit/76c84065e17c981c32e3f90f05eeeec9ac758b5f))
+* organize README around three setup paths ([1da6496](https://github.com/Zaimwa9/themis/commit/1da649634807860ded84b52ff9b505c425c6b7ba))
+* seed codex auth via exec pipe, not docker cp ([a2bdbe2](https://github.com/Zaimwa9/themis/commit/a2bdbe274bc0fce4ba0ccb738da168db934660e4))
+* setup paths, agent guide, and release lockfile sync ([cd4719b](https://github.com/Zaimwa9/themis/commit/cd4719b5f57cfc3a1bfb92cb4024e53faaba7985))
+
 ## [0.3.0](https://github.com/Zaimwa9/themis/compare/v0.2.0...v0.3.0) (2026-07-14)
 
 
