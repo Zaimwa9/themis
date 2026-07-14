@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 
+from themis.engines import ENGINE_NAMES
 from themis.github.auth import make_app_jwt
 
 GITHUB_URL = "https://github.com"
@@ -213,6 +214,7 @@ def _compose_text(image: str) -> str:
       THEMIS_WORKSPACE_ROOT: /tmp/themis
       THEMIS_CODEX_SANDBOX: ${{THEMIS_CODEX_SANDBOX:-workspace-write}}
       CLAUDE_CODE_OAUTH_TOKEN: ${{CLAUDE_CODE_OAUTH_TOKEN:-}}
+      GLM_API_KEY: ${{GLM_API_KEY:-}}
       HTTP_PROXY: ${{HTTP_PROXY:-}}
       HTTPS_PROXY: ${{HTTPS_PROXY:-}}
     volumes:
@@ -291,6 +293,7 @@ def write_deployment(options: BootstrapOptions, credentials: dict[str, object]) 
         f"THEMIS_TUNNEL_API={_dotenv('http://ngrok:4040' if options.tunnel else '')}",
         f"NGROK_AUTHTOKEN={_dotenv(options.ngrok_authtoken or '')}",
         "CLAUDE_CODE_OAUTH_TOKEN=''",
+        "GLM_API_KEY=''",
     ]
     _write_exclusive(env_path, ("\n".join(lines) + "\n").encode(), 0o600)
     _write_exclusive(compose_path, _compose_text(options.image).encode(), 0o644)
@@ -470,7 +473,7 @@ def add_init_parser(subparsers: argparse._SubParsersAction) -> None:
     reachability = parser.add_mutually_exclusive_group(required=True)
     reachability.add_argument("--public-url", type=_public_url_argument)
     reachability.add_argument("--tunnel", action="store_true", help="use the bundled ngrok tunnel")
-    parser.add_argument("--engine", choices=("codex", "claude"), default="codex")
+    parser.add_argument("--engine", choices=ENGINE_NAMES, default="codex")
     parser.add_argument("--codex-auth", type=Path, help="auth.json to seed into the agent")
     parser.add_argument("--image", type=_image_argument, default=DEFAULT_IMAGE)
     parser.add_argument("--callback-port", type=_positive_int, default=8976)

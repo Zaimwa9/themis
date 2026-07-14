@@ -19,7 +19,10 @@ the agent's reach:
   workspace, prompt, and engine credential, and has its own PID namespace.
 - **Env allowlist.** Each engine runs with an explicit allowlist of
   environment variables (`PATH`, `HOME`, locale and proxy variables, plus
-  `CODEX_HOME` for codex or `CLAUDE_CODE_OAUTH_TOKEN` for claude); none of
+  `CODEX_HOME` for codex, `CLAUDE_CODE_OAUTH_TOKEN` for claude, or the
+  provider key for glm (crossing over only as `ANTHROPIC_AUTH_TOKEN`,
+  with the endpoint baked into the adapter so no env or repo config can
+  redirect it)); none of
   Themis's own secrets, GitHub App key, webhook secret, API token, are in
   its environment. See `../src/themis/engines/base.py` and "Engine secret
   reachability and outbound redaction" below.
@@ -43,7 +46,9 @@ The agent subprocess runs on untrusted PR content inside the agent container. It
 allowlisted per engine: codex sees only `CODEX_HOME` beyond the base set and
 runs with `--ignore-user-config --ignore-rules`, so it authenticates from
 `auth.json` without loading worker config or repo `.rules` files; claude sees
-`CLAUDE_CODE_OAUTH_TOKEN` plus non-secret hygiene flags. The agent container
+`CLAUDE_CODE_OAUTH_TOKEN` plus non-secret hygiene flags; glm sees
+its provider key as `ANTHROPIC_AUTH_TOKEN` plus the same hygiene flags.
+The agent container
 never receives the GitHub App key, webhook secret, or API token. It receives
 only `THEMIS_AGENT_TOKEN`, which grants execution access but no GitHub access.
 
@@ -85,20 +90,22 @@ $THEMIS_API_TOKEN`, also compared constant-time. Missing or wrong token:
   codex, so run Themis in its own container with nothing sensitive mounted
   alongside it.
 
-## Claude engine sandbox posture
+## Claude-harness engine sandbox posture (claude, glm)
 
 The codex engine runs under codex's own kernel sandbox (`workspace-write`
-by default, network denied). The claude engine has no kernel sandbox: it
-runs with permissions skipped, and its dedicated container is the isolation boundary
-(non-root user, allowlisted env, scrubbed clone). Claude runs in safe mode,
-with filesystem setting sources disabled, a strict empty MCP configuration,
-auto-memory off, and an isolated config directory, so repo-controlled
-`CLAUDE.md`, hooks, plugins, skills, agents, and MCP servers are not loaded. By default its
+by default, network denied). The claude and glm engines have no kernel
+sandbox: they run with permissions skipped, and their dedicated container is
+the isolation boundary (non-root user, allowlisted env, scrubbed clone). Both
+run in safe mode, with filesystem setting sources disabled, a strict
+empty MCP configuration, auto-memory off, and an isolated config directory,
+so repo-controlled `CLAUDE.md`, hooks, plugins, skills, agents, and MCP
+servers are not loaded. By default their
 `WebFetch`/`WebSearch` tools are also disabled, but Bash remains available,
 so a prompt-injected job could still exfiltrate over the network.
-The only secret in its reach is your own Claude token; it's on the
+The only secret in reach is the engine's own key (your Claude token, or the
+glm provider key); it's on the
 outbound-redaction list above so it never reaches a GitHub-facing body, and
-it's rotatable with `claude setup-token`. Repos opt into Claude's built-in
+the claude token is rotatable with `claude setup-token`. Repos opt into Claude's built-in
 web tools per repo with `web_access: true` (default-branch controlled);
 deployments with strict requirements should route the agent through an egress
 proxy allowlisting Anthropic's required endpoints. Container separation
@@ -107,7 +114,8 @@ protects GitHub credentials but does not itself restrict outbound networking.
 ## Single-tenant by design
 
 One `CODEX_HOME` volume holds one `auth.json`, and one
-`CLAUDE_CODE_OAUTH_TOKEN` value is one Claude token: either engine ties the
+`CLAUDE_CODE_OAUTH_TOKEN` value is one Claude token, and one
+`GLM_API_KEY` is one coding-plan subscription: each engine ties the
 instance to one subscription. Themis is built for one instance per person
 or team: its own GitHub App, its own subscription. Running multiple
 unrelated teams against a shared instance isn't supported: usage quota and

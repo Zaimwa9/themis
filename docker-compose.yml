@@ -30,6 +30,7 @@ services:
       THEMIS_WORKSPACE_ROOT: /tmp/themis
       THEMIS_CODEX_SANDBOX: ${THEMIS_CODEX_SANDBOX:-workspace-write}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      GLM_API_KEY: ${GLM_API_KEY:-}
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
     volumes:

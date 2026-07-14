@@ -12,8 +12,8 @@ doctrine from your own repository, under `.themis/`.
 
 A GitHub App webhook delivers PR and comment events to Themis. Each event
 becomes a job on an in-memory queue, processed one at a time. The worker
-shallow-clones the PR head, runs the configured engine (`codex exec` or
-`claude -p`) against your repo's review doctrine, and posts findings and a
+shallow-clones the PR head, runs the configured engine (`codex exec`, or
+`claude -p` — natively or in API mode for GLM) against your repo's review doctrine, and posts findings and a
 summary back to GitHub as the App. One image runs as an isolated controller
 and agent; there is still no database, Redis, or message broker.
 
@@ -21,6 +21,7 @@ and agent; there is still no database, Redis, or message broker.
 
 - Docker with the Compose plugin (Docker Desktop, or Docker Engine + `docker compose`)
 - An OpenAI account with Codex access, or a Claude Max subscription (pick your engine): the matching CLI installed (`npm install -g @openai/codex` or `npm install -g @anthropic-ai/claude-code`, Node 22+) and `codex login` or `claude setup-token` working on your machine. Claude Pro is not supported because Themis defaults to Opus.
+  The glm engine needs no local CLI login: just a `GLM_API_KEY` (Z.ai GLM Coding Plan) in `.env`.
 - A GitHub account that can create a GitHub App (personal account or an org)
 
 No clone or build needed: Themis ships as a prebuilt image,
@@ -64,7 +65,9 @@ Set up Themis for this repository using the automated GitHub App Manifest bootst
 
 Using the Claude engine instead? Run `claude setup-token`, pass
 `--engine claude` to the bootstrap, and put the resulting token in
-`CLAUDE_CODE_OAUTH_TOKEN` in the generated `.env`. Details in
+`CLAUDE_CODE_OAUTH_TOKEN` in the generated `.env`. Using glm? No CLI
+login needed: pass `--engine glm` to the bootstrap and put your Z.ai GLM
+Coding Plan key in `GLM_API_KEY` in the generated `.env`. Details in
 [Engines](#engines).
 
 Install the CLI if you haven't already (Node 22+):
@@ -171,9 +174,9 @@ How the doctrine is consumed and how to write one that works:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `engine` | instance `THEMIS_ENGINE` | `codex` or `claude`, overrides the instance's default engine for this repo |
-| `web_access` | `false` | toggles engine web tooling; Claude's Bash may still egress unless the deployment enforces an external network policy |
-| `model.name` | engine default | `gpt-5.4` (codex) or `claude-opus-4-6[1m]` (claude) |
+| `engine` | instance `THEMIS_ENGINE` | `codex`, `claude`, or `glm`, overrides the instance's default engine for this repo |
+| `web_access` | `false` | toggles engine web tooling (`WebFetch`/`WebSearch`); glm behaves like claude here, and Claude's Bash may still egress unless the deployment enforces an external network policy — this caveat applies to all claude-harness engines |
+| `model.name` | engine default | engine default: `gpt-5.4` (codex), `claude-opus-4-6[1m]` (claude), `glm-5.2` (glm) |
 | `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` (codex only) |
 | `limits.timeout_seconds` | `1200` | per agent attempt |
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
@@ -189,17 +192,19 @@ answered automatically, no mention needed.
 
 ## Engines
 
-Themis runs reviews through one of two agent CLIs, using your Codex or Claude Max subscription:
+Themis runs reviews through an agent CLI, using your Codex, Claude Max, or GLM Coding Plan subscription:
 
 | Engine | Auth | Setup |
 |---|---|---|
 | `codex` (default) | `auth.json` volume (`CODEX_HOME`) | `codex login` locally; bootstrap copies `auth.json` into the generated volume |
 | `claude` | one env var | run `claude setup-token` locally, set `CLAUDE_CODE_OAUTH_TOKEN` in `.env` |
+| `glm` | one env var | set `GLM_API_KEY` in `.env` (Z.ai GLM Coding Plan key); reviews run through the claude CLI against Z.ai's Anthropic-compatible endpoint |
 
 Pick the instance default with `THEMIS_ENGINE` in `.env`. A repo can override it
-in `.themis/config.yaml` with `engine: claude` or `engine: codex`; if that engine
+in `.themis/config.yaml` with `engine:` set to any of them; if that engine
 has no credentials on the instance, Themis posts a comment saying so instead of
-failing silently. The claude path needs no volume: token in `.env`, done.
+failing silently. The claude and glm paths need no volume: key in
+`.env`, done.
 
 ## Troubleshooting
 
@@ -208,9 +213,9 @@ failing silently. The claude path needs no volume: token in `.env`, done.
 | Crashes at startup naming an env var | Set that variable; Themis fails fast on missing or invalid required config. |
 | Crashes at startup on a `GET /app` call | Wrong `THEMIS_GH_APP_CLIENT_ID` or malformed `THEMIS_GH_APP_PRIVATE_KEY`. |
 | Codex sandbox errors | Set `THEMIS_CODEX_SANDBOX=danger-full-access`; the container is the sandbox boundary on runtimes without Landlock. |
-| PR comment says the usage limit was reached | Your Codex or Claude subscription (whichever engine ran the job) has hit its usage window. Mention the bot again once it resets. |
+| PR comment says the usage limit was reached | The subscription of whichever engine ran the job has hit its usage window. Mention the bot again once it resets. |
 | Auth that worked starts failing months later | Run `codex login` locally, then refresh the persistent agent credential using the command in [Automated setup: Refreshing Codex authentication](docs/bootstrap.md#refreshing-codex-authentication). |
-| Review comment says engine credentials missing | Set `CLAUDE_CODE_OAUTH_TOKEN` (claude) or seed the codex auth volume (codex), or change `THEMIS_ENGINE` / the repo's `engine:` key. |
+| Review comment says engine credentials missing | Set `CLAUDE_CODE_OAUTH_TOKEN` (claude), `GLM_API_KEY` (glm), or seed the codex auth volume (codex), or change `THEMIS_ENGINE` / the repo's `engine:` key. |
 | Webhook deliveries show 401 in the App's settings | `THEMIS_GH_WEBHOOK_SECRET` doesn't match the App's webhook secret. |
 | Where are the logs | `docker compose logs -f themis` |
 | A job queued right before a restart never ran | The in-memory queue doesn't survive restarts; mention the bot again to re-trigger. |
@@ -224,6 +229,7 @@ failing silently. The claude path needs no volume: token in `.env`, done.
 - [`docs/doctrine.md`](docs/doctrine.md): the review doctrine, how it works and how to write a good one.
 - [`docs/configuration.md`](docs/configuration.md): the full env and `.themis/config.yaml` reference.
 - [`docs/security.md`](docs/security.md): the trust model and bot-side guardrails.
+- [`docs/contributing-engines.md`](docs/contributing-engines.md): adding a new engine / model provider.
 
 ## Developing
 

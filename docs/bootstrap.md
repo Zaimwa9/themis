@@ -99,6 +99,17 @@ CLAUDE_CODE_OAUTH_TOKEN=<token>
 
 The generated Compose file exposes it only to the isolated agent service.
 
+## GLM engine
+
+Pass `--engine glm` and omit `--codex-auth`. No CLI login is needed: place
+your Z.ai GLM Coding Plan key in the generated `.env`:
+
+```text
+GLM_API_KEY=<key>
+```
+
+The generated Compose file exposes it only to the isolated agent service.
+
 ## Refreshing Codex authentication
 
 Codex normally refreshes its own tokens inside the persistent volume. If that
