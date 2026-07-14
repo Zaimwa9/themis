@@ -27,7 +27,17 @@ and agent; there is still no database, Redis, or message broker.
 No clone or build needed: Themis ships as a prebuilt image,
 `ghcr.io/zaimwa9/themis`.
 
-## Quickstart (manifest bootstrap — fast to try, not for long-term use)
+## Choose a setup path
+
+| Path | GitHub App | Best for |
+|---|---|---|
+| [Quick start](#quick-start-manifest-bootstrap--testing-not-long-term) | auto-created via manifest, random name | trying Themis in minutes, throwaway deployments |
+| [Production setup](#production-setup-manual-github-app) | created by you once, stable name | long-term installs that survive redeployments |
+| [Headless mode](#headless-mode-bring-your-own-webhook) | created by you once | teams with existing webhook infrastructure |
+
+All three run the same prebuilt image and support every engine.
+
+## Quick start (manifest bootstrap — testing, not long-term)
 
 The bootstrap uses GitHub's App Manifest flow to create the App, generate its
 private key and webhook secret, install it on the requested repository, and
@@ -35,9 +45,8 @@ write a ready-to-run deployment. There are no GitHub settings to copy. GitHub
 still asks the account owner to approve App creation and repository access.
 
 > **Why not long-term?** The manifest flow generates a random App name and must
-> be re-run on every fresh deployment. For a permanent install, create a GitHub
-> App manually with a stable name and slug, then point Themis at it — see
-> [`docs/bootstrap.md`](docs/bootstrap.md) for the manual path.
+> be re-run on every fresh deployment. For a permanent install, use the
+> [Production setup](#production-setup-manual-github-app) below.
 
 ### Using a coding agent
 
@@ -129,24 +138,8 @@ uv run python -m themis init \
   --output ./themis-deploy
 ```
 
-Detailed options, the tunnel command, recovery, and the manual fallback are in
+Detailed options, the tunnel command, and recovery are in
 [`docs/bootstrap.md`](docs/bootstrap.md).
-
-Creating the GitHub App manually instead? Configure these repository
-permissions:
-
-| Permission | Access |
-|---|---|
-| Checks | Read-only |
-| Contents | Read-only |
-| Issues | Read and write |
-| Pull requests | Read and write |
-| Commit statuses | Read-only |
-
-Subscribe to `pull_request`, `issue_comment`, and
-`pull_request_review_comment`. Actions permission is not required. Existing
-Apps must also be updated with the Checks and Commit statuses permissions before
-Themis can include CI context in reviews.
 
 ### 3. Run and verify
 
@@ -167,6 +160,85 @@ Check `docker compose logs themis` for the startup line reporting the
 resolved App slug. Open a test PR against a repo the App is installed on:
 expect a 👀 reaction on the trigger, then a 🚀 reaction on the PR once the
 review starts, then the review itself.
+
+## Production setup (manual GitHub App)
+
+Create the App yourself, once: it gets a stable name and `@mention`, and any
+number of deployments can point at it without ever re-running a bootstrap.
+
+### 1. Create the GitHub App
+
+Under **Settings > Developer settings > GitHub Apps > New GitHub App**, on the
+organization that owns the target repos or on your personal account:
+
+| Setting | Value |
+|---|---|
+| Webhook URL | `https://HOST/webhook`; any placeholder works if you set `THEMIS_PUBLIC_URL` later, Themis re-registers it at startup |
+| Webhook secret | a long random string, goes in `THEMIS_GH_WEBHOOK_SECRET` |
+| Checks permission | Read-only |
+| Contents permission | Read-only |
+| Issues permission | Read and write |
+| Pull requests permission | Read and write |
+| Commit statuses permission | Read-only |
+| Events | `pull_request`, `issue_comment`, `pull_request_review_comment` |
+
+Actions permission is not required. Existing Apps must be updated with the
+Checks and Commit statuses permissions before Themis can include CI context
+in reviews.
+
+Then generate a private key (App settings > Private keys) and install the App
+on the target repositories (App settings > Install App).
+
+### 2. Configure and deploy
+
+Grab the Compose file and point it at the published image:
+
+```bash
+mkdir themis-deploy && cd themis-deploy
+curl -fsSLO https://raw.githubusercontent.com/Zaimwa9/themis/main/docker-compose.yml
+# edit: replace the two `build: .` lines with `image: ghcr.io/zaimwa9/themis:latest`
+```
+
+Create `.env` next to it ([`.env.example`](.env.example) documents every key):
+
+```text
+THEMIS_GH_APP_CLIENT_ID=<App client id>
+THEMIS_GH_APP_PRIVATE_KEY=<PEM, or base64 of it>
+THEMIS_GH_WEBHOOK_SECRET=<the webhook secret>
+THEMIS_AGENT_TOKEN=<any long random string>
+THEMIS_PUBLIC_URL=https://your-host    # optional: webhook self-registration
+THEMIS_ENGINE=codex                    # or claude / glm
+CLAUDE_CODE_OAUTH_TOKEN=<token>        # claude engine only
+GLM_API_KEY=<key>                      # glm engine only
+```
+
+```bash
+docker compose up -d
+```
+
+For the codex engine, seed the auth volume once the agent is up:
+
+```bash
+docker compose cp ~/.codex/auth.json agent:/data/codex/auth.json
+```
+
+PaaS deployment, upgrades, and the full env reference:
+[`docs/server-deploy.md`](docs/server-deploy.md) and
+[`docs/configuration.md`](docs/configuration.md).
+
+### 3. Verify
+
+Same checks as the quick start: `curl localhost:8000/healthz`, look for the
+App slug in `docker compose logs themis`, open a test PR.
+
+## Headless mode (bring your own webhook)
+
+Already have webhook infrastructure? Set `THEMIS_WEBHOOK_ENABLED=false` to
+remove Themis's inbound webhook route and drive it from your own handler
+through two authenticated HTTP routes, `POST /api/review` and
+`POST /api/discuss`. The GitHub App still has to exist and be installed,
+created as in the [Production setup](#production-setup-manual-github-app).
+Contracts and examples: [`docs/headless.md`](docs/headless.md).
 
 ## Customize reviews
 
