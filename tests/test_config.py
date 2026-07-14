@@ -346,3 +346,13 @@ def test_repo_config__review_wrong_container_keeps_rest(caplog):
     resolved = resolve_modules(config, default_doctrine=False)
     assert all(state == "auto" for state in resolved.values())
     assert "themis_invalid_review_config" in caplog.text
+
+
+def test_repo_config__null_review_containers_keep_rest():
+    # `review:` with nothing under it (children commented out) is yaml null;
+    # it must behave as unset, not void the rest of the config.
+    for text in ("engine: claude\nreview:\n", "engine: claude\nreview:\n  modules:\n"):
+        config = parse_repo_config(text)
+        assert config.engine == "claude", text
+        resolved = resolve_modules(config, default_doctrine=False)
+        assert all(state == "auto" for state in resolved.values())

@@ -98,7 +98,9 @@ class ReviewConfig(BaseModel):
     def _modules_mapping_or_default(cls, value: object) -> object:
         """A malformed modules container must not void the rest of the repo
         config (engine, limits, ...); presentation settings degrade alone."""
-        if value is None or isinstance(value, dict | ReviewModulesConfig):
+        if value is None:
+            return ReviewModulesConfig()  # yaml null: `modules:` with no keys
+        if isinstance(value, dict | ReviewModulesConfig):
             return value
         logger.warning("themis_invalid_review_modules value=%s", str(value)[:50])
         return ReviewModulesConfig()
@@ -154,7 +156,9 @@ class RepoConfig(BaseModel):
     def _review_mapping_or_default(cls, value: object) -> object:
         """Same isolation as the modules container: a malformed review
         section degrades to defaults without taking engine/limits with it."""
-        if value is None or isinstance(value, dict | ReviewConfig):
+        if value is None:
+            return ReviewConfig()  # yaml null: `review:` with no keys
+        if isinstance(value, dict | ReviewConfig):
             return value
         logger.warning("themis_invalid_review_config value=%s", str(value)[:50])
         return ReviewConfig()
