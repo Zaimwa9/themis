@@ -21,7 +21,7 @@ CI runs exactly pytest and ruff; both must pass.
 - `src/themis/router.py` — webhook + API routes; events become queue jobs
 - `src/themis/events.py` — webhook payload parsing, trigger decisions
 - `src/themis/queue.py` — in-memory queue, one worker, dedup
-- `src/themis/service.py` — review pipeline: clone, engine run, parse, post
+- `src/themis/review_service.py` — review pipeline: clone, engine run, parse, post
 - `src/themis/engines/` — engine adapters over a hardened subprocess runner
   (`base.py`: env allowlist, process-group kill, quota detection);
   `__init__.py` is the registry

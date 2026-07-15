@@ -19,7 +19,7 @@ from themis.learning_service import (
     LearningService,
 )
 from themis.learnings import Learning, PendingStore, to_jsonl
-from themis.service import (
+from themis.review_service import (
     DEFAULT_MODELS,
     ReviewService,
     _ENGINE_AUTH_HINTS,
@@ -978,7 +978,7 @@ async def test_discuss__long_thread_bot_root_outside_tail__proceeds(service):
 
 
 async def test_find_thread__matches_by_root_comment_id():
-    from themis.service import _find_thread
+    from themis.review_service import _find_thread
 
     thread = _bot_thread()  # root comment databaseId 11
 
@@ -1121,7 +1121,7 @@ async def test_run_review_job__cancelled__posts_comment_and_reraises(
     async def cancel(*args, **kwargs):
         raise asyncio.CancelledError
     service.review = cancel
-    monkeypatch.setattr("themis.service.build_service", lambda *a, **kw: service)
+    monkeypatch.setattr("themis.review_service.build_service", lambda *a, **kw: service)
 
     with pytest.raises(asyncio.CancelledError):
         await run_review_job(make_settings(), "test-reviewer", REPO, 7, 42, True)
@@ -1144,7 +1144,7 @@ async def test_run_review_job__real_task_cancel__posts_comment_and_reraises(
         started.set()
         await asyncio.sleep(30)
     service.review = blocking
-    monkeypatch.setattr("themis.service.build_service", lambda *a, **kw: service)
+    monkeypatch.setattr("themis.review_service.build_service", lambda *a, **kw: service)
 
     task = asyncio.ensure_future(
         run_review_job(make_settings(), "test-reviewer", REPO, 7, 42, True)
@@ -1168,7 +1168,7 @@ async def test_run_review_job__cancelled__comment_failure_still_reraises(
     async def cancel(*args, **kwargs):
         raise asyncio.CancelledError
     service.review = cancel
-    monkeypatch.setattr("themis.service.build_service", lambda *a, **kw: service)
+    monkeypatch.setattr("themis.review_service.build_service", lambda *a, **kw: service)
 
     with pytest.raises(asyncio.CancelledError):
         await run_review_job(make_settings(), "test-reviewer", REPO, 7, 42, True)

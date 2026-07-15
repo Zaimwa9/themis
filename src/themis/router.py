@@ -19,7 +19,7 @@ from themis.github.auth import (
 from themis.github.client import GitHubClient
 from themis.queue import InMemoryJobQueue
 from themis.security import verify_signature
-from themis.service import run_discussion_job, run_review_job
+from themis.review_service import run_discussion_job, run_review_job
 
 logger = logging.getLogger(__name__)
 

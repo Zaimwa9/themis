@@ -52,13 +52,13 @@ class FooEngine(AnthropicApiEngine):
 ```
 
 Then register it everywhere an engine name lives. The map-coverage test
-(`tests/test_service.py::test_engine_maps_cover_all_engine_names`) enforces
+(`tests/test_review_service.py::test_engine_maps_cover_all_engine_names`) enforces
 only the registry and service maps (items 1-2 below); it fails until those
 two are done. Items 3-5 (redaction, compose/deployment, docs) are **not**
 test-enforced — you must verify them by hand:
 
 1. `src/themis/engines/__init__.py`: import, `ENGINE_NAMES`, `resolve()`.
-2. `src/themis/service.py`: `DEFAULT_MODELS` (the provider's current
+2. `src/themis/review_service.py`: `DEFAULT_MODELS` (the provider's current
    flagship — repos can override with `model.name`) and
    `_ENGINE_AUTH_HINTS` (what the courtesy comment tells users to set).
 3. `src/themis/security.py`: add the key env var to `_SECRET_ENV_VARS` so
