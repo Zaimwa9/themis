@@ -14,8 +14,9 @@ your codebase, your severity bar, and your house rules.
   scoring table, severity sections, inline finding shape) is fixed by Themis's
   own prompt and cannot be changed from the doctrine.
 - The full-dress presentation is independent of doctrine: scorecard,
-  walkthrough, product take, and sign-off default to `always` for every
-  substantive review unless `review.modules` overrides individual fields.
+  walkthrough, verification, product take, assumptions, and sign-off are
+  enabled on every review. Only an explicit `off` in `review.modules`
+  suppresses an individual category; empty categories show a short message.
 - If the file is missing, Themis applies a packaged default doctrine (the
   repo-agnostic philosophy, severity calibration, and verification habits
   from the starter kit). A committed doctrine replaces that free-text

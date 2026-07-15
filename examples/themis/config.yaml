@@ -25,8 +25,8 @@ review:
     scorecard: always      # canonical four-row numeric /5 table
     walkthrough: always    # collapsed logical-area details block
     product_impact: always # standalone product take
-    verification_steps: auto  # the "How to verify" block
-    assumptions: auto      # assumptions & unverified claims block
+    verification_steps: always  # the "How to verify" block
+    assumptions: always    # assumptions & unverified claims block
     sign_off: always       # PR-specific sign-off with reviewed-at SHA
     ci_context: auto       # CI commentary in the review body
     inline_findings: auto  # off = every finding folded into the summary

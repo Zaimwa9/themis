@@ -2377,7 +2377,7 @@ async def test_review__no_doctrine_in_checkout__default_doctrine_full_dress(
     assert "<doctrine>" in prompts[0]
     assert "## Severity calibration" in prompts[0]
     # The global presentation profile requires the full-dress sections.
-    assert "required on every substantive review" in flat
+    assert "required on every review" in flat
     assert "`## ⚖️ Themis judgement: <verdict>`" in prompts[0]
     assert "| 🎯 Correctness | n/5 |" in prompts[0]
     assert "<details><summary><b>📝 Walkthrough</b></summary>" in prompts[0]
@@ -2399,7 +2399,7 @@ async def test_review__committed_doctrine_keeps_global_presentation_defaults(
     flat = " ".join(prompts[0].split())
     assert "<doctrine>" not in prompts[0]
     assert "Read `.themis/review.md` in this checkout" in flat
-    assert "required on every substantive review" in flat
+    assert "required on every review" in flat
     assert "| 🎯 Correctness | n/5 |" in prompts[0]
     assert "<details><summary><b>📝 Walkthrough</b></summary>" in prompts[0]
 
@@ -2417,7 +2417,7 @@ async def test_review__repo_modules_reach_prompt_even_with_committed_doctrine(
     await service.review(REPO, 7, 42, auto=True)
 
     flat = " ".join(prompts[0].split())
-    assert "required on every substantive review" in flat  # other global defaults
+    assert "required on every review" in flat  # other global defaults
     assert "Never include a scorecard" in flat  # explicit field override
     assert "| 🎯 Correctness | n/5 |" not in prompts[0]
 
