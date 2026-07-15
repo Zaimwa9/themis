@@ -269,10 +269,11 @@ cp -r "$starter/examples/themis" .themis
   straight from the PR branch on every review.
 - `.themis/config.yaml`: behavior knobs, every key optional.
 
-Every substantive review uses the full-dress presentation by default: a
-four-row numeric `/5` scorecard, a collapsible walkthrough, product take, and
-an italic PR-specific sign-off. A repo can override each section independently
-through `.themis/config.yaml`. If there is no
+Every review uses the full-dress presentation by default: a four-row numeric
+`/5` scorecard, collapsible walkthrough and verification/assumptions blocks,
+product take, and an italic PR-specific sign-off. Empty categories carry a
+short empty-state message; only explicit `off` configuration suppresses one.
+If there is no
 `.themis/review.md`, Themis separately falls back to a packaged default
 doctrine; committing a doctrine replaces only that judgment guidance.
 
@@ -298,7 +299,7 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `triggers.auto_review` | `true` | `false` = mention-only, no auto-review when a PR opens or is marked ready for review |
 | `learnings.enabled` | `true` | `false` disables capturing, injecting, and digesting [learnings](docs/learnings.md) for this repo |
 | `learnings.digest_threshold` | `10` | pending learnings that trigger the digest PR (minimum 1) |
-| `review.modules.<name>` | full-dress profile | `always` \| `auto` \| `off` per optional review section; scorecard, walkthrough, product impact, and sign-off default to `always`, the rest to `auto`; see [`docs/configuration.md`](docs/configuration.md) |
+| `review.modules.<name>` | full-dress profile | `always` \| `auto` \| `off` per optional review section; all six presentation categories default to enabled and only `off` suppresses them; see [`docs/configuration.md`](docs/configuration.md) |
 | `agent.context` | `false` | agent natively discovers `CLAUDE.md`/`AGENTS.md`, always resolved from the PR base revision so a PR can't steer its own review; see [`docs/configuration.md`](docs/configuration.md) |
 | `agent.skills` | `false` | agent uses `.claude/skills` packages, same base-revision rule — natively on claude/glm, via a synthesized index (skills bridge) on codex |
 

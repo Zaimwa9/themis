@@ -49,10 +49,11 @@ MODULE_STATES = ("always", "auto", "off")
 class ReviewModulesConfig(BaseModel):
     """Tri-state presence control per optional review section.
 
-    `always` = must appear on substantive reviews, `auto` = adaptive (today's
-    behavior), `off` = omit. None = unset, resolved by resolve_modules().
-    Booleans are lenient aliases (true -> auto, false -> off); yaml 1.1 also
-    reads a bare `off` as False, which lands on the same state."""
+    `always` = include, `auto` = module-specific compatibility/adaptive mode,
+    `off` = omit. Presentation categories treat `auto` as enabled: only `off`
+    suppresses them. None = unset, resolved by resolve_modules(). Booleans are
+    lenient aliases (true -> auto, false -> off); yaml 1.1 also reads a bare
+    `off` as False, which lands on the same state."""
 
     scorecard: str | None = None
     walkthrough: str | None = None
@@ -79,16 +80,21 @@ class ReviewModulesConfig(BaseModel):
 
 
 MODULE_NAMES = tuple(ReviewModulesConfig.model_fields)
+PRESENTATION_MODULE_NAMES = (
+    "scorecard",
+    "walkthrough",
+    "product_impact",
+    "verification_steps",
+    "assumptions",
+    "sign_off",
+)
 
 # Complete built-in presentation profile. Repository config overlays this
 # field by field: omitted or invalid values retain their defaults, while each
 # explicit valid value wins independently of doctrine selection.
 DEFAULT_REVIEW_MODULES = {
     **dict.fromkeys(MODULE_NAMES, "auto"),
-    "scorecard": "always",
-    "walkthrough": "always",
-    "product_impact": "always",
-    "sign_off": "always",
+    **dict.fromkeys(PRESENTATION_MODULE_NAMES, "always"),
 }
 
 
@@ -109,8 +115,11 @@ class ReviewConfig(BaseModel):
 
 
 def resolve_modules(config: "RepoConfig") -> dict[str, str]:
-    """Overlay explicit valid module values onto the built-in profile."""
+    """Overlay valid fields; only `off` suppresses presentation categories."""
     configured = config.review.modules.model_dump(exclude_none=True)
+    for name in PRESENTATION_MODULE_NAMES:
+        if configured.get(name) == "auto":
+            configured[name] = "always"
     return {**DEFAULT_REVIEW_MODULES, **configured}
 
 

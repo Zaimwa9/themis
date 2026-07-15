@@ -72,8 +72,8 @@ review:
     scorecard: always
     walkthrough: always
     product_impact: always
-    verification_steps: auto
-    assumptions: auto
+    verification_steps: always
+    assumptions: always
     sign_off: always
     ci_context: auto
     inline_findings: auto
@@ -103,14 +103,23 @@ sibling fields.
 
 ### Review modules (`review.modules`)
 
-The optional parts of a review are modules, each with a tri-state value:
+The optional parts of a review are modules, each with a tri-state value.
+Presentation categories (`scorecard`, `walkthrough`, `product_impact`,
+`verification_steps`, `assumptions`, `sign_off`) have explicit presence:
 
-- `always` — the section must appear on every substantive review. The
-  tiny-diff carve-out survives: dependency-only or lockfile-only updates
-  stay concise regardless.
-- `auto` — adaptive: the reviewer includes the section when
-  the diff provides enough evidence for it.
-- `off` — the section is omitted.
+- `always` — the category appears on every review.
+- `auto` — retained as a compatibility alias for enabled presentation
+  categories.
+- `off` — the category is omitted completely.
+
+When an enabled category has nothing material to add, it stays visible with a
+short empty-state message. Blockers, Majors, and Nits are different: they are
+finding groups rather than presentation categories, and an empty group is
+always omitted.
+
+For `ci_context`, `auto` remains adaptive (failed checks are mentioned while
+neutral/passing states may be omitted), `always` reports every snapshot state,
+and `off` suppresses CI commentary.
 
 Booleans are accepted as lenient aliases (`true` → `auto`, `false` → `off`),
 and yaml's bare `off` parses as `false`, which lands on the same state. An
@@ -127,8 +136,8 @@ extra for `always` to force. Their meaningful settings are `auto` and `off`.
 | `scorecard` | `always` | the canonical four-row numeric `/5` Correctness / Test coverage / Code quality / Product impact table |
 | `walkthrough` | `always` | the logical-area walkthrough in a collapsed GitHub details block |
 | `product_impact` | `always` | the standalone `Product take:` narrative |
-| `verification_steps` | `auto` | the `🧪 How to verify` details block |
-| `assumptions` | `auto` | the `🧭 Assumptions & unverified claims` details block |
+| `verification_steps` | `always` | the `🧪 How to verify` details block |
+| `assumptions` | `always` | the `🧭 Assumptions & unverified claims` details block |
 | `sign_off` | `always` | the italic, good-natured PR-specific sign-off with the reviewed-at SHA |
 | `ci_context` | `auto` | CI commentary in the review body (CI is still collected as evidence) |
 | `inline_findings` | `auto` | posting findings as inline review comments; `off` folds every finding into the summary — every path/line pointer is kept, and bodies keep as much context as fits GitHub's comment cap — enforced at posting time, not just in the prompt |
@@ -141,14 +150,16 @@ to silently hide defects.
 ### Default presentation and packaged doctrine
 
 The presentation profile is independent of doctrine selection. Every repo
-defaults to a full-dress substantive review: `scorecard`, `walkthrough`,
-`product_impact`, and `sign_off` resolve to `always`; the remaining modules
-resolve to `auto`. Each explicit valid value in `review.modules` overlays its
-own default, whether or not the repo has a committed doctrine.
+defaults all six presentation categories to `always`; `ci_context`,
+`inline_findings`, and `code_suggestions` remain `auto`. Each explicit valid
+value in `review.modules` overlays its own default, whether or not the repo has
+a committed doctrine. Presentation `auto` values resolve as enabled for
+backward compatibility, so `off` is the only suppression mechanism.
 
-Presence is configurable, rendering is canonical: whenever those modules are
-included, the scorecard uses integer `/5` scores, the walkthrough uses a
-collapsed details block, and the sign-off remains one italic, PR-specific line.
+Presence is configurable, rendering is canonical: the scorecard uses integer
+`/5` scores, walkthrough/verification/assumptions use collapsed details blocks,
+and the sign-off remains one italic, PR-specific line. Categories with no
+material content use their documented empty-state message.
 
 Separately, when the PR checkout has no `.themis/review.md`, Themis applies a
 built-in default doctrine (the repo-agnostic philosophy, severity calibration,

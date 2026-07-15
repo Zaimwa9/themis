@@ -38,16 +38,20 @@ def test_build_review_prompt__summary_format__verdict_severities_no_empty_sectio
     assert "<details><summary><b>📝 Walkthrough</b></summary>" in prompt
     assert "`**Product take:**`" in prompt
     assert "at most 3 lines" in prompt
-    assert "use one italic line" in prompt
+    assert "End every review with one italic sign-off line" in " ".join(prompt.split())
     assert "dry humor welcome, never snark" in prompt
 
 
-def test_build_review_prompt__tiny_reviews__omit_ceremonial_sections():
+def test_build_review_prompt__tiny_reviews__retain_enabled_categories():
     prompt = build_review_prompt("acme/widgets", 7, "main")
+    flat = " ".join(prompt.split())
 
-    assert "tiny diff, dependency-only update, or" in prompt
-    assert "Do not add a scorecard, walkthrough, product take, assumptions" in prompt
-    assert "joke/sign-off merely to fill out the template" in prompt
+    assert "tiny diff, dependency-only update, or" in flat
+    assert "Still include every enabled presentation category" in flat
+    assert "Only explicit `off` configuration" in flat
+    assert "No additional walkthrough details." in prompt
+    assert "No additional verification steps." in prompt
+    assert "No unverified assumptions or claims." in prompt
     assert "do not repeat the" in prompt
 
 
@@ -165,9 +169,8 @@ def test_build_review_prompt__assumptions_section():
 
     assert "<details><summary><b>🧭 Assumptions & unverified claims</b></summary>" in prompt
     assert "could not verify" in prompt
-    assert "only" in prompt
-    assert "Omit it" in prompt
-    assert "when there are none" in prompt
+    assert "on every review" in prompt
+    assert "No unverified assumptions or claims" in prompt
 
 
 def test_build_review_prompt__unverified_findings_keep_severity():
@@ -288,7 +291,7 @@ def test_build_review_prompt__no_modules_arg__identical_to_all_auto():
     )
 
 
-def test_build_review_prompt__always_modules__required_on_substantive_reviews():
+def test_build_review_prompt__enabled_presentation_required_on_every_review():
     prompt = build_review_prompt(
         "acme/widgets", 7, "main",
         modules=_modules(
@@ -298,38 +301,34 @@ def test_build_review_prompt__always_modules__required_on_substantive_reviews():
     )
     flat = " ".join(prompt.split())
 
-    assert "required on every substantive review" in flat
+    assert "required on every review" in flat
     assert "| 🎯 Correctness | n/5 |" in prompt
     assert "<details><summary><b>📝 Walkthrough</b></summary>" in prompt
-    assert "End every substantive review with one italic sign-off line" in flat
+    assert "End every review with one italic sign-off line" in flat
     assert "dry humor welcome, never snark" in flat
-    assert "relied on no unverified claims" not in flat  # assumptions stayed auto
-    # The tiny-diff carve-out survives `always`.
-    assert "tiny diff, dependency-only update, or" in prompt
+    assert "No unverified assumptions or claims" in flat
 
 
-def test_build_review_prompt__assumptions_always__must_appear():
+def test_build_review_prompt__assumptions_enabled__must_appear_with_empty_state():
     prompt = build_review_prompt(
         "acme/widgets", 7, "main", modules=_modules(assumptions="always")
     )
     flat = " ".join(prompt.split())
 
-    # `always` is a documented must-appear guarantee, not a preference.
-    assert "Include it on every substantive review" in flat
-    assert "relied on no unverified claims" in flat
-    assert "Lean toward" not in flat
+    assert "on every review" in flat
+    assert "No unverified assumptions or claims" in flat
+    assert "Omit it" not in flat
 
 
-def test_build_review_prompt__verification_steps_always__must_appear():
+def test_build_review_prompt__verification_enabled__must_appear_with_empty_state():
     prompt = build_review_prompt(
         "acme/widgets", 7, "main", modules=_modules(verification_steps="always")
     )
     flat = " ".join(prompt.split())
 
-    # `always` must hold for internal-only changes too, not just observable ones.
-    assert "on every substantive review" in flat
-    assert "commands or tests that exercise the changed behavior" in flat
-    assert "you may add" not in flat
+    assert "on every review" in flat
+    assert "For internal changes" in flat
+    assert "No additional verification steps" in flat
 
 
 def test_build_review_prompt__ci_context_always__status_line_required():
@@ -343,19 +342,38 @@ def test_build_review_prompt__ci_context_always__status_line_required():
     assert "even when all checks passed" not in " ".join(auto.split())
 
 
-def test_build_review_prompt__off_body_modules__omitted_and_prohibited():
+def test_build_review_prompt__off_presentation_categories_absent():
     prompt = build_review_prompt(
         "acme/widgets", 7, "main",
-        modules=_modules(scorecard="off", assumptions="off", sign_off="off"),
+        modules=_modules(
+            scorecard="off",
+            walkthrough="off",
+            product_impact="off",
+            verification_steps="off",
+            assumptions="off",
+            sign_off="off",
+        ),
     )
     flat = " ".join(prompt.split())
 
     assert "Never include" in flat
-    assert "Correctness, Test coverage, Code quality, Product impact" not in flat
+    assert "| 🎯 Correctness | n/5 |" not in prompt
+    assert "<details><summary><b>📝 Walkthrough</b></summary>" not in prompt
+    assert "<details><summary><b>🧪 How to verify</b></summary>" not in prompt
+    assert "`**Product take:**`" not in prompt
     assert "🧭 Assumptions & unverified claims" not in prompt
     assert "reviewed at <short HEAD sha>" not in flat
-    # walkthrough stayed auto and untouched
-    assert "walkthrough" in flat
+    assert "No additional walkthrough details" not in prompt
+    assert "No additional verification steps" not in prompt
+    assert "No unverified assumptions or claims" not in prompt
+
+
+def test_build_review_prompt__finding_groups_remain_conditional():
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+    flat = " ".join(prompt.split())
+
+    assert "Blockers, Majors, and Nits appear only" in flat
+    assert "Omit empty sections entirely" in prompt
 
 
 def test_build_review_prompt__inline_findings_off__summary_carries_everything():

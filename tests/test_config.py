@@ -279,8 +279,8 @@ def test_repo_config__review_modules_unset_resolve_global_profile():
     assert resolved["walkthrough"] == "always"
     assert resolved["product_impact"] == "always"
     assert resolved["sign_off"] == "always"
-    assert resolved["verification_steps"] == "auto"
-    assert resolved["assumptions"] == "auto"
+    assert resolved["verification_steps"] == "always"
+    assert resolved["assumptions"] == "always"
     assert resolved["ci_context"] == "auto"
     assert resolved["inline_findings"] == "auto"
     assert resolved["code_suggestions"] == "auto"
@@ -303,7 +303,7 @@ def test_repo_config__review_modules_boolean_aliases():
         "review:\n  modules:\n    scorecard: true\n    sign_off: false\n    walkthrough: off\n"
     )
     resolved = resolve_modules(config)
-    assert resolved["scorecard"] == "auto"
+    assert resolved["scorecard"] == "always"  # true/auto = enabled
     assert resolved["sign_off"] == "off"
     assert resolved["walkthrough"] == "off"
 
@@ -331,6 +331,17 @@ def test_resolve_modules__partial_config_overlays_defaults_per_field():
     resolved = resolve_modules(config)
     assert resolved["scorecard"] == "off"
     assert resolved["walkthrough"] == "always"
+
+
+def test_resolve_modules__presentation_auto_is_compatibility_alias_for_enabled():
+    config = parse_repo_config(
+        "review:\n  modules:\n    verification_steps: auto\n    assumptions: auto\n"
+    )
+
+    resolved = resolve_modules(config)
+
+    assert resolved["verification_steps"] == "always"
+    assert resolved["assumptions"] == "always"
 
 
 def test_repo_config__review_modules_wrong_container_keeps_rest(caplog):

@@ -104,32 +104,22 @@ def _capitalize(sentence: str) -> str:
     return sentence[0].upper() + sentence[1:]
 
 
-def _substantive_paragraph(modules: dict[str, str]) -> str:
-    always = [
-        _SECTION_DESCRIPTORS[n] for n in _SECTION_DESCRIPTORS if modules[n] == "always"
-    ]
-    auto = [
-        _SECTION_DESCRIPTORS[n] for n in _SECTION_DESCRIPTORS if modules[n] == "auto"
+def _presentation_paragraph(modules: dict[str, str]) -> str:
+    enabled = [
+        _SECTION_DESCRIPTORS[n] for n in _SECTION_DESCRIPTORS if modules[n] != "off"
     ]
     off = [_OFF_SECTION_NAMES[n] for n in _OFF_SECTION_NAMES if modules[n] == "off"]
     sentences = [
-        "For a substantive change, start with a 2-4 sentence TL;DR and retain"
-        " detail where it adds useful review signal."
+        "Start with a TL;DR proportionate to the change and retain detail where"
+        " it adds useful review signal."
     ]
-    if always:
-        verb = "are" if len(always) > 1 else "is"
+    if enabled:
+        verb = "are" if len(enabled) > 1 else "is"
         sentences.append(
-            f"{_capitalize(_join_phrases(always))} {verb} required on every"
-            " substantive review; the tiny-diff carve-out above is the only"
-            " exception."
-        )
-    if auto:
-        verb = "are" if len(auto) > 1 else "is"
-        each = "each" if len(auto) > 1 else "it"
-        sentences.append(
-            f"{_capitalize(_join_phrases(auto))} {verb} optional. Include {each}"
-            " only when the diff provides enough evidence for it and it helps"
-            " the reader make a decision."
+            f"{_capitalize(_join_phrases(enabled))} {verb} required on every"
+            " review. Only an explicit `off` may suppress a presentation"
+            " category; use its documented empty-state message when there is"
+            " nothing material to add."
         )
     if off:
         sentences.append(
@@ -163,8 +153,9 @@ def _walkthrough_paragraph(modules: dict[str, str]) -> str | None:
    details block: start with
    `<details><summary><b>📝 Walkthrough</b></summary>`, add a blank line, then at
    most 6 bullets mapping the logical areas of the change (`area` - what changed
-   and why), add another blank line, and finish with `</details>`. Do not replace
-   this with a visible Markdown heading."""
+   and why), add another blank line, and finish with `</details>`. If no area
+   needs explanation, use the single line `No additional walkthrough details.`
+   inside the block. Do not replace this with a visible Markdown heading."""
 
 
 def _product_impact_paragraph(modules: dict[str, str]) -> str | None:
@@ -174,61 +165,41 @@ def _product_impact_paragraph(modules: dict[str, str]) -> str | None:
    Whenever the product take is included, start it with `**Product take:**` and
    use at most 3 lines: explain what the change means for users or the product
    and how much it matters relative to typical work in this codebase. Be frank:
-   major capability, solid improvement, or minor polish."""
+   major capability, solid improvement, or minor polish. When there is no
+   material product impact, write `**Product take:** No material product impact.`"""
 
 
 def _verify_paragraph(modules: dict[str, str]) -> str | None:
     if modules["verification_steps"] == "off":
         return None
-    if modules["verification_steps"] == "always":
-        return """\
-   Add `<details><summary><b>🧪 How to verify</b></summary>` with 3-5 one-line
-   steps covering the riskiest paths first, on every substantive review. When
-   the change is internal-only, give the commands or tests that exercise the
-   changed behavior instead of user-visible steps. If a cheap automated check
-   would cover it, end with one `Automate:` line. Skip it only for tiny
-   diffs, dependency-only updates, and lockfile-only updates."""
     return """\
-   When a substantive PR changes behavior someone can observe (UI, API
-   responses, emails, generated files), you may add
-   `<details><summary><b>🧪 How to verify</b></summary>` with 3-5 one-line steps
-   covering the riskiest paths first. If a cheap automated check would cover
-   it, end with one `Automate:` line. Skip this for tiny diffs, refactors, docs,
-   or internal-only changes."""
+   Add `<details><summary><b>🧪 How to verify</b></summary>` on every review. Add
+   a blank line, then 3-5 one-line steps covering the riskiest paths first, and
+   finish with `</details>`. For internal changes, give commands or tests rather
+   than user-visible steps. If a cheap automated check would cover the change,
+   end with one `Automate:` line. When there is nothing beyond completed checks,
+   use the single line `No additional verification steps.` inside the block."""
 
 
 def _assumptions_paragraph(modules: dict[str, str]) -> str | None:
     if modules["assumptions"] == "off":
         return None
-    if modules["assumptions"] == "always":
-        return """\
-   Add `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>`
-   listing the load-bearing claims the review relied on but could not verify.
-   Include it on every substantive review: when there are none, its single
-   line states that the review relied on no unverified claims. Keep it out of
-   concise tiny/dependency/lockfile reviews."""
     return """\
-   Add `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>` only
-   for load-bearing claims the review relied on but could not verify. Omit it
-   when there are none, and keep it out of concise tiny/dependency/lockfile
-   reviews; put a directly relevant uncertainty in the assessment instead."""
+   Add `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>` on
+   every review. Add a blank line, list the load-bearing claims the review
+   relied on but could not verify, then finish with `</details>`. When there are
+   none, use the single line `No unverified assumptions or claims.` inside the
+   block."""
 
 
 def _sign_off_paragraph(modules: dict[str, str]) -> str | None:
     if modules["sign_off"] == "off":
         return None
-    if modules["sign_off"] == "always":
-        return """\
-   End every substantive review with one italic sign-off line: a short,
+    return """\
+   End every review with one italic sign-off line: a short,
    good-natured remark about this specific PR (dry humor welcome, never snark),
    ending in `· reviewed at <short HEAD sha>`. Keep the entire line inside one
-   pair of `*` markers. Omit it from concise reviews."""
-    return """\
-   When a sign-off is included, use one italic line: a short, good-natured
-   remark about this specific PR (dry humor welcome, never snark), ending in
-   `· reviewed at <short HEAD sha>`. Keep the entire line inside one pair of `*`
-   markers. It is optional for substantive reviews and omitted from concise
-   reviews."""
+   pair of `*` markers."""
 
 
 def _findings_rules(modules: dict[str, str]) -> str:
@@ -312,17 +283,19 @@ GitHub access.
    unacknowledged finding: `✅ Ship it` (nothing to flag) / `🧹 Ship it, nits inside`
    (nits only) / `🟠 Fix before merge` (majors) / `🔴 Hold the merge` (blockers).
 
-   Adapt the rest to the change. For a tiny diff, dependency-only update, or
-   lockfile-only update, write only a concise 1-3 sentence assessment after the
-   header, plus a severity section if there is a finding and a CI caveat when
-   relevant. Do not add a scorecard, walkthrough, product take, assumptions
-   section, or joke/sign-off merely to fill out the template.
+   Adapt the assessment length to the change. For a tiny diff, dependency-only
+   update, or lockfile-only update, keep it to 1-3 sentences. Still include every
+   enabled presentation category below, using its compact empty-state message
+   when there is nothing material to add. Only explicit `off` configuration may
+   suppress a presentation category.
 
-{_substantive_paragraph(modules)}
+{_presentation_paragraph(modules)}
 {scorecard_section}
 
    Write one `### <emoji> <severity>` section per severity that has findings.
    Omit empty sections entirely; never write a section just to say "None".
+   These are finding groups, not presentation categories: Blockers, Majors, and
+   Nits appear only when the review has a finding at that severity.
    Severities:
    - `🔴 Blockers` - would break production, lose data, or open a security hole
    - `🟠 Majors` - real bugs or costly defects; fix before or right after merging
