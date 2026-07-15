@@ -7,10 +7,14 @@ from themis.engines.codex import CodexEngine
 from themis.engines.glm import GlmEngine
 
 ENGINE_NAMES = ("codex", "claude", "glm")
+# Engines with native skill discovery (the claude harness reads
+# .claude/skills itself). Anything outside this set gets the skills
+# bridge: a synthesized index of the base-revision skills (issue #49).
+NATIVE_SKILLS_ENGINES = frozenset({"claude", "glm"})
 
 __all__ = [
     "ENGINE_NAMES", "Engine", "EngineError", "EngineQuotaError",
-    "EngineUnavailableError", "resolve",
+    "EngineUnavailableError", "NATIVE_SKILLS_ENGINES", "resolve",
 ]
 
 

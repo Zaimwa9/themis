@@ -393,3 +393,12 @@ def test_build_review_prompt__output_hygiene_rules_always_present():
     assert "labels inside findings" in flat
     assert "TL;DR and assessment as natural prose" in flat
     assert "at most one short caveat line" in flat
+
+
+def test_build_review_prompt__skills_index_sentence_is_opt_in():
+    # The skills bridge (issue #49): one static sentence pointing engines
+    # without native skill discovery at the synthesized index.
+    with_index = build_review_prompt("o/r", 1, "main", skills_index=True)
+    without = build_review_prompt("o/r", 1, "main")
+    assert ".review-input/skills-index.md" in with_index
+    assert ".review-input/skills-index.md" not in without

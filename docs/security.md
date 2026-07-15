@@ -133,6 +133,13 @@ hooks, plugins, agents, MCP config) are scrubbed unconditionally: the
 opt-in never widens execution, only instructions. User-level configuration
 stays disabled in all modes.
 
+The skills bridge for engines without native skill discovery keeps the
+same boundary: the synthesized `.review-input/skills-index.md` is derived
+exclusively from the base blobs the skills capability already validated,
+no repo content is concatenated into the prompt (the prompt gains one
+static sentence), and a head-committed file at the index path is removed
+on every job — only Themis writes it.
+
 ## Single-tenant by design
 
 One `CODEX_HOME` volume holds one `auth.json`, and one

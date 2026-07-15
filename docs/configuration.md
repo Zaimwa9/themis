@@ -94,7 +94,7 @@ review:
 | `learnings.digest_threshold` | `10` | pending learnings needed before Themis opens/updates the digest PR (min 1) |
 | `review.modules.<name>` | per-module profile | tri-state presence per optional review section: `always`, `auto`, or `off`; see below |
 | `agent.context` | `false` | the review agent natively discovers instruction files (`CLAUDE.md`, `AGENTS.md`) — resolved from the PR base revision, never the PR head; see below |
-| `agent.skills` | `false` | the review agent natively discovers `.claude/skills` packages — same base-revision rule; claude/glm only (codex has no skills surface) |
+| `agent.skills` | `false` | the review agent uses `.claude/skills` packages — same base-revision rule; native discovery on claude/glm, a synthesized index (skills bridge) on codex |
 
 A partial file overlays the defaults key by key, so you only need to set the
 fields you want to change. Unknown fields are ignored. An invalid field warns
@@ -164,7 +164,15 @@ without the injection risk:
   including nested ones) are discovered natively by the engine, plus the
   files they `@`-reference.
 - `agent.skills: true` — skill packages under `.claude/skills/` are
-  discovered natively (claude/glm engines; codex has no skills surface).
+  discovered natively (claude/glm engines). Engines without native skill
+  discovery (codex) get the **skills bridge** instead: Themis synthesizes
+  `.review-input/skills-index.md` from the base-revision `SKILL.md`
+  frontmatter (name and description, capped at 50 entries and 200
+  characters per description) and one static prompt sentence tells the
+  agent to read a skill's file when its description matches the code under
+  review — the same progressive disclosure the claude harness does
+  natively. Author skills once, in the claude format, and every engine
+  uses them.
 
 Both are independent and off by default, and they are repository behavior:
 they can only be set in `.themis/config.yaml` (read from the default

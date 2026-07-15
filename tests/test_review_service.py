@@ -160,7 +160,7 @@ async def test_review__agent_opt_in__trusted_context_applied_and_flags_flow(
     gh.get_file_text.return_value = "agent:\n  context: true\n  skills: true\n"
     trust_calls = {}
 
-    async def fake_trust(workspace, base_ref, *, context, skills):
+    async def fake_trust(workspace, base_ref, *, context, skills, skills_index):
         trust_calls["args"] = (base_ref, context, skills)
         return True, False  # skills failed closed inside materialization
 
@@ -184,10 +184,93 @@ async def test_review__agent_opt_in__trusted_context_applied_and_flags_flow(
     assert captured["native_skills"] is False
 
 
+async def test_review__skills_bridge__codex_gets_index_and_prompt_sentence(
+    service, gh
+):
+    # Issue #49: engines without native skill discovery get the synthesized
+    # index plus one static prompt sentence pointing at it.
+    gh.get_file_text.return_value = "agent:\n  skills: true\n"
+    trust_calls = {}
+
+    async def fake_trust(workspace, base_ref, *, context, skills, skills_index):
+        trust_calls["skills_index"] = skills_index
+        return False, True
+
+    service.trust_context = fake_trust
+    seen_prompts = []
+
+    async def agent(*, prompt, workspace, **kwargs):
+        seen_prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({"findings": []}))
+        return "ok"
+    service.resolve_engine = _resolver(agent)  # FakeEngine name: codex
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert trust_calls["skills_index"] is True
+    assert ".review-input/skills-index.md" in seen_prompts[0]
+
+
+async def test_review__skills_bridge__native_engine_needs_no_index(service, gh):
+    gh.get_file_text.return_value = "engine: claude\nagent:\n  skills: true\n"
+    trust_calls = {}
+
+    async def fake_trust(workspace, base_ref, *, context, skills, skills_index):
+        trust_calls["skills_index"] = skills_index
+        return False, True
+
+    service.trust_context = fake_trust
+    seen_prompts = []
+
+    async def agent(*, prompt, workspace, **kwargs):
+        seen_prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({"findings": []}))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    # The claude harness discovers .claude/skills natively: no synthesized
+    # index, no extra prompt sentence.
+    assert trust_calls["skills_index"] is False
+    assert "skills-index" not in seen_prompts[0]
+
+
+async def test_review__skills_bridge__no_sentence_when_skills_fail_closed(
+    service, gh
+):
+    gh.get_file_text.return_value = "agent:\n  skills: true\n"
+
+    async def fake_trust(workspace, base_ref, *, context, skills, skills_index):
+        return False, False  # capability failed closed: no index was written
+
+    service.trust_context = fake_trust
+    seen_prompts = []
+
+    async def agent(*, prompt, workspace, **kwargs):
+        seen_prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({"findings": []}))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert "skills-index" not in seen_prompts[0]
+
+
 async def test_review__agent_defaults__masking_runs_and_flags_stay_off(service, gh):
     trust_calls = {}
 
-    async def fake_trust(workspace, base_ref, *, context, skills):
+    async def fake_trust(workspace, base_ref, *, context, skills, skills_index):
         trust_calls["args"] = (base_ref, context, skills)
         return False, False
 
