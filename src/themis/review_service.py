@@ -309,9 +309,7 @@ class ReviewService:
                     logger.info(
                         "themis_default_doctrine_used repo=%s pr=%s", repo, pr_number
                     )
-                modules = resolve_modules(
-                    repo_config, default_doctrine=use_default_doctrine
-                )
+                modules = resolve_modules(repo_config)
                 prompt = build_review_prompt(
                     repo, pr_number, pr["base"]["ref"], extra_context=extra_context,
                     has_learnings=bool(learnings), modules=modules,

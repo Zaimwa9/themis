@@ -80,9 +80,11 @@ class ReviewModulesConfig(BaseModel):
 
 MODULE_NAMES = tuple(ReviewModulesConfig.model_fields)
 
-# Presence profile applied when the packaged default doctrine is in play:
-# zero-config repos get the full-dress review instead of the leanest format.
-DEFAULT_DOCTRINE_MODULES = {
+# Complete built-in presentation profile. Repository config overlays this
+# field by field: omitted or invalid values retain their defaults, while each
+# explicit valid value wins independently of doctrine selection.
+DEFAULT_REVIEW_MODULES = {
+    **dict.fromkeys(MODULE_NAMES, "auto"),
     "scorecard": "always",
     "walkthrough": "always",
     "product_impact": "always",
@@ -106,16 +108,10 @@ class ReviewConfig(BaseModel):
         return ReviewModulesConfig()
 
 
-def resolve_modules(config: "RepoConfig", *, default_doctrine: bool) -> dict[str, str]:
-    """Effective tri-state per module. Explicit repo values always win; unset
-    modules default to `auto` (adaptive parity with pre-module behavior),
-    raised to the presence profile above when the packaged default doctrine
-    is in use — config stays the single source of truth for delivery."""
-    profile = DEFAULT_DOCTRINE_MODULES if default_doctrine else {}
-    return {
-        name: getattr(config.review.modules, name) or profile.get(name, "auto")
-        for name in MODULE_NAMES
-    }
+def resolve_modules(config: "RepoConfig") -> dict[str, str]:
+    """Overlay explicit valid module values onto the built-in profile."""
+    configured = config.review.modules.model_dump(exclude_none=True)
+    return {**DEFAULT_REVIEW_MODULES, **configured}
 
 
 class LearningsConfig(BaseModel):
