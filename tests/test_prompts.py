@@ -55,6 +55,17 @@ def test_build_review_prompt__tiny_reviews__retain_enabled_categories():
     assert "do not repeat the" in prompt
 
 
+def test_build_review_prompt__resolve_thread_ids__is_an_obligation():
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+    flat = " ".join(prompt.split())
+
+    assert "part of the review, not an optional extra" in flat
+    assert "every open thread you authored" in flat
+    assert "observed the fix in the checked-out code" in flat
+    assert "never resolve on doubt" in flat
+    assert "only threads you authored whose issue is fixed" not in flat
+
+
 def test_build_review_prompt__canonical_modules_keep_original_order():
     prompt = build_review_prompt("acme/widgets", 7, "main")
 
