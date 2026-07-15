@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/Zaimwa9/themis/compare/v0.5.0...v0.6.0) (2026-07-15)
+
+
+### Features
+
+* opt-in trusted native context and skills for review agents ([#43](https://github.com/Zaimwa9/themis/issues/43)) ([3c2bf83](https://github.com/Zaimwa9/themis/commit/3c2bf837c7bc80edea9186bc1044c904ce52a541))
+
+
+### Bug Fixes
+
+* restore full-dress review defaults ([#46](https://github.com/Zaimwa9/themis/issues/46)) ([750bff5](https://github.com/Zaimwa9/themis/commit/750bff59d8b04e0088944f47be689825495aaea1))
+
+
+### Refactoring
+
+* extract learning orchestration service ([#45](https://github.com/Zaimwa9/themis/issues/45)) ([e76bce9](https://github.com/Zaimwa9/themis/commit/e76bce9c550822dc7e059d287f2f6ce279201220))
+
 ## [0.5.0](https://github.com/Zaimwa9/themis/compare/v0.4.0...v0.5.0) (2026-07-15)
 
 
