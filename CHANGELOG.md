@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/Zaimwa9/themis/compare/v0.4.0...v0.5.0) (2026-07-15)
+
+
+### Features
+
+* acknowledged findings stop driving the verdict ([#38](https://github.com/Zaimwa9/themis/issues/38)) ([fbec013](https://github.com/Zaimwa9/themis/commit/fbec013b44d958d2762cd68148d9bc16f056b28e))
+* tri-state review modules and packaged default doctrine ([#39](https://github.com/Zaimwa9/themis/issues/39)) ([66e1595](https://github.com/Zaimwa9/themis/commit/66e1595e5b51f22e8cf3aa07a1db51ecbf440e42))
+
+
+### Documentation
+
+* folded findings keep pointers, context is cap-bounded ([#42](https://github.com/Zaimwa9/themis/issues/42)) ([c899e9d](https://github.com/Zaimwa9/themis/commit/c899e9dfa12bf04ecd738e0c4015792656aef256))
+
 ## [0.4.0](https://github.com/Zaimwa9/themis/compare/v0.3.0...v0.4.0) (2026-07-14)
 
 
