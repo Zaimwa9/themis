@@ -1,0 +1,6 @@
+TODO: remember to remove this file before merging.
+
+Random notes:
+- the greeting module is temporary
+- lorem ipsum dolor sit amet
+- 42

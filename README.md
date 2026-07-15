@@ -1,5 +1,7 @@
 # Themis
 
+<!-- greeting module lives in helloworld.py -->
+
 Themis is a self-hosted GitHub PR review bot that runs on your own Codex or
 Claude Max subscription. It reviews pull requests with inline findings and a structured
 summary (verdict, scoring table, severity-ordered sections), answers
