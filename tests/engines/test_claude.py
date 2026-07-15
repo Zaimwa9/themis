@@ -67,10 +67,13 @@ async def test_run__native_context__project_setting_source(
 
     args = (workspace / "args.txt").read_text()
     assert "--setting-sources project" in args
-    # Native discovery must not weaken the MCP/permissions hardening.
+    # Native discovery must not weaken the MCP hardening.
     assert "--strict-mcp-config" in args
     assert '--mcp-config {"mcpServers":{}}' in args
-    assert "--safe-mode" in args
+    # Safe mode disables CLAUDE.md/skills wholesale; on the trusted path the
+    # workspace scrub is the guardrail, so the flag must be dropped or the
+    # opt-in silently does nothing.
+    assert "--safe-mode" not in args
 
 
 async def test_run__native_skills_only__project_setting_source(
@@ -80,7 +83,9 @@ async def test_run__native_skills_only__project_setting_source(
 
     await _run(workspace, native_skills=True)
 
-    assert "--setting-sources project" in (workspace / "args.txt").read_text()
+    args = (workspace / "args.txt").read_text()
+    assert "--setting-sources project" in args
+    assert "--safe-mode" not in args
 
 
 async def test_run__default__web_tools_disallowed(tmp_path, monkeypatch, workspace):

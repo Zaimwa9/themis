@@ -17,16 +17,18 @@ def build_command(
         "codex", "exec",
         "--sandbox", sandbox,
         # Reviews run in untrusted PR workspaces. Keep authentication from
-        # CODEX_HOME; worker user configuration never loads.
+        # CODEX_HOME; worker user configuration and repo execpolicy .rules
+        # files never load. Note --ignore-rules does NOT cover AGENTS.md:
+        # codex discovers that natively and has no flag against it, so
+        # instruction-file isolation is the workspace mask applied by
+        # trusted_context.py before every job. The context opt-in changes
+        # nothing here; it materializes trusted base copies for that same
+        # native discovery to read.
         "--ignore-user-config",
+        "--ignore-rules",
         "-c", "approval_policy=never",
         "-c", f"model_reasoning_effort={effort}",
     ]
-    if not native_context:
-        # Repo rules (AGENTS.md) stay out unless the repo opted into trusted
-        # context, in which case trusted_context.py has already replaced
-        # every instruction file with its PR-base version.
-        command += ["--ignore-rules"]
     if web_access:
         # Doctrine-driven external checks (e.g. API contract verification)
         # need the network inside workspace-write.

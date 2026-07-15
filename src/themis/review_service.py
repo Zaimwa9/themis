@@ -282,17 +282,18 @@ class ReviewService:
                 depth=repo_config.limits.clone_depth,
             )
             try:
-                # Opt-in trusted native context (issue #9): rebuild the
-                # discoverable namespaces from the PR base before anything
-                # reads the workspace. Returns the *effective* capabilities;
-                # materialization fails closed per capability.
-                native_context = native_skills = False
-                if repo_config.agent.context or repo_config.agent.skills:
-                    native_context, native_skills = await self.trust_context(
-                        workspace, pr["base"]["ref"],
-                        context=repo_config.agent.context,
-                        skills=repo_config.agent.skills,
-                    )
+                # Trusted native context (issue #9). Runs on EVERY review:
+                # even with no opt-in, PR-head instruction files must be
+                # masked from the working tree because codex discovers
+                # AGENTS.md natively with no CLI flag against it. Opted-in
+                # capabilities additionally materialize the PR-base versions.
+                # Returns the *effective* capabilities; materialization
+                # fails closed per capability.
+                native_context, native_skills = await self.trust_context(
+                    workspace, pr["base"]["ref"],
+                    context=repo_config.agent.context,
+                    skills=repo_config.agent.skills,
+                )
                 _write_inputs(workspace, pr, threads, learnings=learnings)
 
                 async def snapshot_ci() -> None:
@@ -423,6 +424,12 @@ class ReviewService:
                 depth=repo_config.limits.clone_depth,
             )
             try:
+                # Discussions keep the fully-disabled baseline, but the mask
+                # still runs: codex's native AGENTS.md discovery has no CLI
+                # off-switch, so head instruction files must not be present.
+                await self.trust_context(
+                    workspace, pr["base"]["ref"], context=False, skills=False
+                )
                 _write_inputs(
                     workspace, pr, [thread] if thread else [], learnings=learnings
                 )

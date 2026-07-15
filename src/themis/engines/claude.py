@@ -31,13 +31,15 @@ def build_command(
     # native_discovery the workspace has been rebuilt by trusted_context.py
     # (instructions/skills from the PR base, executable surfaces scrubbed),
     # so project-level discovery may run; MCP stays pinned empty either way.
-    setting_sources = "project" if native_discovery else ""
+    # Safe mode also disables CLAUDE.md/skills wholesale, so it must be
+    # dropped on the trusted path or the opt-in silently does nothing — the
+    # workspace scrub is the guardrail there.
     command = [
         "claude", "-p", prompt,
         "--model", model,
         "--dangerously-skip-permissions",
-        "--safe-mode",
-        "--setting-sources", setting_sources,
+        *([] if native_discovery else ["--safe-mode"]),
+        "--setting-sources", "project" if native_discovery else "",
         "--strict-mcp-config",
         "--mcp-config", '{"mcpServers":{}}',
         "--output-format", "text",

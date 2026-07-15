@@ -44,9 +44,11 @@ the agent's reach:
 
 The agent subprocess runs on untrusted PR content inside the agent container. Its environment is
 allowlisted per engine: codex sees only `CODEX_HOME` beyond the base set and
-runs with `--ignore-user-config` (plus `--ignore-rules` unless the repo
-opted into trusted context, below), so it authenticates from
-`auth.json` without loading worker config or repo `.rules` files; claude sees
+runs with `--ignore-user-config --ignore-rules`, so it authenticates from
+`auth.json` without loading worker config or repo execpolicy `.rules` files.
+Codex discovers `AGENTS.md` natively with no CLI flag against it, so
+instruction-file isolation comes from the workspace mask (below), which
+removes every instruction file before every job; claude sees
 `CLAUDE_CODE_OAUTH_TOKEN` plus non-secret hygiene flags; glm sees
 its provider key as `ANTHROPIC_AUTH_TOKEN` plus the same hygiene flags.
 The agent container
@@ -97,10 +99,13 @@ The codex engine runs under codex's own kernel sandbox (`workspace-write`
 by default, network denied). The claude and glm engines have no kernel
 sandbox: they run with permissions skipped, and their dedicated container is
 the isolation boundary (non-root user, allowlisted env, scrubbed clone). Both
-run in safe mode, with filesystem setting sources disabled, a strict
-empty MCP configuration, auto-memory off, and an isolated config directory,
-so repo-controlled `CLAUDE.md`, hooks, plugins, skills, agents, and MCP
-servers are not loaded. By default their
+run in safe mode by default, with filesystem setting sources disabled, a
+strict empty MCP configuration, auto-memory off, and an isolated config
+directory, so repo-controlled `CLAUDE.md`, hooks, plugins, skills, agents,
+and MCP servers are not loaded. On the trusted-context opt-in path (below),
+safe mode and the setting-source block are lifted so native discovery can
+work — the workspace has been masked and rebuilt from the PR base first,
+and the MCP pin stays. By default their
 `WebFetch`/`WebSearch` tools are also disabled, but Bash remains available,
 so a prompt-injected job could still exfiltrate over the network.
 The only secret in reach is the engine's own key (your Claude token, or the
@@ -114,12 +119,14 @@ protects GitHub credentials but does not itself restrict outbound networking.
 
 ## Trusted native context (`agent.context` / `agent.skills`)
 
-Repos can opt back into native instruction-file and skills discovery (see
+The workspace mask runs before **every** job, opted in or not: instruction
+files (`CLAUDE.md`, `AGENTS.md`, nested included), `.claude/`, and
+`.mcp.json` are removed from the working tree. Repos can then opt back into
+native instruction-file and skills discovery (see
 [docs/configuration.md](configuration.md)). The boundary that keeps this
 safe: everything the agent may discover is materialized from the **PR base
-revision** before the run — never the working-tree copy at the PR head —
-and every head-only instruction file or skill is removed first, so a PR
-cannot add or modify the instructions used during its own review. Base
+revision** after the mask — never the working-tree copy at the PR head —
+so a PR cannot add or modify the instructions used during its own review. Base
 `@`-references resolve from the base tree only; a reference only the head
 could satisfy fails the capability closed. Executable surfaces (settings,
 hooks, plugins, agents, MCP config) are scrubbed unconditionally: the

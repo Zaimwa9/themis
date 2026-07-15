@@ -170,11 +170,14 @@ Both are independent and off by default, and they are repository behavior:
 they can only be set in `.themis/config.yaml` (read from the default
 branch), never through environment variables.
 
-When enabled, Themis rebuilds those namespaces in the PR workspace from the
-**PR base revision** before the agent starts: base versions are
-materialized at their canonical paths, PR-head-only instruction files and
-skills are removed, and executable configuration (`.claude/settings.json`,
-hooks, plugins, agents, commands, `.mcp.json`) is scrubbed regardless. The
+Whether or not a repo opts in, every job starts with a workspace mask:
+PR-head instruction files, `.claude/`, and executable configuration
+(`.claude/settings.json`, hooks, plugins, agents, commands, `.mcp.json`)
+are removed from the working tree — codex discovers `AGENTS.md` natively
+and has no CLI flag against it, so the mask is what isolates the agent from
+PR-controlled instructions. Opting in then rebuilds those namespaces from
+the **PR base revision** before the agent starts: base versions are
+materialized at their canonical paths for native discovery to read. The
 workspace is intentionally synthetic — application code from the PR head,
 agent inputs from the trusted base — and the review diff still shows
 changes to those files; they just don't influence the review that examines

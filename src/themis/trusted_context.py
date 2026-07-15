@@ -88,19 +88,22 @@ def _mask_instruction_files(workspace: Path) -> None:
                 (Path(dirpath) / name).unlink(missing_ok=True)
 
 
+def _remove_node(path: Path) -> None:
+    """Remove whatever sits at path: file, symlink, or directory. A PR can
+    validly commit a directory under any of these names; removal by the
+    wrong type must not crash the review."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
 def _scrub_executable_config(workspace: Path) -> None:
     """Native discovery must never re-enable executable surfaces: settings,
     hooks, plugins, agents, commands, MCP config. Only `.claude/skills` may
     exist afterwards, and only because it is rebuilt from the base tree."""
-    mcp = workspace / ".mcp.json"
-    if mcp.is_symlink() or mcp.exists():
-        mcp.unlink()
-    claude_dir = workspace / ".claude"
-    if claude_dir.is_symlink():
-        claude_dir.unlink()
-        return
-    if claude_dir.is_dir():
-        shutil.rmtree(claude_dir)
+    _remove_node(workspace / ".mcp.json")
+    _remove_node(workspace / ".claude")
 
 
 def _safe_dest(workspace: Path, rel_path: str) -> Path | None:
@@ -222,12 +225,25 @@ async def apply_trusted_context(
 ) -> tuple[bool, bool]:
     """Prepare the synthetic workspace; returns the effective capabilities.
 
-    Masking always runs before materialization, so every failure path leaves
+    Masking runs on EVERY job, opted in or not: codex discovers AGENTS.md
+    natively and its CLI has no flag against that (--ignore-rules only
+    covers execpolicy .rules files), so removing PR-head instruction files
+    and executable config from the working tree is the isolation mechanism.
+    Masking always precedes materialization, so every failure path leaves
     the discoverable namespaces empty rather than head-controlled."""
+    try:
+        _mask_instruction_files(workspace)
+        _scrub_executable_config(workspace)
+    except OSError as error:
+        # A cleanup error must not abort the job with no PR-facing result;
+        # fail every capability closed and let the review proceed.
+        logger.warning(
+            "themis_trusted_context_disabled capability=all reason=mask_failed"
+            " error=%s", str(error)[:200],
+        )
+        return False, False
     if not (context or skills):
         return False, False
-    _mask_instruction_files(workspace)
-    _scrub_executable_config(workspace)
     try:
         entries = await _base_entries(workspace, f"refs/remotes/origin/{base_ref}")
     except TrustedContextError as error:

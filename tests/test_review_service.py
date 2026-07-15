@@ -184,11 +184,14 @@ async def test_review__agent_opt_in__trusted_context_applied_and_flags_flow(
     assert captured["native_skills"] is False
 
 
-async def test_review__agent_defaults__no_trusted_context_no_flags(service, gh):
-    async def fail_trust(*args, **kwargs):
-        raise AssertionError("trusted context must not run without opt-in")
+async def test_review__agent_defaults__masking_runs_and_flags_stay_off(service, gh):
+    trust_calls = {}
 
-    service.trust_context = fail_trust
+    async def fake_trust(workspace, base_ref, *, context, skills):
+        trust_calls["args"] = (base_ref, context, skills)
+        return False, False
+
+    service.trust_context = fake_trust
     captured = {}
 
     async def agent(*, workspace, **kwargs):
@@ -202,8 +205,32 @@ async def test_review__agent_defaults__no_trusted_context_no_flags(service, gh):
 
     await service.review(REPO, 7, 42, auto=True)
 
+    # No opt-in: the workspace mask still runs (codex discovers AGENTS.md
+    # natively; masking is the isolation), with both capabilities off.
+    assert trust_calls["args"] == ("main", False, False)
     assert captured["native_context"] is False
     assert captured["native_skills"] is False
+
+
+async def test_discuss__masking_runs_with_capabilities_off(service, gh):
+    trust_calls = {}
+
+    async def fake_trust(workspace, base_ref, *, context, skills):
+        trust_calls["args"] = (base_ref, context, skills)
+        return False, False
+
+    service.trust_context = fake_trust
+    # Even an opted-in repo keeps discussions at the disabled baseline.
+    gh.get_file_text.return_value = "agent:\n  context: true\n  skills: true\n"
+    service.resolve_engine = _resolver(_reply_agent())
+
+    await service.discuss(
+        repo=REPO, pr_number=7, installation_id=42, comment_id=501,
+        body=f"{BOT_MENTION} why?", kind="conversation",
+        in_reply_to_id=None, mentions_bot=True,
+    )
+
+    assert trust_calls["args"] == ("main", False, False)
 
 
 async def test_review__no_output_written__codex_stdout_tail_logged(service, gh, caplog):

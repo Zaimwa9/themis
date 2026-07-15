@@ -79,7 +79,7 @@ async def test_run_codex__argv__contains_exec_model_effort_and_prompt(
     assert "review this" in args
 
 
-async def test_run_codex__native_context__loads_repo_rules(
+async def test_run_codex__native_context__rules_still_ignored(
     tmp_path, monkeypatch, workspace
 ):
     _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt')
@@ -87,20 +87,12 @@ async def test_run_codex__native_context__loads_repo_rules(
     await _run(workspace, native_context=True)
 
     args = (workspace / "args.txt").read_text()
-    assert "--ignore-rules" not in args
-    # User-plane configuration stays out regardless of the repo opt-in.
+    # --ignore-rules covers execpolicy .rules files, not AGENTS.md: it stays
+    # in every mode (PR-controlled exec policies must never load). AGENTS.md
+    # isolation is the workspace mask; the opt-in just materializes trusted
+    # base copies that codex's default discovery then reads.
+    assert "--ignore-rules" in args
     assert "--ignore-user-config" in args
-
-
-async def test_run_codex__native_skills_only__rules_still_ignored(
-    tmp_path, monkeypatch, workspace
-):
-    _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt')
-
-    await _run(workspace, native_skills=True)
-
-    # codex has no skills surface; the skills opt-in must not open AGENTS.md.
-    assert "--ignore-rules" in (workspace / "args.txt").read_text()
 
 
 async def test_run_codex__sandbox_override__lands_in_argv(tmp_path, monkeypatch, workspace):
