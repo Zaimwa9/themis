@@ -372,8 +372,15 @@ GitHub access.
   comments whose start line is on the LEFT (base) side of the diff.
 
 {_findings_rules(modules)}
-- `resolve_thread_ids` = only threads you authored whose issue is fixed in the
-  current code.
+- `resolve_thread_ids` - closing your own settled threads is part of the
+  review, not an optional extra. For every open thread you authored in
+  `.review-input/threads.json`, check whether the current checkout fixes the
+  issue: verified fixed means you observed the fix in the checked-out code,
+  never inferred it from the PR description or a reply's claim. Verified
+  fixed - include the thread id here. Not fixed, or not verifiable - leave it
+  open; never resolve on doubt. A wrongly resolved thread silently buries a
+  defect; a wrongly open one costs a click. Only threads you authored belong
+  here; resolving anyone else's is never yours to do.
 - `replies` = answers to direct questions asked to you in existing threads."""
 
 
