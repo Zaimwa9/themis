@@ -269,9 +269,10 @@ cp -r "$starter/examples/themis" .themis
   straight from the PR branch on every review.
 - `.themis/config.yaml`: behavior knobs, every key optional.
 
-Every substantive review uses the full-dress presentation by default:
-scorecard, walkthrough, product take, and sign-off. A repo can override each
-section independently through `.themis/config.yaml`. If there is no
+Every substantive review uses the full-dress presentation by default: a
+four-row numeric `/5` scorecard, a collapsible walkthrough, product take, and
+an italic PR-specific sign-off. A repo can override each section independently
+through `.themis/config.yaml`. If there is no
 `.themis/review.md`, Themis separately falls back to a packaged default
 doctrine; committing a doctrine replaces only that judgment guidance.
 

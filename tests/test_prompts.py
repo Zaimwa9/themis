@@ -22,7 +22,7 @@ def test_build_review_prompt__contains_pr_context_and_contract():
 def test_build_review_prompt__summary_format__verdict_severities_no_empty_sections():
     prompt = build_review_prompt("acme/widgets", 7, "main")
 
-    assert "`## 🤖 AI Review: <verdict>`" in prompt
+    assert "`## ⚖️ Themis judgement: <verdict>`" in prompt
     assert "####" not in prompt
     assert "🔴 Blockers" in prompt
     assert "🟠 Majors" in prompt
@@ -31,10 +31,15 @@ def test_build_review_prompt__summary_format__verdict_severities_no_empty_sectio
     assert "sign-off" in prompt
     assert "<details><summary><b>🧪 How to verify</b></summary>" in prompt
     assert "Automate:" in prompt
-    assert "Correctness, Test coverage, Code quality, Product impact" in prompt
-    assert "walkthrough" in prompt
+    assert "| 🎯 Correctness | n/5 |" in prompt
+    assert "| 🧪 Test coverage | n/5 |" in prompt
+    assert "| 📐 Code quality | n/5 |" in prompt
+    assert "| 🚀 Product impact | n/5 |" in prompt
+    assert "<details><summary><b>📝 Walkthrough</b></summary>" in prompt
     assert "`**Product take:**`" in prompt
     assert "at most 3 lines" in prompt
+    assert "use one italic line" in prompt
+    assert "dry humor welcome, never snark" in prompt
 
 
 def test_build_review_prompt__tiny_reviews__omit_ceremonial_sections():
@@ -44,6 +49,26 @@ def test_build_review_prompt__tiny_reviews__omit_ceremonial_sections():
     assert "Do not add a scorecard, walkthrough, product take, assumptions" in prompt
     assert "joke/sign-off merely to fill out the template" in prompt
     assert "do not repeat the" in prompt
+
+
+def test_build_review_prompt__canonical_modules_keep_original_order():
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+
+    assert prompt.index("| 🎯 Correctness | n/5 |") < prompt.index(
+        "Write one `### <emoji> <severity>` section"
+    )
+    assert prompt.index("<details><summary><b>📝 Walkthrough</b></summary>") < (
+        prompt.index("<details><summary><b>🧪 How to verify</b></summary>")
+    )
+    assert prompt.index("<details><summary><b>🧪 How to verify</b></summary>") < (
+        prompt.index("`**Product take:**`")
+    )
+    assert prompt.index("`**Product take:**`") < prompt.index(
+        "<details><summary><b>🧭 Assumptions & unverified claims</b></summary>"
+    )
+    assert prompt.index("🧭 Assumptions & unverified claims") < prompt.index(
+        "dry humor welcome, never snark"
+    )
 
 
 def test_build_review_prompt__inline_finding_format__label_title_suggestion_fix_direction():
@@ -274,8 +299,10 @@ def test_build_review_prompt__always_modules__required_on_substantive_reviews():
     flat = " ".join(prompt.split())
 
     assert "required on every substantive review" in flat
-    assert "Correctness, Test coverage, Code quality, Product impact" in flat
-    assert "End every substantive review with a short PR-specific sign-off" in flat
+    assert "| 🎯 Correctness | n/5 |" in prompt
+    assert "<details><summary><b>📝 Walkthrough</b></summary>" in prompt
+    assert "End every substantive review with one italic sign-off line" in flat
+    assert "dry humor welcome, never snark" in flat
     assert "relied on no unverified claims" not in flat  # assumptions stayed auto
     # The tiny-diff carve-out survives `always`.
     assert "tiny diff, dependency-only update, or" in prompt
