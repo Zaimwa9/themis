@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.0](https://github.com/Zaimwa9/themis/compare/v0.6.0...v0.7.0) (2026-07-15)
+
+
+### Features
+
+* review canaries and trusted-context opt-in for this repo ([#48](https://github.com/Zaimwa9/themis/issues/48)) ([1160b05](https://github.com/Zaimwa9/themis/commit/1160b057d58a3799ca8006d208e0869b2f51adc1))
+* skills bridge — synthesized index for engines without native skill discovery ([#54](https://github.com/Zaimwa9/themis/issues/54)) ([9ba5e23](https://github.com/Zaimwa9/themis/commit/9ba5e2330c5c302a8f72b61e48f7d7aceb03a5e0))
+
+
+### Bug Fixes
+
+* restore canonical review presentation ([#55](https://github.com/Zaimwa9/themis/issues/55)) ([c751bac](https://github.com/Zaimwa9/themis/commit/c751bac2af8f60fd34362e815ac58a639097e0c6))
+
 ## [0.6.0](https://github.com/Zaimwa9/themis/compare/v0.5.0...v0.6.0) (2026-07-15)
 
 
