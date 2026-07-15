@@ -36,7 +36,10 @@ MAX_TOTAL_BYTES = 10_485_760  # 10 MiB per capability
 MAX_FILES = 200  # per capability
 MAX_REF_DEPTH = 5  # matches the claude harness's own import depth limit
 
-_REF_PATTERN = re.compile(r"(?:^|\s)@([A-Za-z0-9_][A-Za-z0-9_./-]*)", re.MULTILINE)
+# Claude Code import forms: @path, @./path, @../path (any relative depth).
+_REF_PATTERN = re.compile(
+    r"(?:^|\s)@((?:\.\.?/)*[A-Za-z0-9_][A-Za-z0-9_./-]*)", re.MULTILINE
+)
 
 
 class TrustedContextError(Exception):
@@ -202,9 +205,10 @@ async def _plan(
                         queue.append((candidate, depth + 1))
                     break
                 head_copy = workspace / candidate
-                if head_copy.is_symlink() or head_copy.exists():
+                if head_copy.is_symlink() or head_copy.is_file():
                     # The trusted file imports a path only the PR provides:
                     # native discovery would load head content. Fail closed.
+                    # (A directory cannot be imported; it does not count.)
                     disabled("head_only_reference", candidate)
                     return None
                 # Missing everywhere: the import loads nothing. Harmless.
@@ -214,8 +218,9 @@ async def _plan(
 def _write(writes: list[tuple[Path, bytes]]) -> int:
     for dest, content in writes:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.is_symlink() or dest.exists():
-            dest.unlink()
+        # The head may have anything at this path — including a directory
+        # where the base had a file; replace by type, never assume.
+        _remove_node(dest)
         dest.write_bytes(content)
     return sum(len(content) for _, content in writes)
 
@@ -295,7 +300,17 @@ async def _apply_capability(
         return False
     if writes is None:
         return False
-    written = _write(writes)
+    try:
+        written = _write(writes)
+    except OSError as error:
+        # e.g. a head file where the base had a directory ancestor. The
+        # namespaces were masked up front, so failing closed here leaves
+        # them empty (partially-written files are base content — trusted).
+        logger.warning(
+            "themis_trusted_context_disabled capability=%s reason=write_failed"
+            " error=%s", capability, str(error)[:200],
+        )
+        return False
     logger.info(
         "themis_trusted_context_applied capability=%s files=%d bytes=%d",
         capability, len(writes), written,
