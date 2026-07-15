@@ -17,12 +17,12 @@ learnings:
   digest_threshold: 10     # pending learnings that open/update the digest PR
 review:
   modules:                 # always | auto | off (true = auto, false = off)
-    scorecard: auto        # the four-row scoring table
-    walkthrough: auto      # logical-area walkthrough
-    product_impact: auto   # standalone product take
+    scorecard: always      # the four-row scoring table
+    walkthrough: always    # logical-area walkthrough
+    product_impact: always # standalone product take
     verification_steps: auto  # the "How to verify" block
     assumptions: auto      # assumptions & unverified claims block
-    sign_off: auto         # PR-specific sign-off with reviewed-at SHA
+    sign_off: always       # PR-specific sign-off with reviewed-at SHA
     ci_context: auto       # CI commentary in the review body
     inline_findings: auto  # off = every finding folded into the summary
     code_suggestions: auto # off = fixes as prose, no ```suggestion blocks
