@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/Zaimwa9/themis/compare/v0.7.1...v0.8.0) (2026-07-15)
+
+
+### Features
+
+* baseline big-picture architecture pass with tri-state big_picture note ([#60](https://github.com/Zaimwa9/themis/issues/60)) ([3e8e6fe](https://github.com/Zaimwa9/themis/commit/3e8e6fe31d1face363dceefd94df68bac0b4e692))
+
+
+### Bug Fixes
+
+* **prompts:** oblige resolving own verified-fixed threads ([#64](https://github.com/Zaimwa9/themis/issues/64)) ([bde12a9](https://github.com/Zaimwa9/themis/commit/bde12a960814c615cb82c20c58cf5345dd37e65c)), closes [#61](https://github.com/Zaimwa9/themis/issues/61)
+
 ## [0.7.1](https://github.com/Zaimwa9/themis/compare/v0.7.0...v0.7.1) (2026-07-15)
 
 
