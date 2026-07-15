@@ -152,6 +152,9 @@ the workspace. Cover at least:
 - [ ] Provider's plan ToS confirmed to permit unattended/backend use
 - [ ] Engine module + tests
 - [ ] Registry, `DEFAULT_MODELS`, `_ENGINE_AUTH_HINTS`, `_SECRET_ENV_VARS`
+- [ ] `NATIVE_SKILLS_ENGINES` membership decided: in the set if the CLI
+      discovers `.claude/skills` itself, out of it to get the synthesized
+      skills index (see `docs/configuration.md`, trusted agent context)
 - [ ] `docker-compose.yml` + README Quickstart compose sample (agent only) + `.env.example`
 - [ ] README, `docs/configuration.md`, `docs/security.md`, example config
 - [ ] Quota-marker sources cited; transient vs. exhausted distinction argued

@@ -21,7 +21,13 @@ from themis.config import (
     parse_repo_config,
     resolve_modules,
 )
-from themis.engines import Engine, EngineError, EngineQuotaError, EngineUnavailableError
+from themis.engines import (
+    Engine,
+    EngineError,
+    EngineQuotaError,
+    EngineUnavailableError,
+    NATIVE_SKILLS_ENGINES,
+)
 from themis.events import TRUSTED_ASSOCIATIONS
 from themis.github.auth import get_installation_token, make_app_jwt
 from themis.github.client import GitHubClient, GitHubGraphQLError
@@ -289,10 +295,15 @@ class ReviewService:
                 # capabilities additionally materialize the PR-base versions.
                 # Returns the *effective* capabilities; materialization
                 # fails closed per capability.
+                # Engines without native skill discovery get the skills
+                # bridge instead: a synthesized index of the base-revision
+                # skills, plus one static prompt sentence (issue #49).
+                skills_bridge = engine.name not in NATIVE_SKILLS_ENGINES
                 native_context, native_skills = await self.trust_context(
                     workspace, pr["base"]["ref"],
                     context=repo_config.agent.context,
                     skills=repo_config.agent.skills,
+                    skills_index=skills_bridge,
                 )
                 _write_inputs(workspace, pr, threads, learnings=learnings)
 
@@ -328,6 +339,7 @@ class ReviewService:
                     repo, pr_number, pr["base"]["ref"], extra_context=extra_context,
                     has_learnings=bool(learnings), modules=modules,
                     use_default_doctrine=use_default_doctrine,
+                    skills_index=native_skills and skills_bridge,
                 )
                 actions = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,

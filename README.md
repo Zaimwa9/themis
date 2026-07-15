@@ -299,7 +299,7 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `learnings.digest_threshold` | `10` | pending learnings that trigger the digest PR (minimum 1) |
 | `review.modules.<name>` | full-dress profile | `always` \| `auto` \| `off` per optional review section; scorecard, walkthrough, product impact, and sign-off default to `always`, the rest to `auto`; see [`docs/configuration.md`](docs/configuration.md) |
 | `agent.context` | `false` | agent natively discovers `CLAUDE.md`/`AGENTS.md`, always resolved from the PR base revision so a PR can't steer its own review; see [`docs/configuration.md`](docs/configuration.md) |
-| `agent.skills` | `false` | agent natively discovers `.claude/skills` packages, same base-revision rule (claude/glm engines) |
+| `agent.skills` | `false` | agent uses `.claude/skills` packages, same base-revision rule — natively on claude/glm, via a synthesized index (skills bridge) on codex |
 
 Can't commit `.themis/config.yaml` to the target repo (yet)? Set
 `THEMIS_DEFAULT_REPO_CONFIG` on the controller to the same yaml (raw or

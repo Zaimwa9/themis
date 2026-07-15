@@ -387,6 +387,7 @@ def build_review_prompt(
     has_learnings: bool = False,
     modules: dict[str, str] | None = None,
     use_default_doctrine: bool = False,
+    skills_index: bool = False,
 ) -> str:
     resolved_modules = {**dict.fromkeys(MODULE_NAMES, "auto"), **(modules or {})}
     safe_extra_context = (extra_context or "").replace(
@@ -403,6 +404,14 @@ def build_review_prompt(
         else ""
     )
     learnings_section = _LEARNINGS_SECTION if has_learnings else ""
+    skills_index_section = (
+        "The repository provides reviewer skills, indexed in "
+        "`.review-input/skills-index.md` if present: when an entry's "
+        "description matches the code under review, read that skill's file "
+        "and follow it.\n\n"
+        if skills_index
+        else ""
+    )
     if use_default_doctrine:
         doctrine_section = (
             "This repository has no committed review doctrine "
@@ -428,7 +437,7 @@ PR metadata is in `.review-input/pr.json`; existing review threads (with thread 
 and comment databaseIds) are in `.review-input/threads.json`. A point-in-time CI
 snapshot for the PR head is in `.review-input/checks.json`.
 
-{extra_context_section}{learnings_section}{doctrine_section}
+{extra_context_section}{learnings_section}{skills_index_section}{doctrine_section}
 
 When the diff passes dynamic or generated values to an external API, cross-check
 the provider's documented constraints (field limits, enums, formats, byte vs char

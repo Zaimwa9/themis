@@ -22,6 +22,8 @@ import re
 import shutil
 from pathlib import Path
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 # Instruction files engines discover natively (codex: AGENTS.md; the claude
@@ -30,11 +32,17 @@ logger = logging.getLogger(__name__)
 INSTRUCTION_BASENAMES = ("CLAUDE.md", "AGENTS.md")
 _MASK_BASENAMES = frozenset(INSTRUCTION_BASENAMES + ("CLAUDE.local.md",))
 SKILLS_PREFIX = ".claude/skills/"
+# Skills bridge (issue #49): engines without native skill discovery get a
+# synthesized index of the base-revision skills at this path. It lives in
+# the generated-inputs directory, never in a natively-discovered namespace.
+SKILLS_INDEX_PATH = ".review-input/skills-index.md"
 
 MAX_FILE_BYTES = 1_048_576  # 1 MiB per file
 MAX_TOTAL_BYTES = 10_485_760  # 10 MiB per capability
 MAX_FILES = 200  # per capability
 MAX_REF_DEPTH = 5  # matches the claude harness's own import depth limit
+MAX_INDEX_ENTRIES = 50
+MAX_INDEX_DESCRIPTION = 200  # chars per index entry description
 
 # Claude Code imports are `@` + a non-whitespace path run, evaluated only
 # outside code fences and code spans. Matching the provider grammar exactly
@@ -122,6 +130,9 @@ def _scrub_executable_config(workspace: Path) -> None:
     exist afterwards, and only because it is rebuilt from the base tree."""
     _remove_node(workspace / ".mcp.json")
     _remove_node(workspace / ".claude")
+    # A head-committed skills index must never survive: the review prompt
+    # may point the agent at this path, so only Themis writes it.
+    _remove_node(workspace / SKILLS_INDEX_PATH)
 
 
 def _safe_dest(workspace: Path, rel_path: str) -> Path | None:
@@ -291,7 +302,8 @@ def _write(writes: list[tuple[Path, bytes | None]]) -> int:
 
 
 async def apply_trusted_context(
-    workspace: Path, base_ref: str, *, context: bool, skills: bool
+    workspace: Path, base_ref: str, *, context: bool, skills: bool,
+    skills_index: bool = False,
 ) -> tuple[bool, bool]:
     """Prepare the synthetic workspace; returns the effective capabilities.
 
@@ -332,13 +344,16 @@ async def apply_trusted_context(
         context = await _apply_capability(
             workspace, entries, seeds, capability="context",
             skip_instruction_refs=False, skip_skills_refs=not skills,
-        )
+        ) is not None
     if skills:
         seeds = [path for path in entries if path.startswith(SKILLS_PREFIX)]
-        skills = await _apply_capability(
+        writes = await _apply_capability(
             workspace, entries, seeds, capability="skills",
             skip_instruction_refs=not context, skip_skills_refs=False,
         )
+        skills = writes is not None
+        if skills and skills_index:
+            _write_skills_index(workspace, writes or [])
     return context, skills
 
 
@@ -350,7 +365,8 @@ async def _apply_capability(
     capability: str,
     skip_instruction_refs: bool,
     skip_skills_refs: bool,
-) -> bool:
+) -> list[tuple[Path, bytes | None]] | None:
+    """The applied writes on success, None when the capability fails closed."""
     try:
         writes = await _plan(
             workspace, entries, seeds, capability=capability,
@@ -362,9 +378,9 @@ async def _apply_capability(
             "themis_trusted_context_disabled capability=%s reason=git_error"
             " error=%s", capability, str(error)[:200],
         )
-        return False
+        return None
     if writes is None:
-        return False
+        return None
     try:
         written = _write(writes)
     except OSError as error:
@@ -375,9 +391,84 @@ async def _apply_capability(
             "themis_trusted_context_disabled capability=%s reason=write_failed"
             " error=%s", capability, str(error)[:200],
         )
-        return False
+        return None
     logger.info(
         "themis_trusted_context_applied capability=%s files=%d bytes=%d",
         capability, len(writes), written,
     )
-    return True
+    return writes
+
+
+def _skill_frontmatter(text: str) -> dict | None:
+    """The yaml frontmatter mapping of a SKILL.md, or None when absent or
+    malformed. Same shape the claude harness reads; parsed leniently because
+    a broken skill must only cost its own index entry."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for end, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            try:
+                data = yaml.safe_load("\n".join(lines[1:end]))
+            except yaml.YAMLError:
+                return None
+            return data if isinstance(data, dict) else None
+    return None
+
+
+def _write_skills_index(
+    workspace: Path, writes: list[tuple[Path, bytes | None]]
+) -> None:
+    """Synthesize the skills index for engines without native skill
+    discovery (issue #49), from the base blobs the skills capability just
+    materialized. Failure leaves no index; the capability itself stands."""
+    entries: list[str] = []
+    skipped = 0
+    for dest, content in sorted(writes, key=lambda item: item[0].as_posix()):
+        relative = dest.relative_to(workspace).as_posix()
+        parts = relative.split("/")
+        if content is None or len(parts) != 4 or parts[-1] != "SKILL.md":
+            continue  # not a `.claude/skills/<name>/SKILL.md` entry
+        frontmatter = _skill_frontmatter(content.decode(errors="replace"))
+        description = (frontmatter or {}).get("description")
+        if not isinstance(description, str) or not description.strip():
+            skipped += 1
+            logger.warning(
+                "themis_skills_index_skipped path=%s reason=no_description",
+                relative,
+            )
+            continue
+        name = frontmatter.get("name")
+        if not isinstance(name, str) or not name.strip():
+            name = parts[2]
+        description = " ".join(description.split())
+        if len(description) > MAX_INDEX_DESCRIPTION:
+            description = description[:MAX_INDEX_DESCRIPTION].rstrip() + "…"
+        entries.append(f"- **{name.strip()}** — {description} (`{relative}`)")
+    if len(entries) > MAX_INDEX_ENTRIES:
+        logger.warning(
+            "themis_skills_index_truncated total=%d kept=%d",
+            len(entries), MAX_INDEX_ENTRIES,
+        )
+        entries = entries[:MAX_INDEX_ENTRIES]
+    if not entries:
+        logger.info("themis_skills_index_empty skipped=%d", skipped)
+        return
+    body = (
+        "# Repository skills index\n\n"
+        "Generated by Themis from the PR base revision. Each entry is a\n"
+        "reviewer skill. When an entry's description matches the code under\n"
+        "review, read its SKILL.md and follow it.\n\n"
+        + "\n".join(entries) + "\n"
+    )
+    dest = workspace / SKILLS_INDEX_PATH
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _remove_node(dest)
+        dest.write_text(body)
+    except OSError as error:
+        logger.warning(
+            "themis_skills_index_failed error=%s", str(error)[:200]
+        )
+        return
+    logger.info("themis_skills_index_written entries=%d", len(entries))
