@@ -23,15 +23,21 @@ _HYGIENE_ENV = {
 }
 
 
-def build_command(prompt: str, model: str, web_access: bool) -> list[str]:
+def build_command(
+    prompt: str, model: str, web_access: bool, native_discovery: bool = False
+) -> list[str]:
+    # Default: never load repo-controlled CLAUDE.md, settings, hooks, skills,
+    # agents, plugins, or MCP servers from the untrusted PR checkout. With
+    # native_discovery the workspace has been rebuilt by trusted_context.py
+    # (instructions/skills from the PR base, executable surfaces scrubbed),
+    # so project-level discovery may run; MCP stays pinned empty either way.
+    setting_sources = "project" if native_discovery else ""
     command = [
         "claude", "-p", prompt,
         "--model", model,
         "--dangerously-skip-permissions",
         "--safe-mode",
-        # Never load repo-controlled CLAUDE.md, settings, hooks, skills,
-        # agents, plugins, or MCP servers from the untrusted PR checkout.
-        "--setting-sources", "",
+        "--setting-sources", setting_sources,
         "--strict-mcp-config",
         "--mcp-config", '{"mcpServers":{}}',
         "--output-format", "text",
@@ -61,6 +67,7 @@ class ClaudeEngine:
     async def run(
         self, *, prompt: str, workspace: Path, model: str, effort: str,
         timeout: float, web_access: bool = False,
+        native_context: bool = False, native_skills: bool = False,
     ) -> str:
         # effort is accepted for protocol parity; the claude CLI has no
         # reasoning-effort flag.
@@ -72,7 +79,10 @@ class ClaudeEngine:
             }
             return await run_cli(
                 name=self.name,
-                command=build_command(prompt, model, web_access),
+                command=build_command(
+                    prompt, model, web_access,
+                    native_discovery=native_context or native_skills,
+                ),
                 workspace=workspace,
                 env=env,
                 timeout=timeout,

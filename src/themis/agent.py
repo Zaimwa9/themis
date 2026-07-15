@@ -35,6 +35,8 @@ class RunRequest(BaseModel):
     effort: str
     timeout: float
     web_access: bool = False
+    native_context: bool = False
+    native_skills: bool = False
 
 
 def create_agent_app() -> FastAPI:
@@ -91,6 +93,8 @@ def create_agent_app() -> FastAPI:
                     effort=request.effort,
                     timeout=request.timeout,
                     web_access=request.web_access,
+                    native_context=request.native_context,
+                    native_skills=request.native_skills,
                 )
             _redact_agent_outputs(workspace)
             return {"output": redact_outbound(output)}

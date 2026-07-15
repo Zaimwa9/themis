@@ -8,11 +8,13 @@ from themis.agent import create_agent_app
 
 class FakeEngine:
     name = "claude"
+    last_kwargs: dict = {}
 
     def available(self):
         return True
 
     async def run(self, *, workspace: Path, **kwargs):
+        type(self).last_kwargs = kwargs
         (workspace / "ran").write_text("yes")
         if kwargs.get("prompt") == "leak":
             output = workspace / ".review-output"
@@ -85,6 +87,37 @@ def test_run_executes_inside_shared_workspace(monkeypatch, tmp_path):
     assert response.status_code == 200
     assert response.json() == {"output": "done"}
     assert (workspace / "ran").read_text() == "yes"
+
+
+def test_run_passes_native_capability_flags_to_engine(monkeypatch, tmp_path):
+    (tmp_path / "job123").mkdir()
+    response = client(monkeypatch, tmp_path).post(
+        "/run",
+        headers={"Authorization": "Bearer agent-secret"},
+        json={
+            "engine": "claude", "workspace": "job123", "prompt": "p",
+            "model": "opus", "effort": "high", "timeout": 10,
+            "native_context": True, "native_skills": True,
+        },
+    )
+    assert response.status_code == 200
+    assert FakeEngine.last_kwargs["native_context"] is True
+    assert FakeEngine.last_kwargs["native_skills"] is True
+
+
+def test_run_defaults_native_capability_flags_off(monkeypatch, tmp_path):
+    (tmp_path / "job123").mkdir()
+    response = client(monkeypatch, tmp_path).post(
+        "/run",
+        headers={"Authorization": "Bearer agent-secret"},
+        json={
+            "engine": "claude", "workspace": "job123", "prompt": "p",
+            "model": "opus", "effort": "high", "timeout": 10,
+        },
+    )
+    assert response.status_code == 200
+    assert FakeEngine.last_kwargs["native_context"] is False
+    assert FakeEngine.last_kwargs["native_skills"] is False
 
 
 def test_run_redacts_engine_secret_before_crossing_boundary(monkeypatch, tmp_path):

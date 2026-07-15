@@ -10,18 +10,23 @@ _EXTRA_ENV = frozenset({"CODEX_HOME"})
 
 
 def build_command(
-    prompt: str, model: str, effort: str, sandbox: str, web_access: bool
+    prompt: str, model: str, effort: str, sandbox: str, web_access: bool,
+    native_context: bool = False,
 ) -> list[str]:
     command = [
         "codex", "exec",
         "--sandbox", sandbox,
         # Reviews run in untrusted PR workspaces. Keep authentication from
-        # CODEX_HOME, but never load repo rules or worker user configuration.
+        # CODEX_HOME; worker user configuration never loads.
         "--ignore-user-config",
-        "--ignore-rules",
         "-c", "approval_policy=never",
         "-c", f"model_reasoning_effort={effort}",
     ]
+    if not native_context:
+        # Repo rules (AGENTS.md) stay out unless the repo opted into trusted
+        # context, in which case trusted_context.py has already replaced
+        # every instruction file with its PR-base version.
+        command += ["--ignore-rules"]
     if web_access:
         # Doctrine-driven external checks (e.g. API contract verification)
         # need the network inside workspace-write.
@@ -43,10 +48,16 @@ class CodexEngine:
     async def run(
         self, *, prompt: str, workspace: Path, model: str, effort: str,
         timeout: float, web_access: bool = False,
+        native_context: bool = False, native_skills: bool = False,
     ) -> str:
+        # native_skills is accepted for protocol parity; codex has no skills
+        # surface, so the skills opt-in changes nothing here.
         return await run_cli(
             name="codex",
-            command=build_command(prompt, model, effort, self._sandbox, web_access),
+            command=build_command(
+                prompt, model, effort, self._sandbox, web_access,
+                native_context=native_context,
+            ),
             workspace=workspace,
             env=allowlisted_env(_EXTRA_ENV),
             timeout=timeout,

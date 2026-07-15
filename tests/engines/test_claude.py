@@ -58,6 +58,31 @@ async def test_run__argv__model_passthrough_and_flags(tmp_path, monkeypatch, wor
     assert "high" not in args
 
 
+async def test_run__native_context__project_setting_source(
+    tmp_path, monkeypatch, workspace
+):
+    _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt')
+
+    await _run(workspace, native_context=True)
+
+    args = (workspace / "args.txt").read_text()
+    assert "--setting-sources project" in args
+    # Native discovery must not weaken the MCP/permissions hardening.
+    assert "--strict-mcp-config" in args
+    assert '--mcp-config {"mcpServers":{}}' in args
+    assert "--safe-mode" in args
+
+
+async def test_run__native_skills_only__project_setting_source(
+    tmp_path, monkeypatch, workspace
+):
+    _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt')
+
+    await _run(workspace, native_skills=True)
+
+    assert "--setting-sources project" in (workspace / "args.txt").read_text()
+
+
 async def test_run__default__web_tools_disallowed(tmp_path, monkeypatch, workspace):
     _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt')
 

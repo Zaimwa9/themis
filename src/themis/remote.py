@@ -24,6 +24,7 @@ class RemoteEngine:
     async def run(
         self, *, prompt: str, workspace: Path, model: str, effort: str,
         timeout: float, web_access: bool = False,
+        native_context: bool = False, native_skills: bool = False,
     ) -> str:
         payload = {
             "engine": self.name,
@@ -33,6 +34,8 @@ class RemoteEngine:
             "effort": effort,
             "timeout": timeout,
             "web_access": web_access,
+            "native_context": native_context,
+            "native_skills": native_skills,
         }
         try:
             async with httpx.AsyncClient(
