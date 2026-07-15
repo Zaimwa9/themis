@@ -78,12 +78,9 @@ derivable from the code, a linter, or CI. If so, also write
 # --- summary modules: descriptors for the tri-state rendering -----------------
 
 _SECTION_DESCRIPTORS = {
-    "scorecard": (
-        "a compact four-row scorecard "
-        "(Correctness, Test coverage, Code quality, Product impact)"
-    ),
-    "walkthrough": "a walkthrough of at most 6 logical areas",
-    "product_impact": "a `**Product take:**` of at most 3 lines",
+    "scorecard": "a scorecard",
+    "walkthrough": "a walkthrough",
+    "product_impact": "a product take",
 }
 
 _OFF_SECTION_NAMES = {
@@ -142,6 +139,44 @@ def _substantive_paragraph(modules: dict[str, str]) -> str:
     return "   " + " ".join(sentences)
 
 
+def _scorecard_paragraph(modules: dict[str, str]) -> str | None:
+    if modules["scorecard"] == "off":
+        return None
+    return """\
+   Whenever the scorecard is included, render exactly this four-row table,
+   replacing each `n` with an integer from 1 to 5. Keep the score cells numeric;
+   put supporting explanation in the TL;DR, findings, or product take instead.
+
+   | | |
+   |---|---|
+   | 🎯 Correctness | n/5 |
+   | 🧪 Test coverage | n/5 |
+   | 📐 Code quality | n/5 |
+   | 🚀 Product impact | n/5 |"""
+
+
+def _walkthrough_paragraph(modules: dict[str, str]) -> str | None:
+    if modules["walkthrough"] == "off":
+        return None
+    return """\
+   Whenever the walkthrough is included, render it as a collapsed GitHub
+   details block: start with
+   `<details><summary><b>📝 Walkthrough</b></summary>`, add a blank line, then at
+   most 6 bullets mapping the logical areas of the change (`area` - what changed
+   and why), add another blank line, and finish with `</details>`. Do not replace
+   this with a visible Markdown heading."""
+
+
+def _product_impact_paragraph(modules: dict[str, str]) -> str | None:
+    if modules["product_impact"] == "off":
+        return None
+    return """\
+   Whenever the product take is included, start it with `**Product take:**` and
+   use at most 3 lines: explain what the change means for users or the product
+   and how much it matters relative to typical work in this codebase. Be frank:
+   major capability, solid improvement, or minor polish."""
+
+
 def _verify_paragraph(modules: dict[str, str]) -> str | None:
     if modules["verification_steps"] == "off":
         return None
@@ -183,14 +218,17 @@ def _sign_off_paragraph(modules: dict[str, str]) -> str | None:
     if modules["sign_off"] == "off":
         return None
     if modules["sign_off"] == "always":
-        return (
-            "   End every substantive review with a short PR-specific sign-off"
-            " ending in `· reviewed at <short HEAD sha>`; omit it from concise"
-            " reviews."
-        )
+        return """\
+   End every substantive review with one italic sign-off line: a short,
+   good-natured remark about this specific PR (dry humor welcome, never snark),
+   ending in `· reviewed at <short HEAD sha>`. Keep the entire line inside one
+   pair of `*` markers. Omit it from concise reviews."""
     return """\
-   A short PR-specific sign-off ending in `· reviewed at <short HEAD sha>` is
-   optional for substantive reviews and should be omitted from concise reviews."""
+   When a sign-off is included, use one italic line: a short, good-natured
+   remark about this specific PR (dry humor welcome, never snark), ending in
+   `· reviewed at <short HEAD sha>`. Keep the entire line inside one pair of `*`
+   markers. It is optional for substantive reviews and omitted from concise
+   reviews."""
 
 
 def _findings_rules(modules: dict[str, str]) -> str:
@@ -247,24 +285,30 @@ def _findings_rules(modules: dict[str, str]) -> str:
 
 
 def _render_output_contract(modules: dict[str, str]) -> str:
-    optional_paragraphs = "\n\n".join(
+    scorecard_paragraph = _scorecard_paragraph(modules)
+    scorecard_section = (
+        f"\n\n{scorecard_paragraph}\n" if scorecard_paragraph is not None else ""
+    )
+    post_findings_paragraphs = "\n\n".join(
         paragraph
         for paragraph in (
+            _walkthrough_paragraph(modules),
             _verify_paragraph(modules),
+            _product_impact_paragraph(modules),
             _assumptions_paragraph(modules),
             _sign_off_paragraph(modules),
         )
         if paragraph is not None
     )
-    if optional_paragraphs:
-        optional_paragraphs += "\n"
+    if post_findings_paragraphs:
+        post_findings_paragraphs += "\n"
     return f"""\
 Write your results to files. Never try to post to GitHub yourself; you have no
 GitHub access.
 
 1. `.review-output/summary.md` - always.
 
-   First line: `## 🤖 AI Review: <verdict>` where <verdict> matches your worst
+   First line: `## ⚖️ Themis judgement: <verdict>` where <verdict> matches your worst
    unacknowledged finding: `✅ Ship it` (nothing to flag) / `🧹 Ship it, nits inside`
    (nits only) / `🟠 Fix before merge` (majors) / `🔴 Hold the merge` (blockers).
 
@@ -275,6 +319,7 @@ GitHub access.
    section, or joke/sign-off merely to fill out the template.
 
 {_substantive_paragraph(modules)}
+{scorecard_section}
 
    Write one `### <emoji> <severity>` section per severity that has findings.
    Omit empty sections entirely; never write a section just to say "None".
@@ -310,7 +355,7 @@ GitHub access.
    code a finding covers changed materially since, raise it as open again -
    the acknowledgment applied to the code as it was.
 
-{optional_paragraphs}2. `.review-output/actions.json` - only when you have actions:
+{post_findings_paragraphs}2. `.review-output/actions.json` - only when you have actions:
 
     {{
       "findings": [

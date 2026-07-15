@@ -22,8 +22,8 @@ agent:
                            # (claude/glm engines; codex has no skills surface)
 review:
   modules:                 # always | auto | off (true = auto, false = off)
-    scorecard: always      # the four-row scoring table
-    walkthrough: always    # logical-area walkthrough
+    scorecard: always      # canonical four-row numeric /5 table
+    walkthrough: always    # collapsed logical-area details block
     product_impact: always # standalone product take
     verification_steps: auto  # the "How to verify" block
     assumptions: auto      # assumptions & unverified claims block

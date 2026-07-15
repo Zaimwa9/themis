@@ -124,12 +124,12 @@ extra for `always` to force. Their meaningful settings are `auto` and `off`.
 
 | Module | Default | Controls |
 |---|---|---|
-| `scorecard` | `always` | the Correctness / Test coverage / Code quality / Product impact table |
-| `walkthrough` | `always` | the logical-area walkthrough |
+| `scorecard` | `always` | the canonical four-row numeric `/5` Correctness / Test coverage / Code quality / Product impact table |
+| `walkthrough` | `always` | the logical-area walkthrough in a collapsed GitHub details block |
 | `product_impact` | `always` | the standalone `Product take:` narrative |
 | `verification_steps` | `auto` | the `🧪 How to verify` details block |
 | `assumptions` | `auto` | the `🧭 Assumptions & unverified claims` details block |
-| `sign_off` | `always` | the PR-specific sign-off with the reviewed-at SHA |
+| `sign_off` | `always` | the italic, good-natured PR-specific sign-off with the reviewed-at SHA |
 | `ci_context` | `auto` | CI commentary in the review body (CI is still collected as evidence) |
 | `inline_findings` | `auto` | posting findings as inline review comments; `off` folds every finding into the summary — every path/line pointer is kept, and bodies keep as much context as fits GitHub's comment cap — enforced at posting time, not just in the prompt |
 | `code_suggestions` | `auto` | GitHub ```suggestion blocks inside inline findings; `off` keeps the finding and states the fix as prose, enforced by stripping at posting time |
@@ -145,6 +145,10 @@ defaults to a full-dress substantive review: `scorecard`, `walkthrough`,
 `product_impact`, and `sign_off` resolve to `always`; the remaining modules
 resolve to `auto`. Each explicit valid value in `review.modules` overlays its
 own default, whether or not the repo has a committed doctrine.
+
+Presence is configurable, rendering is canonical: whenever those modules are
+included, the scorecard uses integer `/5` scores, the walkthrough uses a
+collapsed details block, and the sign-off remains one italic, PR-specific line.
 
 Separately, when the PR checkout has no `.themis/review.md`, Themis applies a
 built-in default doctrine (the repo-agnostic philosophy, severity calibration,
