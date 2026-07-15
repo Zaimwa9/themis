@@ -359,3 +359,40 @@ def test_repo_config__null_review_containers_keep_rest():
         assert config.engine == "claude", text
         resolved = resolve_modules(config)
         assert resolved == resolve_modules(parse_repo_config(None))
+
+
+def test_repo_config__agent_defaults_off():
+    config = parse_repo_config("engine: claude\n")
+    assert config.agent.context is False
+    assert config.agent.skills is False
+
+
+def test_repo_config__agent_opt_in_independent():
+    config = parse_repo_config("agent:\n  context: true\n")
+    assert config.agent.context is True
+    assert config.agent.skills is False
+    config = parse_repo_config("agent:\n  skills: true\n")
+    assert config.agent.context is False
+    assert config.agent.skills is True
+
+
+def test_repo_config__agent_invalid_value_degrades_and_keeps_rest(caplog):
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(
+            "engine: claude\nagent:\n  context: sometimes\n  skills: true\n"
+        )
+    assert config.engine == "claude"
+    assert config.agent.context is False  # invalid value falls to the default
+    assert config.agent.skills is True  # sibling key unaffected
+    assert "themis_invalid_agent_capability" in caplog.text
+
+
+def test_repo_config__agent_wrong_or_null_container_keeps_rest(caplog):
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config("engine: claude\nagent: 7\n")
+    assert config.engine == "claude"
+    assert config.agent.context is False and config.agent.skills is False
+    assert "themis_invalid_agent_config" in caplog.text
+    config = parse_repo_config("engine: claude\nagent:\n")  # yaml null
+    assert config.engine == "claude"
+    assert config.agent.context is False and config.agent.skills is False
