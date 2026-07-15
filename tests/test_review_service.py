@@ -101,7 +101,7 @@ def cleanup_calls() -> list[Path]:
 
 
 def _review_agent():
-    async def agent(*, prompt, workspace, model, effort, timeout, web_access) -> str:
+    async def agent(*, prompt, workspace, model, effort, timeout, web_access, **kwargs) -> str:
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
         (out / "summary.md").write_text("#### AI Review\nfine")
@@ -115,7 +115,7 @@ def _review_agent():
 
 
 def _reply_agent(text: str = "here is the answer"):
-    async def agent(*, prompt, workspace, model, effort, timeout, web_access) -> str:
+    async def agent(*, prompt, workspace, model, effort, timeout, web_access, **kwargs) -> str:
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
         (out / "reply.md").write_text(text)
@@ -152,6 +152,58 @@ def service(gh: AsyncMock, tmp_path: Path, cleanup_calls: list[Path]) -> ReviewS
         changed_lines=changed_lines,
         head_sha=head_sha,
     )
+
+
+async def test_review__agent_opt_in__trusted_context_applied_and_flags_flow(
+    service, gh
+):
+    gh.get_file_text.return_value = "agent:\n  context: true\n  skills: true\n"
+    trust_calls = {}
+
+    async def fake_trust(workspace, base_ref, *, context, skills):
+        trust_calls["args"] = (base_ref, context, skills)
+        return True, False  # skills failed closed inside materialization
+
+    service.trust_context = fake_trust
+    captured = {}
+
+    async def agent(*, workspace, **kwargs):
+        captured.update(kwargs)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({"findings": []}))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert trust_calls["args"] == ("main", True, True)
+    # The engine gets the *effective* capabilities, not the requested ones.
+    assert captured["native_context"] is True
+    assert captured["native_skills"] is False
+
+
+async def test_review__agent_defaults__no_trusted_context_no_flags(service, gh):
+    async def fail_trust(*args, **kwargs):
+        raise AssertionError("trusted context must not run without opt-in")
+
+    service.trust_context = fail_trust
+    captured = {}
+
+    async def agent(*, workspace, **kwargs):
+        captured.update(kwargs)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### AI Review\nfine")
+        (out / "actions.json").write_text(json.dumps({"findings": []}))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert captured["native_context"] is False
+    assert captured["native_skills"] is False
 
 
 async def test_review__no_output_written__codex_stdout_tail_logged(service, gh, caplog):
@@ -1457,7 +1509,7 @@ async def test_review__pending_store_io_error__review_proceeds(service, gh):
 
 
 def _learning_reply_agent(learning: dict | None):
-    async def agent(*, prompt, workspace, model, effort, timeout, web_access) -> str:
+    async def agent(*, prompt, workspace, model, effort, timeout, web_access, **kwargs) -> str:
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
         (out / "reply.md").write_text("understood")
