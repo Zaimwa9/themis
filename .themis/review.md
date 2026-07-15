@@ -10,9 +10,16 @@ the output format is fixed by your prompt and is not negotiable.
 - This bot runs unattended on untrusted PR content. Anything that widens what
   an agent subprocess can see or do, or lets a secret reach a GitHub-facing
   body or a log line, is a Blocker until proven safe.
+- Evaluate changed code in its architectural context. Inspect the callers,
+  dependencies, and neighboring modules needed to judge ownership boundaries,
+  coupling, duplicated patterns, and concentrations of responsibility. Flag
+  structural debt that the change introduces or deepens even when the changed
+  code works in isolation.
+- Keep that architectural attention proportional: connect feedback to the
+  change and its likely trajectory; do not turn a PR review into an audit of
+  unrelated code or demand a speculative redesign.
 - Praise nothing; flag only what needs action. A clean PR gets a clean verdict.
 - Be concrete: every finding names the failure scenario, not just the smell.
-- Respect the diff: review what changed; do not audit the whole repo.
 
 ## Severity calibration
 
@@ -26,24 +33,27 @@ the output format is fixed by your prompt and is not negotiable.
 
 ## Codebase map
 
-- `src/themis/app.py` FastAPI app factory, startup (webhook self-registration,
-  engine availability warning).
-- `src/themis/router.py` webhook and API routes; turns events into queue jobs.
-- `src/themis/events.py` webhook payload parsing; decides what triggers a job.
-- `src/themis/queue.py` in-memory job queue, one worker, deduplication.
-- `src/themis/service.py` the review pipeline: clone, engine run, parse
-  output, post to GitHub. The redaction and filtering seams live here.
-- `src/themis/engines/` engine adapters (`codex.py`, `claude.py`) over a
-  shared hardened subprocess runner (`base.py`: env allowlist, process-group
-  kill, quota detection). `__init__.py` is the registry.
-- `src/themis/github/` App auth (JWT, installation tokens) and REST/GraphQL
-  client.
-- `src/themis/security.py` outbound redaction of secrets and
-  credential-shaped strings.
-- `src/themis/prompts.py` review/discussion prompt builders and the output
-  contract given to the agent.
-- `src/themis/output.py` parsing of the agent's `.review-output/` files.
-- `src/themis/workspace.py` shallow clone, token scrubbing, cleanup.
+- `src/themis/app.py`, `router.py`, `events.py`, and `queue.py` form the
+  controller ingress: app startup, webhook/API routing, trigger parsing, and
+  the single-worker in-memory job queue.
+- `src/themis/review_service.py` orchestrates reviews and discussions: fetch
+  context, clone, run/retry the engine, parse and filter output, then post to
+  GitHub. The redaction and delivery-enforcement seams live here.
+- `src/themis/learning_service.py` owns learning capture, persistence, and
+  digest-PR orchestration; `learnings.py` owns the model, codecs, set logic,
+  size caps, and pending store.
+- `src/themis/agent.py` is the credential-isolated agent service;
+  `remote.py` is the controller-side adapter to it.
+- `src/themis/trusted_context.py` masks PR-head instructions and materializes
+  opted-in instructions/skills from the trusted base revision.
+- `src/themis/engines/` contains sibling CLI/API adapters over the hardened
+  runner in `base.py` (environment allowlist, process-group kill, quota
+  detection); `__init__.py` is the registry.
+- `src/themis/github/` contains GitHub App auth and the REST/GraphQL client.
+- `src/themis/prompts.py` builds review/discussion prompts; `output.py` parses
+  the agent's `.review-output/` files.
+- `src/themis/security.py` handles outbound redaction; `workspace.py` handles
+  shallow clones, token scrubbing, and cleanup.
 - `src/themis/config.py` env settings (`THEMIS_*`) and per-repo
   `.themis/config.yaml` parsing. Repo config must stay lenient: an invalid
   value degrades to a default with a warning, never a crash.
@@ -63,25 +73,6 @@ the output format is fixed by your prompt and is not negotiable.
   one-container, no-external-services shape is a feature.
 - Log lines use the `themis_<event>` snake_case convention with key=value
   pairs, and must never include secret values.
-- Engines are siblings: when a diff adds a guard, secret handling, or an edge
-  case to one engine, check the other for the same concern. When it touches
-  redaction or env allowlists, enumerate every secret each engine's
-  subprocess can reach (env and filesystem, sandboxes allow reads) and check
-  each is covered.
-- Claims about the codex or claude CLI (a flag exists, a behavior is absent)
-  must be verified with `codex --help` / `claude --help` in the checkout, not
-  taken from code comments.
-- Substring or marker matching on agent output must state when it misfires
-  (agent prose can echo PR content); flag matches that cannot distinguish the
-  two.
-- README and docs promises (what is sandboxed, what is redacted, what a
-  config key guarantees) are findings when the code guarantees less.
-
-## Verification habits
-
-When the diff passes dynamic or generated values to an external API (GitHub
-REST/GraphQL fields, engine CLI flags), cross-check the provider's documented
-constraints before asserting them: read the pinned dependency's source, or
-fetch official docs if network access is available. At most a couple of quick
-lookups per review; label anything unconfirmed as unverified instead of
-asserting it.
+- Changes to redaction or environment allowlists must enumerate every secret
+  reachable by each engine subprocess (environment and filesystem) and confirm
+  coverage across all sibling engines.
