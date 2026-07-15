@@ -15,6 +15,11 @@ triggers:
 learnings:
   enabled: true            # false = no capture, injection, or digest PRs
   digest_threshold: 10     # pending learnings that open/update the digest PR
+agent:
+  context: false           # true = native CLAUDE.md/AGENTS.md discovery, resolved
+                           # from the PR base revision (never the PR head)
+  skills: false            # true = native .claude/skills discovery, same rule
+                           # (claude/glm engines; codex has no skills surface)
 review:
   modules:                 # always | auto | off (true = auto, false = off)
     scorecard: always      # the four-row scoring table

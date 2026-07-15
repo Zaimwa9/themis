@@ -44,7 +44,8 @@ the agent's reach:
 
 The agent subprocess runs on untrusted PR content inside the agent container. Its environment is
 allowlisted per engine: codex sees only `CODEX_HOME` beyond the base set and
-runs with `--ignore-user-config --ignore-rules`, so it authenticates from
+runs with `--ignore-user-config` (plus `--ignore-rules` unless the repo
+opted into trusted context, below), so it authenticates from
 `auth.json` without loading worker config or repo `.rules` files; claude sees
 `CLAUDE_CODE_OAUTH_TOKEN` plus non-secret hygiene flags; glm sees
 its provider key as `ANTHROPIC_AUTH_TOKEN` plus the same hygiene flags.
@@ -110,6 +111,20 @@ web tools per repo with `web_access: true` (default-branch controlled);
 deployments with strict requirements should route the agent through an egress
 proxy allowlisting Anthropic's required endpoints. Container separation
 protects GitHub credentials but does not itself restrict outbound networking.
+
+## Trusted native context (`agent.context` / `agent.skills`)
+
+Repos can opt back into native instruction-file and skills discovery (see
+[docs/configuration.md](configuration.md)). The boundary that keeps this
+safe: everything the agent may discover is materialized from the **PR base
+revision** before the run — never the working-tree copy at the PR head —
+and every head-only instruction file or skill is removed first, so a PR
+cannot add or modify the instructions used during its own review. Base
+`@`-references resolve from the base tree only; a reference only the head
+could satisfy fails the capability closed. Executable surfaces (settings,
+hooks, plugins, agents, MCP config) are scrubbed unconditionally: the
+opt-in never widens execution, only instructions. User-level configuration
+stays disabled in all modes.
 
 ## Single-tenant by design
 

@@ -12,6 +12,15 @@ to choose repositories. Those ownership decisions cannot be made through the
 GitHub CLI or REST API. Everything before, between, and after them is handled
 by the bootstrap.
 
+The bootstrap is a one-time step per App, not per deployment. The credentials
+it writes to `.env` (client id, private key, webhook secret) identify the App
+permanently: upgrading the image, restarting the stack, or moving the
+deployment directory to another machine needs no re-authorization, and the
+webhook URL re-registers itself at startup whenever the tunnel or public URL
+changes. Re-run the bootstrap only to create a *different* App — a separate
+environment, a lost `.env`, or a compromised key (delete the old App in
+GitHub settings in the latter two cases).
+
 ## Public deployment
 
 Run this on the machine that will host Themis:

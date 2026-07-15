@@ -64,6 +64,9 @@ triggers:
 learnings:
   enabled: true            # false = no capture, no injection, no digest PR
   digest_threshold: 10
+agent:
+  context: false           # true = load CLAUDE.md/AGENTS.md natively, from the PR base
+  skills: false            # true = load .claude/skills natively, from the PR base
 review:
   modules:                 # always | auto | off (booleans accepted: true = auto, false = off)
     scorecard: always
@@ -90,6 +93,8 @@ review:
 | `learnings.enabled` | `true` | per-repo learnings memory; see [docs/learnings.md](learnings.md) |
 | `learnings.digest_threshold` | `10` | pending learnings needed before Themis opens/updates the digest PR (min 1) |
 | `review.modules.<name>` | per-module profile | tri-state presence per optional review section: `always`, `auto`, or `off`; see below |
+| `agent.context` | `false` | the review agent natively discovers instruction files (`CLAUDE.md`, `AGENTS.md`) — resolved from the PR base revision, never the PR head; see below |
+| `agent.skills` | `false` | the review agent natively discovers `.claude/skills` packages — same base-revision rule; claude/glm only (codex has no skills surface) |
 
 A partial file overlays the defaults key by key, so you only need to set the
 fields you want to change. Unknown fields are ignored. An invalid field warns
@@ -146,6 +151,41 @@ built-in default doctrine (the repo-agnostic philosophy, severity calibration,
 and verification habits from `examples/themis/review.md`) instead of reviewing
 doctrine-less. A committed doctrine replaces that free-text guidance wholesale;
 it does not change the presentation defaults.
+
+### Trusted agent context (`agent`)
+
+By default the review agent loads **nothing** from the repository: no
+`CLAUDE.md`/`AGENTS.md`, no settings, no hooks, no skills, no MCP servers. A
+PR could otherwise rewrite the reviewer's instructions and steer its own
+review. The `agent` keys opt back into the useful part of that surface
+without the injection risk:
+
+- `agent.context: true` — instruction files (`CLAUDE.md`, `AGENTS.md`,
+  including nested ones) are discovered natively by the engine, plus the
+  files they `@`-reference.
+- `agent.skills: true` — skill packages under `.claude/skills/` are
+  discovered natively (claude/glm engines; codex has no skills surface).
+
+Both are independent and off by default, and they are repository behavior:
+they can only be set in `.themis/config.yaml` (read from the default
+branch), never through environment variables.
+
+When enabled, Themis rebuilds those namespaces in the PR workspace from the
+**PR base revision** before the agent starts: base versions are
+materialized at their canonical paths, PR-head-only instruction files and
+skills are removed, and executable configuration (`.claude/settings.json`,
+hooks, plugins, agents, commands, `.mcp.json`) is scrubbed regardless. The
+workspace is intentionally synthetic — application code from the PR head,
+agent inputs from the trusted base — and the review diff still shows
+changes to those files; they just don't influence the review that examines
+them.
+
+Everything fails closed per capability: a base instruction file referencing
+a path that only the PR head provides, oversized content (1 MiB per file,
+10 MiB and 200 files per capability), or a path that would escape the
+workspace disables that capability for the run and leaves its namespace
+empty — exactly the no-opt-in behavior. Reviews only; discussion jobs keep
+the fully-disabled baseline.
 
 ### Instance-level default (`THEMIS_DEFAULT_REPO_CONFIG`)
 
