@@ -36,14 +36,29 @@ MAX_TOTAL_BYTES = 10_485_760  # 10 MiB per capability
 MAX_FILES = 200  # per capability
 MAX_REF_DEPTH = 5  # matches the claude harness's own import depth limit
 
-# Claude Code import forms: @path, @./path, @../path (any relative depth).
-_REF_PATTERN = re.compile(
-    r"(?:^|\s)@((?:\.\.?/)*[A-Za-z0-9_][A-Za-z0-9_./-]*)", re.MULTILINE
+# Claude Code imports are `@` + a non-whitespace path run, evaluated only
+# outside code fences and code spans. Matching the provider grammar exactly
+# matters in both directions: an untracked form leaves a PR-head file
+# loadable; an over-matched one overwrites PR files with base content.
+_IMPORT_PATTERN = re.compile(r"(?:^|\s)@(\S+)")
+_FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_CODE_SPAN_PATTERNS = (
+    re.compile(r"``.+?``", re.DOTALL),
+    re.compile(r"`[^`\n]*`"),
 )
 
 
 class TrustedContextError(Exception):
     pass
+
+
+class _UnsupportedImport(Exception):
+    """An import form we cannot resolve from the base tree (absolute,
+    home-relative, or escaping the workspace). Fails the capability closed."""
+
+    def __init__(self, ref: str) -> None:
+        super().__init__(ref)
+        self.ref = ref
 
 
 async def _git_bytes(workspace: Path, *args: str, timeout: float = 60) -> bytes:
@@ -123,14 +138,45 @@ def _safe_dest(workspace: Path, rel_path: str) -> Path | None:
     return workspace / rel_path
 
 
+def _importable_text(text: str) -> str:
+    """Drop code fences and code spans: Claude does not evaluate imports
+    there, so neither may the planner. Fence handling mirrors GFM (closing
+    fence matches the opener's character at >= length; unclosed runs to the
+    end), because a mismatch in either direction is a real defect: treating
+    prose as code hides an import a PR-head file could satisfy, treating
+    code as prose overwrites PR files the reviewer should be assessing."""
+    kept: list[str] = []
+    open_fence: tuple[str, int] | None = None
+    for line in text.splitlines():
+        match = _FENCE_LINE.match(line)
+        if match:
+            run = match.group(1)
+            if open_fence is None:
+                open_fence = (run[0], len(run))
+                continue
+            if run[0] == open_fence[0] and len(run) >= open_fence[1]:
+                open_fence = None
+                continue
+        if open_fence is None:
+            kept.append(line)
+    prose = "\n".join(kept)
+    for pattern in _CODE_SPAN_PATTERNS:
+        prose = pattern.sub(" ", prose)
+    return prose
+
+
 def _refs_in(text: str, referrer: str) -> list[list[str]]:
-    """Candidate repo-relative paths per @-reference, in resolution priority
-    (relative to the referring file first, then repo root)."""
+    """Candidate repo-relative paths per @-import, in resolution priority
+    (relative to the referring file first, then repo root). Raises
+    _UnsupportedImport for forms that cannot be resolved from the base tree
+    (absolute, home-relative, workspace-escaping)."""
     candidates = []
     referrer_dir = posixpath.dirname(referrer)
-    for ref in _REF_PATTERN.findall(text):
-        if "://" in ref or ref.startswith(("http:", "https:")):
-            continue
+    for ref in _IMPORT_PATTERN.findall(_importable_text(text)):
+        if "://" in ref:
+            continue  # a URL, not a file import
+        if ref.startswith(("/", "~")):
+            raise _UnsupportedImport(ref)
         ordered = []
         for candidate in (posixpath.join(referrer_dir, ref), ref):
             normal = posixpath.normpath(candidate)
@@ -138,8 +184,11 @@ def _refs_in(text: str, referrer: str) -> list[list[str]]:
                 continue
             if normal not in ordered:
                 ordered.append(normal)
-        if ordered:
-            candidates.append(ordered)
+        if not ordered:
+            # Every resolution escapes the workspace: a deliberate outside
+            # import we cannot pin to the base tree.
+            raise _UnsupportedImport(ref)
+        candidates.append(ordered)
     return candidates
 
 
@@ -197,7 +246,12 @@ async def _plan(
         writes.append((dest, content))
         if depth >= MAX_REF_DEPTH or not path.endswith(".md"):
             continue
-        for candidates in _refs_in(content.decode(errors="ignore"), path):
+        try:
+            ref_lists = _refs_in(content.decode(errors="ignore"), path)
+        except _UnsupportedImport as error:
+            disabled("unsupported_import", error.ref)
+            return None
+        for candidates in ref_lists:
             for candidate in candidates:
                 if skip_instruction_refs and (
                     posixpath.basename(candidate) in _MASK_BASENAMES

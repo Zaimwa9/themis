@@ -280,6 +280,84 @@ async def test_apply__file_to_directory_change_does_not_crash(tmp_path):
     assert (workspace / "CLAUDE.md").read_text() == "base rules\n"
 
 
+async def test_apply__dotfile_reference_materialized(tmp_path):
+    base = dict(BASE_FILES)
+    base["CLAUDE.md"] = "rules\n@.review-rules.md\n"
+    base[".review-rules.md"] = "base review rules\n"
+    source = make_source_repo(
+        tmp_path, base_files=base,
+        pr_files={".review-rules.md": "EVIL rules\n"},
+    )
+    workspace = make_workspace(tmp_path, source)
+
+    context, _ = await apply_trusted_context(
+        workspace, "main", context=True, skills=False
+    )
+
+    # Dotfile imports are valid Claude Code syntax; leaving them untracked
+    # leaves the PR-head copy loadable.
+    assert context is True
+    assert (workspace / ".review-rules.md").read_text() == "base review rules\n"
+
+
+async def test_apply__absolute_and_home_imports_fail_closed(tmp_path, caplog):
+    for ref in ("/etc/rules.md", "~/rules.md", "../../outside.md"):
+        root = tmp_path / ref.replace("/", "_").replace("~", "h")
+        root.mkdir()
+        base = dict(BASE_FILES)
+        base["CLAUDE.md"] = f"rules\n@{ref}\n"
+        source = make_source_repo(root, base_files=base, pr_files={"app.py": "x\n"})
+        workspace = make_workspace(root, source)
+
+        with caplog.at_level(logging.WARNING):
+            context, _ = await apply_trusted_context(
+                workspace, "main", context=True, skills=False
+            )
+
+        # Imports outside the workspace cannot be base-materialized or
+        # verified; the capability fails closed rather than guessing.
+        assert context is False, ref
+        assert not (workspace / "CLAUDE.md").exists(), ref
+    assert "unsupported_import" in caplog.text
+
+
+async def test_apply__code_blocks_and_spans_are_not_imports(tmp_path):
+    base = dict(BASE_FILES)
+    base["CLAUDE.md"] = (
+        "rules\n"
+        "```yaml\n"
+        "@config.yaml\n"
+        "```\n"
+        "and inline `@settings.py` example\n"
+        "but a real import:\n"
+        "@docs/style.md\n"
+    )
+    base["config.yaml"] = "base: true\n"
+    base["settings.py"] = "BASE = 1\n"
+    source = make_source_repo(
+        tmp_path, base_files=base,
+        pr_files={
+            "config.yaml": "pr: true\n",
+            "settings.py": "PR = 1\n",
+            "docs/style.md": "EVIL style\n",
+        },
+    )
+    workspace = make_workspace(tmp_path, source)
+
+    context, _ = await apply_trusted_context(
+        workspace, "main", context=True, skills=False
+    )
+
+    assert context is True
+    # Claude does not evaluate imports inside code fences or spans, so the
+    # planner must not overwrite the PR-head files they mention — the
+    # reviewer would otherwise assess stale content.
+    assert (workspace / "config.yaml").read_text() == "pr: true\n"
+    assert (workspace / "settings.py").read_text() == "PR = 1\n"
+    # Real imports outside code regions still follow the base.
+    assert (workspace / "docs/style.md").read_text() == "base style\n"
+
+
 async def test_apply__url_references_are_ignored(tmp_path):
     base = dict(BASE_FILES)
     base["CLAUDE.md"] = "rules\nsee @https://example.com/doc and @docs/style.md\n"
