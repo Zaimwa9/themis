@@ -10,13 +10,20 @@ _EXTRA_ENV = frozenset({"CODEX_HOME"})
 
 
 def build_command(
-    prompt: str, model: str, effort: str, sandbox: str, web_access: bool
+    prompt: str, model: str, effort: str, sandbox: str, web_access: bool,
+    native_context: bool = False,
 ) -> list[str]:
     command = [
         "codex", "exec",
         "--sandbox", sandbox,
         # Reviews run in untrusted PR workspaces. Keep authentication from
-        # CODEX_HOME, but never load repo rules or worker user configuration.
+        # CODEX_HOME; worker user configuration and repo execpolicy .rules
+        # files never load. Note --ignore-rules does NOT cover AGENTS.md:
+        # codex discovers that natively and has no flag against it, so
+        # instruction-file isolation is the workspace mask applied by
+        # trusted_context.py before every job. The context opt-in changes
+        # nothing here; it materializes trusted base copies for that same
+        # native discovery to read.
         "--ignore-user-config",
         "--ignore-rules",
         "-c", "approval_policy=never",
@@ -43,10 +50,16 @@ class CodexEngine:
     async def run(
         self, *, prompt: str, workspace: Path, model: str, effort: str,
         timeout: float, web_access: bool = False,
+        native_context: bool = False, native_skills: bool = False,
     ) -> str:
+        # native_skills is accepted for protocol parity; codex has no skills
+        # surface, so the skills opt-in changes nothing here.
         return await run_cli(
             name="codex",
-            command=build_command(prompt, model, effort, self._sandbox, web_access),
+            command=build_command(
+                prompt, model, effort, self._sandbox, web_access,
+                native_context=native_context,
+            ),
             workspace=workspace,
             env=allowlisted_env(_EXTRA_ENV),
             timeout=timeout,

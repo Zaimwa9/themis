@@ -128,6 +128,27 @@ class LearningsConfig(BaseModel):
         return 10
 
 
+class AgentConfig(BaseModel):
+    """Opt-in trusted native context for the review agent (issue #9).
+
+    Both default off: the safe baseline is an agent that loads nothing from
+    the repository. Opting in loads instruction files (context) and skill
+    packages (skills) from the PR *base* revision only, never the PR head."""
+
+    context: bool = False
+    skills: bool = False
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _bool_or_default(cls, value: object) -> object:
+        """An invalid capability value must not void the rest of the config,
+        and must fail toward the safe default (off)."""
+        if isinstance(value, bool):
+            return value
+        logger.warning("themis_invalid_agent_capability value=%s", str(value)[:50])
+        return False
+
+
 class RepoConfig(BaseModel):
     engine: str | None = None
     web_access: bool = False
@@ -136,6 +157,7 @@ class RepoConfig(BaseModel):
     triggers: TriggersConfig = TriggersConfig()
     learnings: LearningsConfig = LearningsConfig()
     review: ReviewConfig = ReviewConfig()
+    agent: AgentConfig = AgentConfig()
 
     @field_validator("engine", mode="before")
     @classmethod
@@ -158,6 +180,18 @@ class RepoConfig(BaseModel):
             return value
         logger.warning("themis_invalid_review_config value=%s", str(value)[:50])
         return ReviewConfig()
+
+    @field_validator("agent", mode="before")
+    @classmethod
+    def _agent_mapping_or_default(cls, value: object) -> object:
+        """Same isolation again; a malformed agent section degrades to the
+        all-off defaults without taking engine/limits with it."""
+        if value is None:
+            return AgentConfig()  # yaml null: `agent:` with no keys
+        if isinstance(value, dict | AgentConfig):
+            return value
+        logger.warning("themis_invalid_agent_config value=%s", str(value)[:50])
+        return AgentConfig()
 
 
 def parse_repo_config(text: str | None) -> RepoConfig:

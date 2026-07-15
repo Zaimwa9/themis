@@ -70,6 +70,18 @@ async def test_run__argv__hardening_flags_and_model(tmp_path, monkeypatch, works
     assert "--disallowedTools WebFetch,WebSearch" in args
 
 
+async def test_run__native_context__project_setting_source(
+    tmp_path, monkeypatch, workspace
+):
+    _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt')
+
+    await _run(workspace, native_context=True)
+
+    args = (workspace / "args.txt").read_text()
+    assert "--setting-sources project" in args
+    assert "--strict-mcp-config" in args
+
+
 async def test_run__config_dir__isolated(tmp_path, monkeypatch, workspace):
     _fake_cli(tmp_path, monkeypatch, "env > env.txt")
 

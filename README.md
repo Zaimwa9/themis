@@ -44,9 +44,15 @@ private key and webhook secret, install it on the requested repository, and
 write a ready-to-run deployment. There are no GitHub settings to copy. GitHub
 still asks the account owner to approve App creation and repository access.
 
-> **Why not long-term?** The manifest flow generates a random App name and must
-> be re-run on every fresh deployment. For a permanent install, use the
-> [Production setup](#production-setup-manual-github-app) below.
+> **Why not long-term?** Only the App *name*: the manifest flow generates a
+> random one and it can't be reserved in advance. The App itself is created
+> once — the credentials in the generated `.env` stay valid across image
+> upgrades, restarts, and machine moves, and the webhook URL re-registers
+> itself at startup, so you never re-run the bootstrap for the same
+> deployment. Re-running is only for a *new* App (fresh environment, key
+> rotation, or a `.env` you no longer have). For a stable name and
+> `@mention`, use the [Production setup](#production-setup-manual-github-app)
+> below.
 
 ### Using a coding agent
 
@@ -292,6 +298,8 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `learnings.enabled` | `true` | `false` disables capturing, injecting, and digesting [learnings](docs/learnings.md) for this repo |
 | `learnings.digest_threshold` | `10` | pending learnings that trigger the digest PR (minimum 1) |
 | `review.modules.<name>` | full-dress profile | `always` \| `auto` \| `off` per optional review section; scorecard, walkthrough, product impact, and sign-off default to `always`, the rest to `auto`; see [`docs/configuration.md`](docs/configuration.md) |
+| `agent.context` | `false` | agent natively discovers `CLAUDE.md`/`AGENTS.md`, always resolved from the PR base revision so a PR can't steer its own review; see [`docs/configuration.md`](docs/configuration.md) |
+| `agent.skills` | `false` | agent natively discovers `.claude/skills` packages, same base-revision rule (claude/glm engines) |
 
 Can't commit `.themis/config.yaml` to the target repo (yet)? Set
 `THEMIS_DEFAULT_REPO_CONFIG` on the controller to the same yaml (raw or

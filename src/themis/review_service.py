@@ -36,6 +36,7 @@ from themis.output import (
     parse_reply,
 )
 from themis.prompts import DOCTRINE_PATH, build_discussion_prompt, build_review_prompt
+from themis.trusted_context import apply_trusted_context
 from themis.security import redact_outbound
 from themis.remote import RemoteEngine
 from themis.workspace import (
@@ -188,6 +189,7 @@ class ReviewService:
         git_changed_lines
     )
     head_sha: Callable[[Path], Awaitable[str | None]] = git_head_sha
+    trust_context: Callable[..., Awaitable[tuple[bool, bool]]] = apply_trusted_context
     learning_service: LearningService | None = None
 
     async def _fetch_repo_config(self, gh: Any, repo: str) -> RepoConfig:
@@ -280,6 +282,18 @@ class ReviewService:
                 depth=repo_config.limits.clone_depth,
             )
             try:
+                # Trusted native context (issue #9). Runs on EVERY review:
+                # even with no opt-in, PR-head instruction files must be
+                # masked from the working tree because codex discovers
+                # AGENTS.md natively with no CLI flag against it. Opted-in
+                # capabilities additionally materialize the PR-base versions.
+                # Returns the *effective* capabilities; materialization
+                # fails closed per capability.
+                native_context, native_skills = await self.trust_context(
+                    workspace, pr["base"]["ref"],
+                    context=repo_config.agent.context,
+                    skills=repo_config.agent.skills,
+                )
                 _write_inputs(workspace, pr, threads, learnings=learnings)
 
                 async def snapshot_ci() -> None:
@@ -318,6 +332,7 @@ class ReviewService:
                 actions = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
                     parse_output, noun="review", before_first_run=snapshot_ci,
+                    native_context=native_context, native_skills=native_skills,
                 )
                 if actions is None:
                     return
@@ -409,6 +424,12 @@ class ReviewService:
                 depth=repo_config.limits.clone_depth,
             )
             try:
+                # Discussions keep the fully-disabled baseline, but the mask
+                # still runs: codex's native AGENTS.md discovery has no CLI
+                # off-switch, so head instruction files must not be present.
+                await self.trust_context(
+                    workspace, pr["base"]["ref"], context=False, skills=False
+                )
                 _write_inputs(
                     workspace, pr, [thread] if thread else [], learnings=learnings
                 )
@@ -467,6 +488,8 @@ class ReviewService:
         parser: Callable[[Path], T],
         noun: str,
         before_first_run: Callable[[], Awaitable[None]] | None = None,
+        native_context: bool = False,
+        native_skills: bool = False,
     ) -> T | None:
         """Run the engine + parse, with retries. Returns None when the quota is exhausted."""
         last_error: Exception = EngineError("no attempts ran")
@@ -486,6 +509,8 @@ class ReviewService:
                         effort=repo_config.model.reasoning_effort,
                         timeout=repo_config.limits.timeout_seconds,
                         web_access=repo_config.web_access,
+                        native_context=native_context,
+                        native_skills=native_skills,
                     )
                 try:
                     return parser(workspace)

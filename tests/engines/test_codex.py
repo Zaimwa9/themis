@@ -13,12 +13,23 @@ from themis.engines.codex import CodexEngine
 async def run_codex(
     *, prompt, workspace, model, effort, timeout,
     sandbox="workspace-write", web_access=False,
+    native_context=False, native_skills=False,
 ):
     # Local adapter so the ported test bodies below stay unchanged.
     return await CodexEngine(sandbox=sandbox).run(
         prompt=prompt, workspace=workspace, model=model, effort=effort,
         timeout=timeout, web_access=web_access,
+        native_context=native_context, native_skills=native_skills,
     )
+
+
+async def _run(workspace: Path, **overrides) -> str:
+    kwargs = dict(
+        prompt="review this", workspace=workspace,
+        model="gpt-5.4", effort="high", timeout=10,
+    )
+    kwargs.update(overrides)
+    return await run_codex(**kwargs)
 
 pytestmark = pytest.mark.asyncio
 
@@ -66,6 +77,22 @@ async def test_run_codex__argv__contains_exec_model_effort_and_prompt(
     assert "--ignore-user-config" in args
     assert "--ignore-rules" in args
     assert "review this" in args
+
+
+async def test_run_codex__native_context__rules_still_ignored(
+    tmp_path, monkeypatch, workspace
+):
+    _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt')
+
+    await _run(workspace, native_context=True)
+
+    args = (workspace / "args.txt").read_text()
+    # --ignore-rules covers execpolicy .rules files, not AGENTS.md: it stays
+    # in every mode (PR-controlled exec policies must never load). AGENTS.md
+    # isolation is the workspace mask; the opt-in just materializes trusted
+    # base copies that codex's default discovery then reads.
+    assert "--ignore-rules" in args
+    assert "--ignore-user-config" in args
 
 
 async def test_run_codex__sandbox_override__lands_in_argv(tmp_path, monkeypatch, workspace):

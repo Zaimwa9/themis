@@ -98,3 +98,21 @@ async def test_run_sends_bearer_token_and_workspace_name(tmp_path):
     )
     assert seen["auth"] == "Bearer secret"
     assert b'"workspace":"job123"' in seen["payload"]
+
+
+async def test_run_forwards_native_capability_flags(tmp_path):
+    seen = {}
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = request.read()
+        return httpx.Response(200, json={"output": "done"})
+
+    engine = RemoteEngine(
+        "claude", "http://agent", "secret", transport=httpx.MockTransport(capture)
+    )
+    await engine.run(
+        prompt="review", workspace=tmp_path / "job123", model="opus", effort="high",
+        timeout=10, native_context=True, native_skills=False,
+    )
+    assert b'"native_context":true' in seen["payload"]
+    assert b'"native_skills":false' in seen["payload"]
