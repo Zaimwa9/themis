@@ -87,6 +87,7 @@ _OFF_SECTION_NAMES = {
     "scorecard": "a scorecard",
     "walkthrough": "a walkthrough",
     "product_impact": "a product take",
+    "big_picture": "a big-picture note",
     "verification_steps": "a `🧪 How to verify` block",
     "assumptions": "an assumptions section",
     "sign_off": "a sign-off",
@@ -167,6 +168,27 @@ def _product_impact_paragraph(modules: dict[str, str]) -> str | None:
    and how much it matters relative to typical work in this codebase. Be frank:
    major capability, solid improvement, or minor polish. When there is no
    material product impact, write `**Product take:** No material product impact.`"""
+
+
+def _big_picture_paragraph(modules: dict[str, str]) -> str | None:
+    if modules["big_picture"] == "off":
+        return None
+    if modules["big_picture"] == "always":
+        return """\
+   Start the big-picture note with `**Big picture:**` and use at most 4 lines:
+   name the responsibility the change concentrates or the boundary it crosses,
+   the evidence in this diff, why the trajectory matters, and the smallest
+   useful boundary or direction - no named patterns, no speculative redesigns.
+   Include it on every review: when the structural pass raises no concern,
+   write `**Big picture:** Fits the existing boundaries.`"""
+    return """\
+   When the big-picture note is included, start it with `**Big picture:**` and
+   use at most 4 lines: name the responsibility the change concentrates or the
+   boundary it crosses, the evidence in this diff, why the trajectory matters,
+   and the smallest useful boundary or direction - no named patterns, no
+   speculative redesigns. Include it only when the change and its immediate
+   context provide that evidence; when the structural pass raises no concern,
+   omit the note entirely rather than writing filler."""
 
 
 def _verify_paragraph(modules: dict[str, str]) -> str | None:
@@ -266,6 +288,7 @@ def _render_output_contract(modules: dict[str, str]) -> str:
             _walkthrough_paragraph(modules),
             _verify_paragraph(modules),
             _product_impact_paragraph(modules),
+            _big_picture_paragraph(modules),
             _assumptions_paragraph(modules),
             _sign_off_paragraph(modules),
         )
@@ -365,6 +388,43 @@ labels inside findings (inline bodies and severity-section bullets) and write
 the TL;DR and assessment as natural prose. Environment limitations (tools or
 commands unavailable in the sandbox) get at most one short caveat line, never
 the opening of the review."""
+
+
+def _big_picture_analysis(modules: dict[str, str]) -> str:
+    if modules["big_picture"] == "off":
+        trajectory_sentence = (
+            "A maintainability trajectory - code that works today but materially"
+            " concentrates responsibility, coupling, duplication, or lifecycle"
+            " complexity - is not reported for this repository, and you must never"
+            " inflate one into a defect to keep it."
+        )
+    else:
+        trajectory_sentence = (
+            "A maintainability trajectory - code that works today but materially"
+            " concentrates responsibility, coupling, duplication, or lifecycle"
+            " complexity - belongs in the big-picture note described in the output"
+            " contract, stated as trajectory, never dressed up as a failure that"
+            " has not happened."
+        )
+    return f"""\
+After the detailed pass, take one deliberate step back and ask how the change
+fits the surrounding system: which responsibility it introduces or expands,
+which component owns it, and whether cohesion, ownership boundaries, coupling,
+lifecycle complexity, or change blast radius move in the wrong direction. Read
+just enough surrounding context to judge that - the owning component, its
+closest collaborators, their tests; this is not a license to audit the
+repository. File size alone is not a structural signal, and neither is the use
+or absence of a familiar design pattern; the signal is responsibilities versus
+boundaries: unrelated reasons to change, independent state machines sharing one
+owner, repeated sensitive behavior across paths, widening fixture setup, a
+component becoming the integration point for separable domains.
+
+Report a current structural defect - a design that already creates a concrete
+correctness, security, testability, operability, or change-safety problem - as
+a normal calibrated finding at its severity.
+{trajectory_sentence}
+When neither exists, say nothing about structure: silence is the correct
+output, not a hedge."""
 
 
 def _ci_paragraph(modules: dict[str, str]) -> str:
@@ -481,6 +541,8 @@ scenario if one exists.
 When the diff changes user-facing docs (README, security or config docs) or
 behavior they describe, check the claims against the code; a doc that promises
 more than the code guarantees is a finding.
+
+{_big_picture_analysis(resolved_modules)}
 
 Keep observed evidence and predicted impact distinct throughout the summary and
 inline findings. `Observed` means directly established from the checked-out code,

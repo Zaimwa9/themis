@@ -300,6 +300,7 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `learnings.enabled` | `true` | `false` disables capturing, injecting, and digesting [learnings](docs/learnings.md) for this repo |
 | `learnings.digest_threshold` | `10` | pending learnings that trigger the digest PR (minimum 1) |
 | `review.modules.<name>` | full-dress profile | `always` \| `auto` \| `off` per optional review section; all six presentation categories default to enabled and only `off` suppresses them; see [`docs/configuration.md`](docs/configuration.md) |
+| `review.modules.big_picture` | `auto` | the `Big picture:` architecture/maintainability note; `auto` shows it only when the change provides concrete structural evidence (no empty-state filler), `always` pins it, `off` suppresses the note while structural defects still surface as findings |
 | `agent.context` | `false` | agent natively discovers `CLAUDE.md`/`AGENTS.md`, always resolved from the PR base revision so a PR can't steer its own review; see [`docs/configuration.md`](docs/configuration.md) |
 | `agent.skills` | `false` | agent uses `.claude/skills` packages, same base-revision rule — natively on claude/glm, via a synthesized index (skills bridge) on codex |
 

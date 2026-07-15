@@ -284,6 +284,7 @@ def test_repo_config__review_modules_unset_resolve_global_profile():
     assert resolved["ci_context"] == "auto"
     assert resolved["inline_findings"] == "auto"
     assert resolved["code_suggestions"] == "auto"
+    assert resolved["big_picture"] == "auto"
 
 
 def test_repo_config__review_modules_tri_state_values():
