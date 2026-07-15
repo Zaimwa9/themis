@@ -110,8 +110,8 @@ def _presentation_paragraph(modules: dict[str, str]) -> str:
     ]
     off = [_OFF_SECTION_NAMES[n] for n in _OFF_SECTION_NAMES if modules[n] == "off"]
     sentences = [
-        "For a substantive change, start with a 2-4 sentence TL;DR and retain"
-        " detail where it adds useful review signal."
+        "Start with a TL;DR proportionate to the change and retain detail where"
+        " it adds useful review signal."
     ]
     if enabled:
         verb = "are" if len(enabled) > 1 else "is"
@@ -174,12 +174,11 @@ def _verify_paragraph(modules: dict[str, str]) -> str | None:
         return None
     return """\
    Add `<details><summary><b>🧪 How to verify</b></summary>` on every review. Add
-   a blank line, then at most 3 one-line steps covering the riskiest paths
-   first, and finish with `</details>`. For internal changes, use commands or
-   tests instead of user-visible steps. If a cheap automated check would cover
-   the change, end with one `Automate:` line. When there is nothing beyond
-   completed checks, use the single line `No additional verification steps.`
-   inside the block."""
+   a blank line, then 3-5 one-line steps covering the riskiest paths first, and
+   finish with `</details>`. For internal changes, give commands or tests rather
+   than user-visible steps. If a cheap automated check would cover the change,
+   end with one `Automate:` line. When there is nothing beyond completed checks,
+   use the single line `No additional verification steps.` inside the block."""
 
 
 def _assumptions_paragraph(modules: dict[str, str]) -> str | None:
@@ -187,10 +186,10 @@ def _assumptions_paragraph(modules: dict[str, str]) -> str | None:
         return None
     return """\
    Add `<details><summary><b>🧭 Assumptions & unverified claims</b></summary>` on
-   every review. Add a blank line, list at most 3 one-line load-bearing claims
-   the review relied on but could not verify, then finish with `</details>`.
-   When there are none, use the single line
-   `No unverified assumptions or claims.` inside the block."""
+   every review. Add a blank line, list the load-bearing claims the review
+   relied on but could not verify, then finish with `</details>`. When there are
+   none, use the single line `No unverified assumptions or claims.` inside the
+   block."""
 
 
 def _sign_off_paragraph(modules: dict[str, str]) -> str | None:
