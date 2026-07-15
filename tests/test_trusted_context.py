@@ -336,6 +336,29 @@ async def test_apply__symlink_entries_in_base_are_not_materialized(tmp_path):
     assert skills is True
 
 
+async def test_apply__base_symlink_reference_masks_head_node(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    _git("init", "-q", "-b", "main", cwd=source)
+    _write(source, {"CLAUDE.md": "rules\n@policy.md\n", "real.md": "real\n"})
+    (source / "policy.md").symlink_to("real.md")
+    _commit_all(source, "base")
+    _git("checkout", "-q", "-b", "pr", cwd=source)
+    (source / "policy.md").unlink()
+    _write(source, {"policy.md": "EVIL injected instructions\n"})
+    _commit_all(source, "pr")
+    workspace = make_workspace(tmp_path, source)
+
+    context, _ = await apply_trusted_context(
+        workspace, "main", context=True, skills=False
+    )
+
+    # The base entry is a symlink (never materialized), but the head node at
+    # that path must not survive either: Claude's @-import would load it.
+    assert context is True
+    assert not (workspace / "policy.md").exists()
+
+
 async def test_apply__oversized_file_disables_capability(tmp_path, caplog):
     base = dict(BASE_FILES)
     base["CLAUDE.md"] = "x" * (2 * 1024 * 1024)  # over the per-file limit

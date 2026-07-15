@@ -151,13 +151,13 @@ async def _plan(
     capability: str,
     skip_instruction_refs: bool,
     skip_skills_refs: bool,
-) -> list[tuple[Path, bytes]] | None:
+) -> list[tuple[Path, bytes | None]] | None:
     """Resolve seeds plus their @-references from the base tree into
     (destination, content) writes. None = fail closed (reason logged).
     All reads and checks happen here; nothing touches the working tree."""
     queue: list[tuple[str, int]] = [(path, 0) for path in seeds]
     planned: set[str] = set(seeds)
-    writes: list[tuple[Path, bytes]] = []
+    writes: list[tuple[Path, bytes | None]] = []
     total = 0
 
     def disabled(reason: str, path: str) -> None:
@@ -170,8 +170,14 @@ async def _plan(
         path, depth = queue.pop(0)
         mode, sha, size = entries[path]
         if mode not in ("100644", "100755"):
-            # Symlinks and submodules are never materialized; a skill or
-            # context entry silently thins rather than escaping the tree.
+            # Symlinks and submodules are never materialized — but the head
+            # node at that path must not survive either, or a PR could swap
+            # a base symlink for a real file and have the import load it.
+            dest = _safe_dest(workspace, path)
+            if dest is None:
+                disabled("unsafe_path", path)
+                return None
+            writes.append((dest, None))  # mask only
             logger.info(
                 "themis_trusted_context_skipped mode=%s path=%s", mode, path
             )
@@ -215,14 +221,19 @@ async def _plan(
     return writes
 
 
-def _write(writes: list[tuple[Path, bytes]]) -> int:
+def _write(writes: list[tuple[Path, bytes | None]]) -> int:
     for dest, content in writes:
+        if content is None:
+            # Mask-only entry: a base symlink/submodule at this path is
+            # never materialized, and no head node may remain there.
+            _remove_node(dest)
+            continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         # The head may have anything at this path — including a directory
         # where the base had a file; replace by type, never assume.
         _remove_node(dest)
         dest.write_bytes(content)
-    return sum(len(content) for _, content in writes)
+    return sum(len(content) for _, content in writes if content is not None)
 
 
 async def apply_trusted_context(
