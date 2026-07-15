@@ -8,3 +8,6 @@ limits:
   max_attempts: 2
 triggers:
   auto_review: true
+agent:
+  context: true            # trusted native instruction files (from the PR base)
+  skills: true             # trusted native skills (claude/glm engines)
