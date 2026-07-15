@@ -2217,12 +2217,12 @@ async def test_review__no_doctrine_in_checkout__default_doctrine_full_dress(
     flat = " ".join(prompts[0].split())
     assert "<doctrine>" in prompts[0]
     assert "## Severity calibration" in prompts[0]
-    # The default-doctrine presence profile raises scorecard etc. to `always`.
+    # The global presentation profile requires the full-dress sections.
     assert "required on every substantive review" in flat
     assert "themis_default_doctrine_used" in caplog.text
 
 
-async def test_review__doctrine_in_checkout__no_default_doctrine(
+async def test_review__committed_doctrine_keeps_global_presentation_defaults(
     service, gh, tmp_path
 ):
     doctrine = tmp_path / "ws" / ".themis" / "review.md"
@@ -2236,7 +2236,7 @@ async def test_review__doctrine_in_checkout__no_default_doctrine(
     flat = " ".join(prompts[0].split())
     assert "<doctrine>" not in prompts[0]
     assert "Read `.themis/review.md` in this checkout" in flat
-    assert "required on every substantive review" not in flat
+    assert "required on every substantive review" in flat
 
 
 async def test_review__repo_modules_reach_prompt_even_with_committed_doctrine(
@@ -2245,13 +2245,15 @@ async def test_review__repo_modules_reach_prompt_even_with_committed_doctrine(
     doctrine = tmp_path / "ws" / ".themis" / "review.md"
     doctrine.parent.mkdir(parents=True)
     doctrine.write_text("# Review doctrine\n")
-    gh.get_file_text.return_value = "review:\n  modules:\n    scorecard: always\n"
+    gh.get_file_text.return_value = "review:\n  modules:\n    scorecard: 'off'\n"
     prompts: list[str] = []
     service.resolve_engine = _resolver(_capturing_agent(prompts))
 
     await service.review(REPO, 7, 42, auto=True)
 
-    assert "required on every substantive review" in " ".join(prompts[0].split())
+    flat = " ".join(prompts[0].split())
+    assert "required on every substantive review" in flat  # other global defaults
+    assert "Never include a scorecard" in flat  # explicit field override
 
 
 async def test_review__inline_findings_off__findings_folded_into_summary(service, gh):

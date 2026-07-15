@@ -263,10 +263,11 @@ cp -r "$starter/examples/themis" .themis
   straight from the PR branch on every review.
 - `.themis/config.yaml`: behavior knobs, every key optional.
 
-No `.themis/review.md` yet? Themis falls back to a packaged default
-doctrine and turns on the full-dress presentation (scorecard, walkthrough,
-product take, sign-off) so a zero-config repo still gets the complete
-review. Committing your own doctrine replaces the packaged one wholesale.
+Every substantive review uses the full-dress presentation by default:
+scorecard, walkthrough, product take, and sign-off. A repo can override each
+section independently through `.themis/config.yaml`. If there is no
+`.themis/review.md`, Themis separately falls back to a packaged default
+doctrine; committing a doctrine replaces only that judgment guidance.
 
 How the doctrine is consumed and how to write one that works:
 [`docs/doctrine.md`](docs/doctrine.md). This repo reviews itself with its own
@@ -290,7 +291,7 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `triggers.auto_review` | `true` | `false` = mention-only, no auto-review when a PR opens or is marked ready for review |
 | `learnings.enabled` | `true` | `false` disables capturing, injecting, and digesting [learnings](docs/learnings.md) for this repo |
 | `learnings.digest_threshold` | `10` | pending learnings that trigger the digest PR (minimum 1) |
-| `review.modules.<name>` | `auto` | `always` \| `auto` \| `off` per optional review section (scorecard, walkthrough, product_impact, verification_steps, assumptions, sign_off, ci_context, inline_findings, code_suggestions); see [`docs/configuration.md`](docs/configuration.md) |
+| `review.modules.<name>` | full-dress profile | `always` \| `auto` \| `off` per optional review section; scorecard, walkthrough, product impact, and sign-off default to `always`, the rest to `auto`; see [`docs/configuration.md`](docs/configuration.md) |
 
 Can't commit `.themis/config.yaml` to the target repo (yet)? Set
 `THEMIS_DEFAULT_REPO_CONFIG` on the controller to the same yaml (raw or
