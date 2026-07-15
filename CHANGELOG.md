@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/Zaimwa9/themis/compare/v0.7.0...v0.7.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* keep enabled review categories visible ([#58](https://github.com/Zaimwa9/themis/issues/58)) ([7c1eeaf](https://github.com/Zaimwa9/themis/commit/7c1eeaf22ec9ffbf541d508677b377361d1e0ca4))
+
 ## [0.7.0](https://github.com/Zaimwa9/themis/compare/v0.6.0...v0.7.0) (2026-07-15)
 
 
