@@ -89,6 +89,9 @@ def test_build_review_prompt__inline_finding_format__label_title_suggestion_fix_
 def test_build_review_prompt__token_budget_rules__nit_brevity_cap_and_unanchorable():
     prompt = build_review_prompt("acme/widgets", 7, "main")
 
+    assert "2-4 sentence TL;DR" in prompt
+    assert "at most 3 one-line steps" in prompt
+    assert "at most 3 one-line load-bearing claims" in prompt
     assert "proportional to severity" in prompt
     assert "at most one sentence" in prompt
     assert "at most 5 inline nits" in prompt
