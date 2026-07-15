@@ -173,6 +173,72 @@ def test_build_review_prompt__assumptions_section():
     assert "No unverified assumptions or claims" in prompt
 
 
+def test_build_review_prompt__big_picture_analysis_is_baseline():
+    # Issue #44: the step-back structural pass is a baseline reviewer
+    # capability, present without any doctrine or module opt-in.
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+    flat = " ".join(prompt.split())
+
+    assert "step back" in flat
+    assert "responsibility" in flat
+    assert "coupling" in flat
+    assert "blast radius" in flat
+    # Evidence-gated, never a repo audit or a size/pattern heuristic.
+    assert "not a license to audit" in flat
+    assert "File size alone is not" in flat
+    assert "familiar design pattern" in flat
+    # Defect vs trajectory: only the former carries a severity.
+    assert "normal calibrated finding" in flat
+    assert "failure that has not happened" in flat
+    # Silence is the correct output when there is no structural signal.
+    assert "say nothing" in flat
+
+
+def test_build_review_prompt__big_picture_note__auto_is_evidence_gated():
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+    flat = " ".join(prompt.split())
+
+    assert "`**Big picture:**`" in prompt
+    assert "at most 4 lines" in flat
+    assert "omit the note entirely" in flat
+    # Adaptive, not a pinned presentation category: no forced empty-state.
+    assert "a big-picture note are required on every review" not in flat
+    assert "Fits the existing boundaries" not in flat
+
+
+def test_build_review_prompt__big_picture_note__canonical_position():
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+
+    assert prompt.index("`**Product take:**`") < prompt.index("`**Big picture:**`")
+    assert prompt.index("`**Big picture:**`") < prompt.index(
+        "<details><summary><b>🧭 Assumptions & unverified claims</b></summary>"
+    )
+
+
+def test_build_review_prompt__big_picture_always__must_appear():
+    prompt = build_review_prompt(
+        "acme/widgets", 7, "main", modules=_modules(big_picture="always")
+    )
+    flat = " ".join(prompt.split())
+
+    assert "Include it on every review" in flat
+    assert "`**Big picture:** Fits the existing boundaries.`" in flat
+
+
+def test_build_review_prompt__big_picture_off__note_gone_defects_stay_findings():
+    prompt = build_review_prompt(
+        "acme/widgets", 7, "main", modules=_modules(big_picture="off")
+    )
+    flat = " ".join(prompt.split())
+
+    assert "`**Big picture:**`" not in prompt
+    assert "Never include" in flat
+    # The analysis still runs: structural defects keep their severity even
+    # when the trajectory note is disabled.
+    assert "normal calibrated finding" in flat
+    assert "never inflate" in flat
+
+
 def test_build_review_prompt__unverified_findings_keep_severity():
     prompt = build_review_prompt("acme/widgets", 7, "main")
 

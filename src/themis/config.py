@@ -58,6 +58,7 @@ class ReviewModulesConfig(BaseModel):
     scorecard: str | None = None
     walkthrough: str | None = None
     product_impact: str | None = None
+    big_picture: str | None = None
     verification_steps: str | None = None
     assumptions: str | None = None
     sign_off: str | None = None

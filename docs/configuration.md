@@ -121,6 +121,14 @@ For `ci_context`, `auto` remains adaptive (failed checks are mentioned while
 neutral/passing states may be omitted), `always` reports every snapshot state,
 and `off` suppresses CI commentary.
 
+`big_picture` is adaptive too, by design: under `auto` (the default) the
+`Big picture:` note appears only when the change provides concrete structural
+evidence — there is no empty-state filler when it doesn't. `always` pins the
+note on every review (`Big picture: Fits the existing boundaries.` when clean),
+and `off` suppresses the note. The underlying step-back structural analysis
+runs regardless: a design that already causes a concrete problem is a normal
+calibrated finding, so `off` can never hide a defect.
+
 Booleans are accepted as lenient aliases (`true` → `auto`, `false` → `off`),
 and yaml's bare `off` parses as `false`, which lands on the same state. An
 invalid value warns and behaves as unset, retaining that module's default.
@@ -136,6 +144,7 @@ extra for `always` to force. Their meaningful settings are `auto` and `off`.
 | `scorecard` | `always` | the canonical four-row numeric `/5` Correctness / Test coverage / Code quality / Product impact table |
 | `walkthrough` | `always` | the logical-area walkthrough in a collapsed GitHub details block |
 | `product_impact` | `always` | the standalone `Product take:` narrative |
+| `big_picture` | `auto` | the `Big picture:` architecture/maintainability trajectory note. The step-back structural pass itself always runs; `off` suppresses only the note, and a structural defect with concrete consequences still surfaces as a calibrated finding |
 | `verification_steps` | `always` | the `🧪 How to verify` details block |
 | `assumptions` | `always` | the `🧭 Assumptions & unverified claims` details block |
 | `sign_off` | `always` | the italic, good-natured PR-specific sign-off with the reviewed-at SHA |
