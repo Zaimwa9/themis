@@ -580,8 +580,9 @@ async def test_apply__skills_index_description_truncated(tmp_path):
     )
 
     index = (workspace / INDEX_PATH).read_text()
-    assert "x" * 200 in index
-    assert "x" * 201 not in index
+    # The cap includes the ellipsis: 199 kept characters + "…" = 200.
+    assert "x" * 199 + "…" in index
+    assert "x" * 200 not in index
 
 
 async def test_apply__skills_index_entry_cap_logged(tmp_path, caplog):

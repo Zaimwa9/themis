@@ -443,7 +443,9 @@ def _write_skills_index(
             name = parts[2]
         description = " ".join(description.split())
         if len(description) > MAX_INDEX_DESCRIPTION:
-            description = description[:MAX_INDEX_DESCRIPTION].rstrip() + "…"
+            # The ellipsis counts against the cap: the rendered description
+            # never exceeds MAX_INDEX_DESCRIPTION characters.
+            description = description[: MAX_INDEX_DESCRIPTION - 1].rstrip() + "…"
         entries.append(f"- **{name.strip()}** — {description} (`{relative}`)")
     if len(entries) > MAX_INDEX_ENTRIES:
         logger.warning(
