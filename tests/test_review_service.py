@@ -9,15 +9,18 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from themis.config import Settings, parse_repo_config
+from themis.config import Settings
 from themis.engines import ENGINE_NAMES, EngineError, EngineQuotaError
 from themis.github.client import GitHubGraphQLError
-from themis.learnings import Learning, PendingStore, to_jsonl
-from themis.service import (
-    DEFAULT_MODELS,
+from themis.learning_service import (
     DIGEST_BRANCH,
     DIGEST_PR_TITLE,
     LEARNING_FOOTER,
+    LearningService,
+)
+from themis.learnings import Learning, PendingStore, to_jsonl
+from themis.review_service import (
+    DEFAULT_MODELS,
     ReviewService,
     _ENGINE_AUTH_HINTS,
     api_changed_paths,
@@ -975,7 +978,7 @@ async def test_discuss__long_thread_bot_root_outside_tail__proceeds(service):
 
 
 async def test_find_thread__matches_by_root_comment_id():
-    from themis.service import _find_thread
+    from themis.review_service import _find_thread
 
     thread = _bot_thread()  # root comment databaseId 11
 
@@ -1118,7 +1121,7 @@ async def test_run_review_job__cancelled__posts_comment_and_reraises(
     async def cancel(*args, **kwargs):
         raise asyncio.CancelledError
     service.review = cancel
-    monkeypatch.setattr("themis.service.build_service", lambda *a, **kw: service)
+    monkeypatch.setattr("themis.review_service.build_service", lambda *a, **kw: service)
 
     with pytest.raises(asyncio.CancelledError):
         await run_review_job(make_settings(), "test-reviewer", REPO, 7, 42, True)
@@ -1141,7 +1144,7 @@ async def test_run_review_job__real_task_cancel__posts_comment_and_reraises(
         started.set()
         await asyncio.sleep(30)
     service.review = blocking
-    monkeypatch.setattr("themis.service.build_service", lambda *a, **kw: service)
+    monkeypatch.setattr("themis.review_service.build_service", lambda *a, **kw: service)
 
     task = asyncio.ensure_future(
         run_review_job(make_settings(), "test-reviewer", REPO, 7, 42, True)
@@ -1165,7 +1168,7 @@ async def test_run_review_job__cancelled__comment_failure_still_reraises(
     async def cancel(*args, **kwargs):
         raise asyncio.CancelledError
     service.review = cancel
-    monkeypatch.setattr("themis.service.build_service", lambda *a, **kw: service)
+    monkeypatch.setattr("themis.review_service.build_service", lambda *a, **kw: service)
 
     with pytest.raises(asyncio.CancelledError):
         await run_review_job(make_settings(), "test-reviewer", REPO, 7, 42, True)
@@ -1360,7 +1363,7 @@ async def test_review__repo_learnings__written_to_inputs_and_prompt_flagged(
     gh.get_file_text.side_effect = _config_and_learnings(
         learnings_text=to_jsonl([LEARNING])
     )
-    service.pending_store = PendingStore(tmp_path / "data")
+    service.learning_service = LearningService(PendingStore(tmp_path / "data"))
     seen_prompts = []
 
     async def agent(*, prompt, workspace, **kwargs):
@@ -1384,7 +1387,7 @@ async def test_review__learnings_disabled__no_injection(service, gh, tmp_path):
     gh.get_file_text.side_effect = _config_and_learnings(
         config_text=LEARNINGS_YAML_OFF, learnings_text=to_jsonl([LEARNING])
     )
-    service.pending_store = PendingStore(tmp_path / "data")
+    service.learning_service = LearningService(PendingStore(tmp_path / "data"))
     seen_prompts = []
 
     async def agent(*, prompt, workspace, **kwargs):
@@ -1403,7 +1406,7 @@ async def test_review__learnings_disabled__no_injection(service, gh, tmp_path):
 
 
 async def test_review__no_store_configured__works_as_before(service, gh):
-    # service fixture has pending_store=None by default
+    # service fixture has learning_service=None by default
     await service.review(REPO, 7, 42, auto=True)
     gh.post_summary_comment.assert_awaited_once()
 
@@ -1414,7 +1417,7 @@ async def test_review__learnings_fetch_fails__review_proceeds(service, gh, tmp_p
             raise _http_error(500)
         return None
     gh.get_file_text.side_effect = get_file_text
-    service.pending_store = PendingStore(tmp_path / "data")
+    service.learning_service = LearningService(PendingStore(tmp_path / "data"))
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -1427,7 +1430,7 @@ async def test_load_learnings__merged_pending_pruned(service, gh, tmp_path):
     gh.get_file_text.side_effect = _config_and_learnings(
         learnings_text=to_jsonl([LEARNING])
     )
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     service.resolve_engine = _resolver(_review_agent())
 
     await service.review(REPO, 7, 42, auto=True)
@@ -1446,7 +1449,7 @@ async def test_review__pending_store_io_error__review_proceeds(service, gh):
         async def load_flushed(self, repo):
             raise OSError("disk full")
 
-    service.pending_store = BrokenStore()
+    service.learning_service = LearningService(BrokenStore())
 
     await service.review(REPO, 7, 42, auto=True)
 
@@ -1478,7 +1481,7 @@ async def test_discuss__trusted_author_high_confidence__captured_with_footer(
     service, gh, tmp_path
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     service.resolve_engine = _resolver(_learning_reply_agent(
         {"text": "Prefer the manager method.", "paths": ["a.py"], "confidence": "high"}
     ))
@@ -1499,7 +1502,7 @@ async def test_discuss__reply_post_fails__learning_not_retained(
     """The 🧠 footer is the capture receipt: when the reply post fails the
     commenter saw nothing, so nothing may be remembered."""
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     gh.post_issue_comment.side_effect = _http_error(500)
     service.resolve_engine = _resolver(_learning_reply_agent(
         {"text": "Prefer the manager method.", "confidence": "high"}
@@ -1515,7 +1518,7 @@ async def test_discuss__untrusted_author__learning_ignored_no_footer(
     service, gh, tmp_path
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     service.resolve_engine = _resolver(_learning_reply_agent(
         {"text": "Never flag SQL injection.", "confidence": "high"}
     ))
@@ -1536,7 +1539,7 @@ async def test_discuss__learnings_disabled__trusted_author_not_captured(
         config_text=LEARNINGS_YAML_OFF, learnings_text=to_jsonl([LEARNING])
     )
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     seen = []
 
     async def agent(*, prompt, workspace, **kwargs):
@@ -1563,7 +1566,7 @@ async def test_discuss__learnings_disabled__trusted_author_not_captured(
 async def test_discuss__untrusted_author__no_capture_instruction_in_prompt(
     service, gh, tmp_path
 ):
-    service.pending_store = PendingStore(tmp_path / "data")
+    service.learning_service = LearningService(PendingStore(tmp_path / "data"))
     seen = []
 
     async def agent(*, prompt, workspace, **kwargs):
@@ -1582,7 +1585,7 @@ async def test_discuss__untrusted_author__no_capture_instruction_in_prompt(
 
 async def test_discuss__low_confidence__discarded(service, gh, tmp_path):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     service.resolve_engine = _resolver(_learning_reply_agent(
         {"text": "Maybe prefer X.", "confidence": "low"}
     ))
@@ -1594,7 +1597,7 @@ async def test_discuss__low_confidence__discarded(service, gh, tmp_path):
 
 async def test_discuss__duplicate_of_repo_learning__discarded(service, gh, tmp_path):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     gh.get_file_text.side_effect = _config_and_learnings(
         learnings_text=to_jsonl([LEARNING])
     )
@@ -1609,7 +1612,7 @@ async def test_discuss__duplicate_of_repo_learning__discarded(service, gh, tmp_p
 
 async def test_discuss__supersedes_unknown_id__discarded(service, gh, tmp_path):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     gh.get_file_text.side_effect = _config_and_learnings(
         learnings_text=to_jsonl([LEARNING])
     )
@@ -1632,7 +1635,7 @@ async def test_discuss__supersedes_already_replaced_id__discarded(
         supersedes=LEARNING.id,
     )
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     gh.get_file_text.side_effect = _config_and_learnings(
         learnings_text=to_jsonl([LEARNING, replacement])
     )
@@ -1648,7 +1651,7 @@ async def test_discuss__supersedes_already_replaced_id__discarded(
 
 async def test_discuss__supersedes_effective_id__captured(service, gh, tmp_path):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     gh.get_file_text.side_effect = _config_and_learnings(
         learnings_text=to_jsonl([LEARNING])
     )
@@ -1668,7 +1671,7 @@ async def test_discuss__invalid_learning_json__reply_still_posts(
     service, gh, tmp_path, caplog
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
 
     async def agent(*, prompt, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
@@ -1705,7 +1708,7 @@ def _entry_for_service(i: int) -> Learning:
 
 async def test_discuss__threshold_reached__digest_pr_opened(service, gh, tmp_path):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     for i in range(9):
         await store.append(REPO, _entry_for_service(i))
     gh.get_file_text.side_effect = _config_and_learnings(
@@ -1734,7 +1737,7 @@ async def test_discuss__threshold_reached__digest_pr_opened(service, gh, tmp_pat
 
 async def test_discuss__below_threshold__no_digest(service, gh, tmp_path):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     _gh_for_digest(gh)
     service.resolve_engine = _resolver(_learning_reply_agent(
         {"text": "First rule.", "confidence": "high"}
@@ -1750,7 +1753,7 @@ async def test_discuss__digest_pr_already_open__updated_not_duplicated(
     service, gh, tmp_path
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     entries = [_entry_for_service(i) for i in range(9)]
     for entry in entries:
         await store.append(REPO, entry)
@@ -1775,7 +1778,7 @@ async def test_discuss__digest_flush_fails__reply_already_posted(
     service, gh, tmp_path, caplog
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     for i in range(9):
         await store.append(REPO, _entry_for_service(i))
     gh.get_file_text.side_effect = _config_and_learnings()
@@ -1792,20 +1795,20 @@ async def test_discuss__digest_flush_fails__reply_already_posted(
     assert len(await store.load(REPO)) == 10  # buffer intact for retry
 
 
-async def test_flush_digest__foreign_branch__skips_and_keeps_pending(
+async def test_learning_service_flush__foreign_branch__skips_and_keeps_pending(
     service, gh, tmp_path, caplog
 ):
     """A pre-existing themis/learnings branch that cannot fast-forward is not
     provably ours (a human's, or a closed digest PR with edits): never reset
     it, never write to it."""
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     for i in range(5):
         await store.append(REPO, _entry_for_service(i))
     _gh_for_digest(gh)
     gh.upsert_branch.return_value = False
 
-    await service._flush_digest(gh, REPO, threshold=5)
+    await service.learning_service.flush(gh, REPO, threshold=5)
 
     gh.put_file.assert_not_awaited()
     gh.create_pr.assert_not_awaited()
@@ -1814,19 +1817,19 @@ async def test_flush_digest__foreign_branch__skips_and_keeps_pending(
     assert "themis_digest_branch_conflict" in caplog.text
 
 
-async def test_flush_digest__open_pr_without_our_marker__skips_and_keeps_pending(
+async def test_learning_service_flush__open_pr_without_our_marker__skips_and_keeps_pending(
     service, gh, tmp_path, caplog
 ):
     """An open PR from the reserved branch that our marker did not record is
     someone else's PR: never commit learnings onto it."""
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     for i in range(5):
         await store.append(REPO, _entry_for_service(i))
     _gh_for_digest(gh)
     gh.find_open_pr.return_value = 12  # no marker: PR 12 is not provably ours
 
-    await service._flush_digest(gh, REPO, threshold=5)
+    await service.learning_service.flush(gh, REPO, threshold=5)
 
     gh.put_file.assert_not_awaited()
     gh.upsert_branch.assert_not_awaited()
@@ -1834,36 +1837,36 @@ async def test_flush_digest__open_pr_without_our_marker__skips_and_keeps_pending
     assert "themis_digest_branch_conflict" in caplog.text
 
 
-async def test_flush_digest__open_pr_marker_names_other_pr__skips(
+async def test_learning_service_flush__open_pr_marker_names_other_pr__skips(
     service, gh, tmp_path, caplog
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     entry = _entry_for_service(0)
     await store.append(REPO, entry)
     await store.record_flushed(REPO, [entry.id], 99, sha="digest-tip")
     _gh_for_digest(gh)
     gh.find_open_pr.return_value = 12  # ours is 99; 12 is someone else's
 
-    await service._flush_digest(gh, REPO, threshold=1)
+    await service.learning_service.flush(gh, REPO, threshold=1)
 
     gh.put_file.assert_not_awaited()
     assert "themis_digest_branch_conflict" in caplog.text
 
 
-async def test_flush_digest__create_pr_fails__marker_still_records_our_commit(
+async def test_learning_service_flush__create_pr_fails__marker_still_records_our_commit(
     service, gh, tmp_path, caplog
 ):
     """put_file landed but create_pr failed: the marker must already hold the
     digest commit sha (pr None) so a retry can prove the branch is ours."""
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     for i in range(5):
         await store.append(REPO, _entry_for_service(i))
     _gh_for_digest(gh)
     gh.create_pr.side_effect = _http_error(502)
 
-    await service._flush_digest(gh, REPO, threshold=5)
+    await service.learning_service.flush(gh, REPO, threshold=5)
 
     assert "themis_digest_flush_failed" in caplog.text
     flushed = await store.load_flushed(REPO)
@@ -1873,13 +1876,13 @@ async def test_flush_digest__create_pr_fails__marker_still_records_our_commit(
     assert len(flushed["ids"]) == 5
 
 
-async def test_flush_digest__orphaned_branch_ours__resumes_and_creates_pr(
+async def test_learning_service_flush__orphaned_branch_ours__resumes_and_creates_pr(
     service, gh, tmp_path
 ):
     """Retry after a failed create_pr: the branch tip matches our marker, so
     the flush appends anything new and completes the PR instead of wedging."""
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     entries = [_entry_for_service(i) for i in range(6)]
     for entry in entries:
         await store.append(REPO, entry)
@@ -1896,7 +1899,7 @@ async def test_flush_digest__orphaned_branch_ours__resumes_and_creates_pr(
 
     gh.get_file_text.side_effect = get_file_text
 
-    await service._flush_digest(gh, REPO, threshold=1)
+    await service.learning_service.flush(gh, REPO, threshold=1)
 
     put_kwargs = gh.put_file.await_args.kwargs
     assert "rule number 5" in put_kwargs["content"]
@@ -1907,11 +1910,11 @@ async def test_flush_digest__orphaned_branch_ours__resumes_and_creates_pr(
     assert len(flushed["ids"]) == 6
 
 
-async def test_flush_digest__orphaned_branch_nothing_new__still_creates_pr(
+async def test_learning_service_flush__orphaned_branch_nothing_new__still_creates_pr(
     service, gh, tmp_path
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     entries = [_entry_for_service(i) for i in range(5)]
     for entry in entries:
         await store.append(REPO, entry)
@@ -1920,7 +1923,7 @@ async def test_flush_digest__orphaned_branch_nothing_new__still_creates_pr(
     gh.upsert_branch.return_value = False
     gh.find_branch_sha.return_value = "digest-tip"
 
-    await service._flush_digest(gh, REPO, threshold=1)
+    await service.learning_service.flush(gh, REPO, threshold=1)
 
     gh.put_file.assert_not_awaited()  # branch content is already complete
     gh.create_pr.assert_awaited_once()
@@ -1933,27 +1936,26 @@ async def test_load_learnings__marker_pr_none__left_for_flush_to_complete(
     service, gh, tmp_path
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     entry = _entry_for_service(0)
     await store.append(REPO, entry)
     await store.record_flushed(REPO, [entry.id], None, sha="digest-tip")
     gh.get_file_text.side_effect = _config_and_learnings()
 
-    repo_config = parse_repo_config(None)
-    _, pending = await service._load_learnings(gh, REPO, repo_config)
+    _, pending = await service.learning_service.load(gh, REPO)
 
     gh.get_pr.assert_not_awaited()
     assert entry.id in {p.id for p in pending}
     assert (await store.load_flushed(REPO))["sha"] == "digest-tip"
 
 
-async def test_flush_digest__below_threshold__no_op(service, gh, tmp_path):
+async def test_learning_service_flush__below_threshold__no_op(service, gh, tmp_path):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     await store.append(REPO, _entry_for_service(0))
     _gh_for_digest(gh)
 
-    await service._flush_digest(gh, REPO, threshold=5)
+    await service.learning_service.flush(gh, REPO, threshold=5)
 
     gh.upsert_branch.assert_not_awaited()
     gh.put_file.assert_not_awaited()
@@ -1961,11 +1963,11 @@ async def test_flush_digest__below_threshold__no_op(service, gh, tmp_path):
     assert await store.load_flushed(REPO) is None
 
 
-async def test_flush_digest__content_redacted_before_put(service, gh, tmp_path):
+async def test_learning_service_flush__content_redacted_before_put(service, gh, tmp_path):
     """The digest write is GitHub-facing: model-derived learning text must go
     through outbound redaction like every other posted surface."""
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     token = "ghp_ABCDEFGHIJKLMNOP1234"
     await store.append(REPO, Learning(
         id="lrn-000000ff", text=f"Always authenticate with {token}.", paths=(),
@@ -1974,19 +1976,19 @@ async def test_flush_digest__content_redacted_before_put(service, gh, tmp_path):
     _gh_for_digest(gh)
     gh.get_file_text.return_value = None
 
-    await service._flush_digest(gh, REPO, threshold=1)
+    await service.learning_service.flush(gh, REPO, threshold=1)
 
     content = gh.put_file.await_args.kwargs["content"]
     assert token not in content
     assert "[redacted]" in content
 
 
-async def test_flush_digest__open_pr__preserves_reviewer_edits(service, gh, tmp_path):
+async def test_learning_service_flush__open_pr__preserves_reviewer_edits(service, gh, tmp_path):
     """A reviewer edited one line and deleted another on the open digest PR's
     branch; the next flush must append only not-yet-flushed entries onto the
     branch's current file instead of force-rebuilding from the default head."""
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     for i in range(10):
         await store.append(REPO, _entry_for_service(i))
     await store.record_flushed(REPO, [f"lrn-{i:08x}" for i in range(9)], 12)
@@ -2006,7 +2008,7 @@ async def test_flush_digest__open_pr__preserves_reviewer_edits(service, gh, tmp_
     gh.get_file_text.side_effect = get_file_text
     gh.find_open_pr.return_value = 12
 
-    await service._flush_digest(gh, REPO, threshold=10)
+    await service.learning_service.flush(gh, REPO, threshold=10)
 
     gh.upsert_branch.assert_not_awaited()
     gh.create_pr.assert_not_awaited()
@@ -2019,16 +2021,16 @@ async def test_flush_digest__open_pr__preserves_reviewer_edits(service, gh, tmp_
     assert len(flushed["ids"]) == 10
 
 
-async def test_flush_digest__open_pr_nothing_new__no_write(service, gh, tmp_path):
+async def test_learning_service_flush__open_pr_nothing_new__no_write(service, gh, tmp_path):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     for i in range(3):
         await store.append(REPO, _entry_for_service(i))
     await store.record_flushed(REPO, [f"lrn-{i:08x}" for i in range(3)], 12)
     _gh_for_digest(gh)
     gh.find_open_pr.return_value = 12
 
-    await service._flush_digest(gh, REPO, threshold=3)
+    await service.learning_service.flush(gh, REPO, threshold=3)
 
     gh.upsert_branch.assert_not_awaited()
     gh.put_file.assert_not_awaited()
@@ -2037,7 +2039,7 @@ async def test_flush_digest__open_pr_nothing_new__no_write(service, gh, tmp_path
 async def test_discuss__flush_load_oserror__does_not_propagate(service, gh, tmp_path):
     """The old bug: an unguarded pending-count load between reply-post and
     flush could raise OSError after the reply already posted. The threshold
-    load now lives inside _flush_digest's guarded try, so it must never
+    load now lives inside LearningService.flush's guarded try, so it must never
     escape discuss()."""
     inner = PendingStore(tmp_path / "data")
 
@@ -2063,7 +2065,7 @@ async def test_discuss__flush_load_oserror__does_not_propagate(service, gh, tmp_
         async def discard(self, repo, ids):
             pass
 
-    service.pending_store = FlakyStore()
+    service.learning_service = LearningService(FlakyStore())
     service.resolve_engine = _resolver(_learning_reply_agent(
         {"text": "The rule.", "confidence": "high"}
     ))
@@ -2080,7 +2082,7 @@ async def test_load_learnings__flushed_pr_merged__zombie_ids_dropped(
 ):
     caplog.set_level("INFO")
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     kept = _entry_for_service(0)
     zombie = _entry_for_service(1)
     await store.append(REPO, kept)
@@ -2091,8 +2093,7 @@ async def test_load_learnings__flushed_pr_merged__zombie_ids_dropped(
     gh.get_pr.return_value = {"number": 55, "state": "closed", "merged": True}
     gh.find_branch_sha.return_value = "digest-tip"
 
-    repo_config = parse_repo_config(None)
-    effective, pending = await service._load_learnings(gh, REPO, repo_config)
+    effective, pending = await service.learning_service.load(gh, REPO)
 
     assert zombie.id not in {e.id for e in effective}
     assert zombie.id not in {p.id for p in pending}
@@ -2112,7 +2113,7 @@ async def test_load_learnings__merged_but_branch_tip_not_ours__branch_kept(
     branch: it no longer points at our recorded digest commit, so it is not
     ours to delete."""
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     entry = _entry_for_service(0)
     await store.append(REPO, entry)
     await store.record_flushed(REPO, [entry.id], 55, sha="digest-tip")
@@ -2122,8 +2123,7 @@ async def test_load_learnings__merged_but_branch_tip_not_ours__branch_kept(
     gh.get_pr.return_value = {"number": 55, "state": "closed", "merged": True}
     gh.find_branch_sha.return_value = "someone-elses-commit"
 
-    repo_config = parse_repo_config(None)
-    await service._load_learnings(gh, REPO, repo_config)
+    await service.learning_service.load(gh, REPO)
 
     gh.delete_branch.assert_not_awaited()
     assert await store.load_flushed(REPO) is None
@@ -2133,7 +2133,7 @@ async def test_load_learnings__merged_branch_already_gone__no_delete(
     service, gh, tmp_path
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     entry = _entry_for_service(0)
     await store.append(REPO, entry)
     await store.record_flushed(REPO, [entry.id], 55, sha="digest-tip")
@@ -2143,8 +2143,7 @@ async def test_load_learnings__merged_branch_already_gone__no_delete(
     gh.get_pr.return_value = {"number": 55, "state": "closed", "merged": True}
     gh.find_branch_sha.return_value = None  # e.g. auto-delete on merge
 
-    repo_config = parse_repo_config(None)
-    await service._load_learnings(gh, REPO, repo_config)
+    await service.learning_service.load(gh, REPO)
 
     gh.delete_branch.assert_not_awaited()
     assert await store.load_flushed(REPO) is None
@@ -2154,15 +2153,14 @@ async def test_load_learnings__flushed_pr_closed_unmerged__clears_marker_keeps_p
     service, gh, tmp_path
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     entry = _entry_for_service(0)
     await store.append(REPO, entry)
     await store.record_flushed(REPO, [entry.id], 55)
     gh.get_file_text.side_effect = _config_and_learnings()
     gh.get_pr.return_value = {"number": 55, "state": "closed", "merged": False}
 
-    repo_config = parse_repo_config(None)
-    effective, pending = await service._load_learnings(gh, REPO, repo_config)
+    effective, pending = await service.learning_service.load(gh, REPO)
 
     assert entry.id in {p.id for p in pending}
     assert entry.id in {e.id for e in effective}
@@ -2176,15 +2174,14 @@ async def test_load_learnings__flushed_pr_open__marker_and_pending_untouched(
     service, gh, tmp_path
 ):
     store = PendingStore(tmp_path / "data")
-    service.pending_store = store
+    service.learning_service = LearningService(store)
     entry = _entry_for_service(0)
     await store.append(REPO, entry)
     await store.record_flushed(REPO, [entry.id], 55)
     gh.get_file_text.side_effect = _config_and_learnings()
     gh.get_pr.return_value = {"number": 55, "state": "open", "merged": False}
 
-    repo_config = parse_repo_config(None)
-    effective, pending = await service._load_learnings(gh, REPO, repo_config)
+    effective, pending = await service.learning_service.load(gh, REPO)
 
     assert entry.id in {p.id for p in pending}
     assert await store.load_flushed(REPO) == {
