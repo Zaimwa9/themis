@@ -12,6 +12,7 @@ from themis.config import (
     load_settings,
     parse_repo_config,
     resolve_modules,
+    skip_title_match,
 )
 
 REQUIRED = {
@@ -138,6 +139,85 @@ def test_repo_config_wrong_shape_falls_back_to_defaults():
 
 def test_repo_config_empty_file_is_defaults():
     assert parse_repo_config("") == RepoConfig()
+
+
+# --- triggers.skip_titles ----------------------------------------------------
+
+
+def test_repo_config__skip_titles_default_empty():
+    assert parse_repo_config(None).triggers.skip_titles == ()
+
+
+def test_repo_config__skip_titles_parsed():
+    text = "triggers:\n  skip_titles:\n    - 'ci: *'\n    - '^chore'\n"
+    assert parse_repo_config(text).triggers.skip_titles == ("ci: *", "^chore")
+
+
+def test_repo_config__skip_titles_single_string_coerced():
+    text = "triggers:\n  skip_titles: 'ci: *'\n"
+    assert parse_repo_config(text).triggers.skip_titles == ("ci: *",)
+
+
+def test_repo_config__skip_titles_invalid_regex_dropped(caplog):
+    text = "triggers:\n  skip_titles:\n    - '[unclosed'\n    - '^ci:'\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.skip_titles == ("^ci:",)
+    assert "themis_invalid_skip_title" in caplog.text
+
+
+def test_repo_config__skip_titles_non_string_entries_dropped(caplog):
+    text = "triggers:\n  skip_titles:\n    - 3\n    - '^ci:'\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.skip_titles == ("^ci:",)
+    assert "themis_invalid_skip_title" in caplog.text
+
+
+def test_repo_config__skip_titles_wrong_shape_keeps_rest_of_triggers(caplog):
+    text = "triggers:\n  skip_titles:\n    nested: mapping\n  auto_review: false\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.skip_titles == ()
+    assert config.triggers.auto_review is False
+    assert "themis_invalid_skip_title" in caplog.text
+
+
+def test_repo_config__triggers_wrong_shape_keeps_rest_of_config(caplog):
+    text = "triggers: nope\nlimits:\n  max_attempts: 5\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.auto_review is True
+    assert config.limits.max_attempts == 5
+    assert "themis_invalid_triggers_config" in caplog.text
+
+
+def test_repo_config__auto_review_invalid_degrades_to_default(caplog):
+    text = "triggers:\n  auto_review: banana\n  skip_titles:\n    - '^ci:'\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.auto_review is True
+    assert config.triggers.skip_titles == ("^ci:",)
+    assert "themis_invalid_auto_review" in caplog.text
+
+
+def test_skip_title_match__wildcard_and_case_insensitive():
+    config = parse_repo_config("triggers:\n  skip_titles:\n    - 'ci: *'\n")
+    assert skip_title_match(config, "ci: bump runner image") == "ci: *"
+    assert skip_title_match(config, "CI: bump runner image") == "ci: *"
+    assert skip_title_match(config, "fix: broken login") is None
+
+
+def test_skip_title_match__regex_alternation_and_anchor():
+    config = parse_repo_config(
+        "triggers:\n  skip_titles:\n    - '^(chore|docs):'\n"
+    )
+    assert skip_title_match(config, "docs: fix typo") == "^(chore|docs):"
+    assert skip_title_match(config, "revert docs: fix typo") is None
+
+
+def test_skip_title_match__no_patterns_matches_nothing():
+    assert skip_title_match(parse_repo_config(None), "ci: anything") is None
 
 
 # --- engine settings ----------------------------------------------------------

@@ -20,6 +20,7 @@ from themis.config import (
     Settings,
     parse_repo_config,
     resolve_modules,
+    skip_title_match,
 )
 from themis.engines import (
     Engine,
@@ -258,6 +259,14 @@ class ReviewService:
             repo_config = await self._fetch_repo_config(gh, repo)
             if auto and not repo_config.triggers.auto_review:
                 logger.info("themis_auto_review_disabled repo=%s pr=%s", repo, pr_number)
+                return
+            if auto and (
+                pattern := skip_title_match(repo_config, pr.get("title") or "")
+            ):
+                logger.info(
+                    "themis_auto_review_title_skipped repo=%s pr=%s pattern=%s",
+                    repo, pr_number, pattern,
+                )
                 return
             engine = self._engine_for(repo_config)
             if not await self._ensure_engine_available(

@@ -3,6 +3,7 @@
 import base64
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,8 +40,74 @@ class LimitsConfig(BaseModel):
     clone_depth: int = 50
 
 
+# Bounds on triggers.skip_titles: regex matching runs in the controller's
+# event loop, so both the pattern list and each pattern stay small. GitHub
+# caps PR titles at 256 characters; patterns get double that.
+MAX_SKIP_TITLE_PATTERNS = 100
+MAX_SKIP_TITLE_PATTERN_LEN = 512
+
+
 class TriggersConfig(BaseModel):
     auto_review: bool = True
+    # Case-insensitive regexes; a match against the PR title skips the auto
+    # review (mention/API reviews still run). `re.search` semantics keep
+    # glob-habit entries like `ci: *` working as a prefix filter.
+    skip_titles: tuple[str, ...] = ()
+
+    @field_validator("auto_review", mode="before")
+    @classmethod
+    def _auto_review_bool_or_default(cls, value: object) -> object:
+        """An invalid flag must not void the rest of the repo config."""
+        if isinstance(value, bool):
+            return value
+        logger.warning("themis_invalid_auto_review value=%s", str(value)[:50])
+        return True
+
+    @field_validator("skip_titles", mode="before")
+    @classmethod
+    def _compilable_patterns_only(cls, value: object) -> object:
+        """Invalid patterns degrade individually; the rest keep filtering."""
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            value = [value]  # a lone pattern without list syntax is unambiguous
+        if not isinstance(value, list | tuple):
+            logger.warning("themis_invalid_skip_title value=%s", str(value)[:50])
+            return ()
+        if len(value) > MAX_SKIP_TITLE_PATTERNS:
+            logger.warning(
+                "themis_skip_titles_truncated count=%s max=%s",
+                len(value), MAX_SKIP_TITLE_PATTERNS,
+            )
+            value = value[:MAX_SKIP_TITLE_PATTERNS]
+        patterns = []
+        for entry in value:
+            if isinstance(entry, str) and len(entry) <= MAX_SKIP_TITLE_PATTERN_LEN:
+                try:
+                    re.compile(entry, re.IGNORECASE)
+                except re.error:
+                    pass
+                else:
+                    patterns.append(entry)
+                    continue
+            logger.warning("themis_invalid_skip_title value=%s", str(entry)[:50])
+        return tuple(patterns)
+
+
+def skip_title_match(config: "RepoConfig", title: str) -> str | None:
+    """First triggers.skip_titles pattern matching the PR title, or None.
+
+    Patterns are searched (not anchored) case-insensitively, so `ci: *`
+    filters conventional-commit prefixes without regex knowledge; `^` anchors
+    when a prefix-only match matters. Patterns come from repo maintainers —
+    the same trust level that already picks the engine and its timeouts."""
+    for pattern in config.triggers.skip_titles:
+        try:
+            if re.search(pattern, title[:MAX_SKIP_TITLE_PATTERN_LEN], re.IGNORECASE):
+                return pattern
+        except re.error:  # pragma: no cover — non-compiling patterns dropped at parse
+            continue
+    return None
 
 
 MODULE_STATES = ("always", "auto", "off")
@@ -178,6 +245,18 @@ class RepoConfig(BaseModel):
             return value
         logger.warning("themis_invalid_repo_engine value=%s", str(value)[:50])
         return None
+
+    @field_validator("triggers", mode="before")
+    @classmethod
+    def _triggers_mapping_or_default(cls, value: object) -> object:
+        """Same isolation as the review/agent sections: a malformed triggers
+        section degrades to defaults without taking engine/limits with it."""
+        if value is None:
+            return TriggersConfig()  # yaml null: `triggers:` with no keys
+        if isinstance(value, dict | TriggersConfig):
+            return value
+        logger.warning("themis_invalid_triggers_config value=%s", str(value)[:50])
+        return TriggersConfig()
 
     @field_validator("review", mode="before")
     @classmethod

@@ -297,6 +297,7 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
 | `limits.clone_depth` | `50` | shallow clone depth |
 | `triggers.auto_review` | `true` | `false` = mention-only, no auto-review when a PR opens or is marked ready for review |
+| `triggers.skip_titles` | `[]` | case-insensitive regexes matched against the PR title (e.g. `'ci: *'`, `'^chore:'`); a match skips the auto-review, mentions still work — see [`docs/configuration.md`](docs/configuration.md) |
 | `learnings.enabled` | `true` | `false` disables capturing, injecting, and digesting [learnings](docs/learnings.md) for this repo |
 | `learnings.digest_threshold` | `10` | pending learnings that trigger the digest PR (minimum 1) |
 | `review.modules.<name>` | full-dress profile | `always` \| `auto` \| `off` per optional review section; all six presentation categories default to enabled and only `off` suppresses them; see [`docs/configuration.md`](docs/configuration.md) |

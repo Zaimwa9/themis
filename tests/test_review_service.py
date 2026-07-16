@@ -889,6 +889,46 @@ async def test_auto_review_disabled_skips(service, gh):
     assert len(prepare_calls) == 1
 
 
+async def test_auto_review_skipped_by_title_pattern(service, gh):
+    """A triggers.skip_titles pattern matching the PR title skips the auto
+    review before cloning; a manual (mention/API) job still reviews."""
+    gh.get_file_text.return_value = "triggers:\n  skip_titles:\n    - 'ci: *'\n"
+    gh.get_pr.return_value = {
+        **gh.get_pr.return_value, "title": "ci: bump runner image"
+    }
+    original_prepare = service.prepare
+    prepare_calls: list[dict] = []
+
+    async def recording_prepare(**kwargs):
+        prepare_calls.append(kwargs)
+        return await original_prepare(**kwargs)
+    service.prepare = recording_prepare
+
+    await service.review(REPO, 7, 42, auto=True)
+    assert prepare_calls == []
+    gh.add_reaction.assert_not_awaited()
+
+    await service.review(REPO, 7, 42, auto=False)
+    assert len(prepare_calls) == 1
+
+
+async def test_auto_review_title_pattern_without_match_reviews(service, gh):
+    """Non-matching skip_titles patterns leave the auto review untouched."""
+    gh.get_file_text.return_value = "triggers:\n  skip_titles:\n    - 'ci: *'\n"
+    original_prepare = service.prepare
+    prepare_calls: list[dict] = []
+
+    async def recording_prepare(**kwargs):
+        prepare_calls.append(kwargs)
+        return await original_prepare(**kwargs)
+    service.prepare = recording_prepare
+
+    await service.review(REPO, 7, 42, auto=True)  # fixture title: "Fix"
+
+    assert len(prepare_calls) == 1
+    gh.post_summary_comment.assert_awaited_once()
+
+
 async def test_repo_config_drives_clone_depth(service, gh):
     """clone_depth from .themis/config.yaml reaches prepare_workspace."""
     gh.get_file_text.return_value = "limits:\n  clone_depth: 7\n"
