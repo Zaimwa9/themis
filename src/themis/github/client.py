@@ -19,6 +19,9 @@ _PER_PAGE = 100
 # volume can never stall the review job before it posts.
 MAX_COMMENT_PAGES = 10
 MAX_COMMENT_PAGES_TOTAL = 50
+# Same doctrine for PR conversation comments (the title-skip marker scan):
+# the bot's marker lands in the earliest pages, so a deep scan buys nothing.
+MAX_ISSUE_COMMENT_PAGES = 5
 _FAILED_CHECK_CONCLUSIONS = {
     "action_required",
     "cancelled",
@@ -118,7 +121,9 @@ class GitHubClient:
             raise GitHubGraphQLError(payload["errors"])
         return payload["data"]
 
-    async def _paginate(self, url: str) -> list[dict[str, Any]]:
+    async def _paginate(
+        self, url: str, max_pages: int | None = None
+    ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         page = 1
         while True:
@@ -126,7 +131,7 @@ class GitHubClient:
             response.raise_for_status()
             batch = response.json()
             items.extend(batch)
-            if len(batch) < _PER_PAGE:
+            if len(batch) < _PER_PAGE or page == max_pages:
                 return items
             page += 1
 
@@ -237,8 +242,15 @@ class GitHubClient:
         await self.post_issue_comment(repo, number, f"{SUMMARY_MARKER}\n{body}")
 
     async def list_issue_comments(self, repo: str, number: int) -> list[dict[str, Any]]:
-        """All issue comments on the PR conversation (paginated)."""
-        return await self._paginate(f"{self._api_url}/repos/{repo}/issues/{number}/comments")
+        """Oldest-first issue comments on the PR conversation, bounded.
+
+        Anyone can comment on a public PR, so like every other comment
+        traversal here the fetch is capped — callers scanning for a
+        bot-posted marker find it in the early pages."""
+        return await self._paginate(
+            f"{self._api_url}/repos/{repo}/issues/{number}/comments",
+            max_pages=MAX_ISSUE_COMMENT_PAGES,
+        )
 
     async def list_pr_files(self, repo: str, number: int) -> list[str]:
         """All changed file paths in the PR (paginated; authoritative merge-base diff)."""

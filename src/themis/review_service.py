@@ -83,13 +83,6 @@ TITLE_SKIPPED_COMMENT = (
     "rule `{pattern}` in `.themis/config.yaml`. Mention {mention} with `review` "
     "to request one anyway."
 )
-
-
-def _code_span_safe(text: str) -> str:
-    """Neutralize config text for a Markdown code span: a backtick or
-    newline would break out of the span and render as live Markdown (team
-    @-mentions would ping as the bot)."""
-    return text.replace("`", "'").replace("\r", " ").replace("\n", " ")
 ENGINE_UNAVAILABLE_COMMENT = (
     "This Themis instance has no {engine} credentials configured ({hint}), "
     "so the {noun} was skipped. Configure it or set a different `engine` in "
@@ -100,6 +93,13 @@ _ENGINE_AUTH_HINTS = {
     "claude": "CLAUDE_CODE_OAUTH_TOKEN",
     "glm": "GLM_API_KEY",
 }
+
+
+def _code_span_safe(text: str) -> str:
+    """Neutralize config text for a Markdown code span: a backtick or
+    newline would break out of the span and render as live Markdown (team
+    @-mentions would ping as the bot)."""
+    return text.replace("`", "'").replace("\r", " ").replace("\n", " ")
 # One agent run at a time so reviews never monopolize the shared worker.
 # Note: this bounds agent runs per worker process only; running several worker
 # processes yields one concurrent agent run per process.
@@ -605,15 +605,20 @@ class ReviewService:
         the comment must not accumulate duplicates."""
         try:
             comments = await gh.list_issue_comments(repo, pr_number)
-        except httpx.HTTPError as error:
-            # Best effort: a failed dedup check may duplicate the comment,
-            # never suppress the explanation entirely.
+            already_explained = any(
+                TITLE_SKIP_MARKER in (comment.get("body") or "")
+                for comment in comments
+            )
+        except (httpx.HTTPError, ValueError, AttributeError, TypeError) as error:
+            # Best effort, shape included (a non-JSON 200 or a non-list body
+            # must not kill the job): a failed dedup check may duplicate the
+            # comment, never suppress the explanation entirely.
             logger.warning(
                 "themis_title_skip_check_failed repo=%s pr=%s error=%s",
                 repo, pr_number, error,
             )
-            comments = []
-        if any(TITLE_SKIP_MARKER in (c.get("body") or "") for c in comments):
+            already_explained = False
+        if already_explained:
             return
         await self._post_courtesy_comment(
             installation_id, repo, pr_number,

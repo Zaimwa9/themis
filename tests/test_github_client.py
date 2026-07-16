@@ -7,6 +7,7 @@ import pytest
 from themis.github.client import (
     MAX_COMMENT_PAGES,
     MAX_COMMENT_PAGES_TOTAL,
+    MAX_ISSUE_COMMENT_PAGES,
     SUMMARY_MARKER,
     GitHubClient,
     GitHubGraphQLError,
@@ -96,6 +97,24 @@ async def test_list_issue_comments__two_pages__returns_all():
 
     assert len(comments) == 101
     assert comments[-1]["body"] == "last"
+
+
+async def test_list_issue_comments__page_cap__bounds_hostile_volume():
+    """Issue comments are attacker-growable (anyone can comment on a public
+    PR); the fetch must stay bounded like every other comment traversal."""
+    pages_served = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params.get("page"))
+        pages_served.append(page)
+        return httpx.Response(
+            200, json=[{"id": page * 100 + i, "body": "spam"} for i in range(100)]
+        )
+
+    comments = await _client(handler).list_issue_comments("acme/widgets", 7)
+
+    assert len(pages_served) == MAX_ISSUE_COMMENT_PAGES
+    assert len(comments) == MAX_ISSUE_COMMENT_PAGES * 100
 
 
 async def test_list_pr_files__two_pages__returns_all_filenames():

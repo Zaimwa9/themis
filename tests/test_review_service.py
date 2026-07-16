@@ -946,6 +946,23 @@ async def test_title_skip_comment_not_reposted(service, gh):
     gh.post_issue_comment.assert_not_awaited()
 
 
+async def test_title_skip_comment_posted_when_dedup_check_fails(service, gh):
+    """The dedup pre-check is best effort: a failed or garbled comment
+    listing may duplicate the explanation, never suppress it or kill the
+    job (a non-JSON 200 surfaces as ValueError/AttributeError, not only
+    httpx errors)."""
+    gh.get_file_text.return_value = "triggers:\n  skip_titles:\n    - 'ci: *'\n"
+    gh.get_pr.return_value = {
+        **gh.get_pr.return_value, "title": "ci: bump runner image"
+    }
+    for error in (_http_error(500), ValueError("not json")):
+        gh.list_issue_comments.side_effect = error
+        await service.review(REPO, 7, 42, auto=True)
+        gh.post_issue_comment.assert_awaited_once()
+        assert "skip_titles" in gh.post_issue_comment.await_args.args[2]
+        gh.post_issue_comment.reset_mock()
+
+
 async def test_title_skip_comment_neutralizes_markdown_breakout(service, gh):
     """A pattern containing backticks must not escape the comment's code
     span (a breakout would let repo config render live markdown or ping

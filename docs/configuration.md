@@ -110,9 +110,10 @@ sibling fields.
 Each entry is a wildcard pattern — `*` matches any run of characters, `?`
 matches exactly one, everything else is literal — compared case-insensitively
 against the *whole* PR title. A match skips the automatic review on PR open /
-ready-for-review and leaves a short comment naming the rule (once per PR,
-even across draft/ready cycles); an explicit `@mention` or `/api/review`
-call still reviews the PR — the same escape hatch as `auto_review: false`.
+ready-for-review and leaves a short comment naming the rule (at most one
+per PR across draft/ready cycles, best effort); an explicit `@mention` or
+`/api/review` call still reviews the PR — the same escape hatch as
+`auto_review: false`.
 
 ```yaml
 triggers:
