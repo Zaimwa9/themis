@@ -18,11 +18,11 @@ jobs:
       - uses: googleapis/release-please-action@v4
         id: release
 
-  # release-please bumps pyproject.toml but not uv.lock (#15). The sync step
-  # in ci.yml never fires on release PRs because release-please pushes with
-  # GITHUB_TOKEN, which does not trigger pull_request workflows. This job runs
-  # on the same user-triggered main push that updated the release PR, so it
-  # reliably lands the lockfile bump before the PR is merged.
+  # The extra-files toml updater in release-please-config.json bumps uv.lock
+  # inside the release PR itself, so version drift (#15) can no longer race a
+  # fast merge. This job is a fallback only: if the updater's jsonpath stops
+  # matching (e.g. a uv.lock schema change), it re-syncs the branch and
+  # surfaces a warning instead of letting the release PR ship a stale lockfile.
   sync-lockfile:
     needs: release-please
     if: needs.release-please.outputs.prs_created == 'true'
@@ -37,6 +37,7 @@ jobs:
       - name: Sync uv.lock with the release version bump
         run: |
           if ! uv lock --check; then
+            echo "::warning::uv.lock was stale on the release PR; the extra-files toml updater in release-please-config.json did not bump it — check its jsonpath against the current uv.lock schema"
             uv lock
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
