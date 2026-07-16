@@ -21,7 +21,11 @@ jobs:
       # which is what actually blocks a release PR with a stale lockfile:
       # release PR heads only receive it from release.yml's sync-lockfile job
       # after validation, so a merge cannot outrun the lockfile repair.
+      # Fork PRs get a read-only GITHUB_TOKEN, so posting would fail their
+      # otherwise-green run; skip it there (maintainers merge fork PRs with an
+      # explicit ruleset bypass instead).
       - name: Report lockfile-fresh status
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           gh api "repos/${{ github.repository }}/statuses/${SHA}" \
             -f state=success -f context=lockfile-fresh \
