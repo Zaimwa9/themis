@@ -20,15 +20,18 @@ jobs:
 
   # The extra-files toml updater in release-please-config.json bumps uv.lock
   # inside the release PR itself, so version drift (#15) can no longer race a
-  # fast merge. This job is a fallback only: if the updater's jsonpath stops
-  # matching (e.g. a uv.lock schema change), it re-syncs the branch and
-  # surfaces a warning instead of letting the release PR ship a stale lockfile.
+  # fast merge. This job is the merge gate for release PRs: their heads only
+  # receive the lockfile-fresh status (required to merge into main by repo
+  # ruleset) from the final step here, after the lockfile is validated — so a
+  # merge cannot outrun the repair even if the updater's jsonpath stops
+  # matching (e.g. a uv.lock schema change).
   sync-lockfile:
     needs: release-please
     if: needs.release-please.outputs.prs_created == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      statuses: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,6 +54,14 @@ jobs:
           uv sync --locked
           uv run ruff check src tests
           uv run pytest -q
+      # Only reached when validation passed; unblocks merging the release PR.
+      - name: Report lockfile-fresh status
+        run: |
+          gh api "repos/${{ github.repository }}/statuses/$(git rev-parse HEAD)" \
+            -f state=success -f context=lockfile-fresh \
+            -f description="release PR lockfile validated"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # Tags created with GITHUB_TOKEN do not trigger other workflows, so the
   # image build chains off the release job instead of a tag push.

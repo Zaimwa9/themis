@@ -7,9 +7,25 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --locked
       - run: uv run ruff check src tests
       - run: uv run pytest -q
+      # `uv sync --locked` above proves uv.lock matches pyproject.toml. The
+      # lockfile-fresh context is required to merge into main (repo ruleset),
+      # which is what actually blocks a release PR with a stale lockfile:
+      # release PR heads only receive it from release.yml's sync-lockfile job
+      # after validation, so a merge cannot outrun the lockfile repair.
+      - name: Report lockfile-fresh status
+        run: |
+          gh api "repos/${{ github.repository }}/statuses/${SHA}" \
+            -f state=success -f context=lockfile-fresh \
+            -f description="uv.lock matches pyproject.toml"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
