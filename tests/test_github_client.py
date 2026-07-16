@@ -83,6 +83,21 @@ async def test_post_summary_comment__always_creates_new_comment_with_marker():
     assert "#### ⚖️ Themis judgement" in captured["json"]["body"]
 
 
+async def test_list_issue_comments__two_pages__returns_all():
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = request.url.params.get("page")
+        if page == "1":
+            return httpx.Response(
+                200, json=[{"id": i, "body": f"c{i}"} for i in range(100)]
+            )
+        return httpx.Response(200, json=[{"id": 100, "body": "last"}])
+
+    comments = await _client(handler).list_issue_comments("acme/widgets", 7)
+
+    assert len(comments) == 101
+    assert comments[-1]["body"] == "last"
+
+
 async def test_list_pr_files__two_pages__returns_all_filenames():
     def handler(request: httpx.Request) -> httpx.Response:
         page = request.url.params.get("page")

@@ -236,6 +236,10 @@ class GitHubClient:
         """Every review posts a fresh summary comment; old ones stay as history."""
         await self.post_issue_comment(repo, number, f"{SUMMARY_MARKER}\n{body}")
 
+    async def list_issue_comments(self, repo: str, number: int) -> list[dict[str, Any]]:
+        """All issue comments on the PR conversation (paginated)."""
+        return await self._paginate(f"{self._api_url}/repos/{repo}/issues/{number}/comments")
+
     async def list_pr_files(self, repo: str, number: int) -> list[str]:
         """All changed file paths in the PR (paginated; authoritative merge-base diff)."""
         files = await self._paginate(f"{self._api_url}/repos/{repo}/pulls/{number}/files")

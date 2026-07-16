@@ -110,9 +110,9 @@ sibling fields.
 Each entry is a wildcard pattern — `*` matches any run of characters, `?`
 matches exactly one, everything else is literal — compared case-insensitively
 against the *whole* PR title. A match skips the automatic review on PR open /
-ready-for-review and leaves a short comment naming the rule; an explicit
-`@mention` or `/api/review` call still reviews the PR — the same escape
-hatch as `auto_review: false`.
+ready-for-review and leaves a short comment naming the rule (once per PR,
+even across draft/ready cycles); an explicit `@mention` or `/api/review`
+call still reviews the PR — the same escape hatch as `auto_review: false`.
 
 ```yaml
 triggers:
@@ -126,9 +126,12 @@ triggers:
 Because a pattern covers the whole title, `ci: *` does not fire on
 `PCI: rotate keys` or `revert ci: bump runner`; wrap a keyword in stars
 (`*keyword*`) to match it anywhere. Patterns are not regular expressions —
-`(`, `|`, `$` and friends are literal characters. An entry that is empty,
-not a string, or longer than 200 characters is dropped with a warning while
-the remaining entries keep filtering (at most 50 patterns are used).
+`(`, `|`, `$` and friends are literal characters. Surrounding whitespace is
+trimmed; an entry that is blank, not a string, or longer than 200 characters
+is dropped with a warning while the remaining entries keep filtering (at
+most the first 50 valid patterns are used). Matching case-folds both sides,
+so the rare character that expands under case-folding (`ß` → `ss`) counts
+as its folded length for `?`; use `*` around such characters.
 
 ### Review modules (`review.modules`)
 

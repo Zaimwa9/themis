@@ -40,12 +40,27 @@ class LimitsConfig(BaseModel):
 
 
 # Bounds on triggers.skip_titles. Title matching is a hand-rolled wildcard
-# scan of O(pattern x title) worst case, so these caps genuinely bound the
-# filtering work an auto-review event can put on the controller's event loop.
+# scan of O(pattern x title) worst case; together with the title clamp in
+# skip_title_match these caps genuinely bound the filtering work an
+# auto-review event can put on the controller's event loop.
 MAX_SKIP_TITLE_PATTERNS = 50
 MAX_SKIP_TITLE_PATTERN_LEN = 200
+# GitHub caps PR titles at 256 chars; the clamp exists so the time bound
+# holds even for hostile API-crafted payloads, not for real titles.
+MAX_SKIP_TITLE_MATCH_LEN = 512
 
 _LAX_BOOL = TypeAdapter(bool)
+
+
+def _section_or_default(value: object, model_cls: type, event: str) -> object:
+    """A malformed config section degrades to its defaults alone, never
+    voiding sibling sections (engine, limits, ...)."""
+    if value is None:
+        return model_cls()  # yaml null: a section key with no mapping under it
+    if isinstance(value, dict | model_cls):
+        return value
+    logger.warning("%s value=%r", event, str(value)[:50])
+    return model_cls()
 
 
 class TriggersConfig(BaseModel):
@@ -61,60 +76,65 @@ class TriggersConfig(BaseModel):
         """An invalid flag must not void the rest of the repo config. Lax
         coercion first, so yaml spellings like "false"/"no"/0 keep opting
         out; only true garbage degrades to the default (enabled)."""
+        if value is None:
+            return True  # bare `auto_review:` key, same idiom as a bare section
         try:
             return _LAX_BOOL.validate_python(value)
         except ValidationError:
-            logger.warning("themis_invalid_auto_review value=%.50r", value)
+            logger.warning("themis_invalid_auto_review value=%r", str(value)[:50])
             return True
 
     @field_validator("skip_titles", mode="before")
     @classmethod
     def _usable_patterns_only(cls, value: object) -> object:
         """Invalid patterns degrade individually; the rest keep filtering.
-        Empty/blank entries are dropped too — under whole-title matching
-        they could only ever be a mistake, never a filter."""
+        Blank entries are dropped too — under whole-title matching they
+        could only ever be a mistake — and surrounding whitespace is
+        trimmed (a stray space would make a filter silently never fire)."""
         if value is None:
             return ()
         if isinstance(value, str):
             value = [value]  # a lone pattern without list syntax is unambiguous
         if not isinstance(value, list | tuple):
-            logger.warning("themis_invalid_skip_title value=%.50r", value)
+            logger.warning("themis_invalid_skip_title value=%r", str(value)[:50])
             return ()
-        if len(value) > MAX_SKIP_TITLE_PATTERNS:
-            logger.warning(
-                "themis_skip_titles_truncated count=%s max=%s",
-                len(value), MAX_SKIP_TITLE_PATTERNS,
-            )
-            value = value[:MAX_SKIP_TITLE_PATTERNS]
         patterns = []
         for entry in value:
-            if (
-                isinstance(entry, str)
-                and entry.strip()
-                and len(entry) <= MAX_SKIP_TITLE_PATTERN_LEN
-            ):
-                patterns.append(entry)
+            cleaned = entry.strip() if isinstance(entry, str) else ""
+            if cleaned and len(cleaned) <= MAX_SKIP_TITLE_PATTERN_LEN:
+                patterns.append(cleaned)
             else:
-                logger.warning("themis_invalid_skip_title value=%.50r", entry)
+                logger.warning("themis_invalid_skip_title value=%r", str(entry)[:50])
+        if len(patterns) > MAX_SKIP_TITLE_PATTERNS:
+            # Cap after filtering: garbage entries must not evict valid ones.
+            logger.warning(
+                "themis_skip_titles_truncated count=%s max=%s",
+                len(patterns), MAX_SKIP_TITLE_PATTERNS,
+            )
+            patterns = patterns[:MAX_SKIP_TITLE_PATTERNS]
         return tuple(patterns)
 
 
 def _wildcard_match(pattern: str, text: str) -> bool:
     """Iterative glob match (`*` = any run, `?` = one char) over all of text.
 
-    Deliberately not the regex engine: PR titles are untrusted content and
-    `re` has no execution bound, so a backtracking-prone pattern would pin
-    the controller's single event loop (`(a+)+$` against 64 chars hangs it).
-    This scan is O(len(pattern) * len(text)) worst case."""
+    Deliberately hand-rolled: PR titles are untrusted content, and this
+    scan's O(len(pattern) * len(text)) worst case holds on every Python
+    version instead of leaning on regex-engine internals (user regexes are
+    out for that reason — `re.search(r'(a+)+$', 'a'*64+'!')` pins the
+    controller's single event loop). fnmatch is out too: it reads `[...]`
+    as character classes, while the config contract keeps them literal."""
     p_idx = t_idx = 0
     star_idx, star_t = -1, 0
     while t_idx < len(text):
-        if p_idx < len(pattern) and pattern[p_idx] in ("?", text[t_idx]):
-            p_idx += 1
-            t_idx += 1
-        elif p_idx < len(pattern) and pattern[p_idx] == "*":
+        # `*` first: it must stay a wildcard even when the title character
+        # under the cursor is itself a literal `*`.
+        if p_idx < len(pattern) and pattern[p_idx] == "*":
             star_idx, star_t = p_idx, t_idx
             p_idx += 1
+        elif p_idx < len(pattern) and pattern[p_idx] in ("?", text[t_idx]):
+            p_idx += 1
+            t_idx += 1
         elif star_idx != -1:  # mismatch: widen the last `*` by one character
             p_idx = star_idx + 1
             star_t += 1
@@ -132,7 +152,7 @@ def skip_title_match(config: "RepoConfig", title: str) -> str | None:
     `*[skip review]*` matches anywhere. Whole-title semantics keep the naive
     spelling the safe spelling — regex `WIP*` would match any title
     containing "wi"; the glob means "starts with WIP"."""
-    folded = title.casefold()
+    folded = title[:MAX_SKIP_TITLE_MATCH_LEN].casefold()
     for pattern in config.triggers.skip_titles:
         if _wildcard_match(pattern.casefold(), folded):
             return pattern
@@ -201,14 +221,9 @@ class ReviewConfig(BaseModel):
     @field_validator("modules", mode="before")
     @classmethod
     def _modules_mapping_or_default(cls, value: object) -> object:
-        """A malformed modules container must not void the rest of the repo
-        config (engine, limits, ...); presentation settings degrade alone."""
-        if value is None:
-            return ReviewModulesConfig()  # yaml null: `modules:` with no keys
-        if isinstance(value, dict | ReviewModulesConfig):
-            return value
-        logger.warning("themis_invalid_review_modules value=%s", str(value)[:50])
-        return ReviewModulesConfig()
+        return _section_or_default(
+            value, ReviewModulesConfig, "themis_invalid_review_modules"
+        )
 
 
 def resolve_modules(config: "RepoConfig") -> dict[str, str]:
@@ -278,38 +293,19 @@ class RepoConfig(BaseModel):
     @field_validator("triggers", mode="before")
     @classmethod
     def _triggers_mapping_or_default(cls, value: object) -> object:
-        """Same isolation as the review/agent sections: a malformed triggers
-        section degrades to defaults without taking engine/limits with it."""
-        if value is None:
-            return TriggersConfig()  # yaml null: `triggers:` with no keys
-        if isinstance(value, dict | TriggersConfig):
-            return value
-        logger.warning("themis_invalid_triggers_config value=%s", str(value)[:50])
-        return TriggersConfig()
+        return _section_or_default(
+            value, TriggersConfig, "themis_invalid_triggers_config"
+        )
 
     @field_validator("review", mode="before")
     @classmethod
     def _review_mapping_or_default(cls, value: object) -> object:
-        """Same isolation as the modules container: a malformed review
-        section degrades to defaults without taking engine/limits with it."""
-        if value is None:
-            return ReviewConfig()  # yaml null: `review:` with no keys
-        if isinstance(value, dict | ReviewConfig):
-            return value
-        logger.warning("themis_invalid_review_config value=%s", str(value)[:50])
-        return ReviewConfig()
+        return _section_or_default(value, ReviewConfig, "themis_invalid_review_config")
 
     @field_validator("agent", mode="before")
     @classmethod
     def _agent_mapping_or_default(cls, value: object) -> object:
-        """Same isolation again; a malformed agent section degrades to the
-        all-off defaults without taking engine/limits with it."""
-        if value is None:
-            return AgentConfig()  # yaml null: `agent:` with no keys
-        if isinstance(value, dict | AgentConfig):
-            return value
-        logger.warning("themis_invalid_agent_config value=%s", str(value)[:50])
-        return AgentConfig()
+        return _section_or_default(value, AgentConfig, "themis_invalid_agent_config")
 
 
 def parse_repo_config(text: str | None) -> RepoConfig:
