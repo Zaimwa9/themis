@@ -77,6 +77,11 @@ CANCELLED_COMMENT = (
     "Review was cancelled before completing (worker timeout or shutdown). "
     "Mention {mention} with `review` to retry."
 )
+TITLE_SKIPPED_COMMENT = (
+    "Automatic review skipped: the PR title matches the `triggers.skip_titles` "
+    "rule `{pattern}` in `.themis/config.yaml`. Mention {mention} with `review` "
+    "to request one anyway."
+)
 ENGINE_UNAVAILABLE_COMMENT = (
     "This Themis instance has no {engine} credentials configured ({hint}), "
     "so the {noun} was skipped. Configure it or set a different `engine` in "
@@ -263,9 +268,20 @@ class ReviewService:
             if auto and (
                 pattern := skip_title_match(repo_config, pr.get("title") or "")
             ):
+                # %r: patterns may hold spaces or (via yaml block scalars)
+                # newlines; repr keeps the key=value line un-forgeable.
                 logger.info(
-                    "themis_auto_review_title_skipped repo=%s pr=%s pattern=%s",
+                    "themis_auto_review_title_skipped repo=%s pr=%s pattern=%r",
                     repo, pr_number, pattern,
+                )
+                # Unlike the repo-wide auto_review opt-out, this skip is
+                # per-PR: without a trace on the PR itself, a filtered title
+                # is indistinguishable from a crashed bot.
+                await self._post_courtesy_comment(
+                    installation_id, repo, pr_number,
+                    TITLE_SKIPPED_COMMENT.format(
+                        pattern=pattern, mention=self.mention
+                    ),
                 )
                 return
             engine = self._engine_for(repo_config)

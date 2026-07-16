@@ -891,7 +891,9 @@ async def test_auto_review_disabled_skips(service, gh):
 
 async def test_auto_review_skipped_by_title_pattern(service, gh):
     """A triggers.skip_titles pattern matching the PR title skips the auto
-    review before cloning; a manual (mention/API) job still reviews."""
+    review before cloning, leaving a courtesy comment naming the rule so the
+    silence is explainable from the PR; a manual (mention/API) job still
+    reviews, without the comment."""
     gh.get_file_text.return_value = "triggers:\n  skip_titles:\n    - 'ci: *'\n"
     gh.get_pr.return_value = {
         **gh.get_pr.return_value, "title": "ci: bump runner image"
@@ -907,6 +909,12 @@ async def test_auto_review_skipped_by_title_pattern(service, gh):
     await service.review(REPO, 7, 42, auto=True)
     assert prepare_calls == []
     gh.add_reaction.assert_not_awaited()
+    gh.post_issue_comment.assert_awaited_once()
+    comment_body = gh.post_issue_comment.await_args.args[2]
+    assert "skip_titles" in comment_body
+    assert "ci: *" in comment_body
+    assert BOT_MENTION in comment_body  # how to request a review anyway
+    gh.post_issue_comment.reset_mock()
 
     await service.review(REPO, 7, 42, auto=False)
     assert len(prepare_calls) == 1

@@ -61,9 +61,9 @@ limits:
   clone_depth: 50
 triggers:
   auto_review: true
-  # skip_titles:            # regexes; a match skips the auto-review for that PR
+  # skip_titles:            # wildcard patterns; a matching PR title skips the auto-review
   #   - 'ci: *'
-  #   - '^(chore|docs):'
+  #   - 'chore: *'
 learnings:
   enabled: true            # false = no capture, no injection, no digest PR
   digest_threshold: 10
@@ -93,7 +93,7 @@ review:
 | `limits.max_attempts` | `2` | attempts before Themis gives up and posts a failure comment |
 | `limits.clone_depth` | `50` | git fetch depth for the shallow PR clone |
 | `triggers.auto_review` | `true` | `false` = mention-only, no automatic review on PR open or ready-for-review |
-| `triggers.skip_titles` | `[]` | list of case-insensitive regexes; a PR whose title matches any of them gets no automatic review (mention/API reviews still run); see below |
+| `triggers.skip_titles` | `[]` | case-insensitive wildcard patterns (`*`, `?`); a PR whose title matches any of them gets no automatic review (mention/API reviews still run); see below |
 | `learnings.enabled` | `true` | per-repo learnings memory; see [docs/learnings.md](learnings.md) |
 | `learnings.digest_threshold` | `10` | pending learnings needed before Themis opens/updates the digest PR (min 1) |
 | `review.modules.<name>` | per-module profile | tri-state presence per optional review section: `always`, `auto`, or `off`; see below |
@@ -107,23 +107,28 @@ sibling fields.
 
 ### Title filters (`triggers.skip_titles`)
 
-Each entry is a Python regular expression, matched case-insensitively
-anywhere in the PR title (`re.search`). A match skips the automatic review
-on PR open / ready-for-review; an explicit `@mention` or `/api/review` call
-still reviews the PR — the same escape hatch as `auto_review: false`.
+Each entry is a wildcard pattern — `*` matches any run of characters, `?`
+matches exactly one, everything else is literal — compared case-insensitively
+against the *whole* PR title. A match skips the automatic review on PR open /
+ready-for-review and leaves a short comment naming the rule; an explicit
+`@mention` or `/api/review` call still reviews the PR — the same escape
+hatch as `auto_review: false`.
 
 ```yaml
 triggers:
   skip_titles:
-    - 'ci: *'              # any title containing "ci:" — glob habits work too
-    - '^(chore|docs):'     # conventional-commit prefixes, anchored to the start
-    - '\[skip-review\]'    # opt-out marker anywhere in the title
+    - 'ci: *'              # titles starting with "ci: "
+    - 'chore: *'           # one pattern per prefix; a list is the "or"
+    - 'WIP*'               # "WIP", "WIP:", "WIP anything…"
+    - '*[skip review]*'    # opt-out marker anywhere in the title
 ```
 
-Because matching is unanchored, `ci: *` also skips `revert ci: bump runner`;
-anchor with `^` when only a prefix should count. An entry that isn't a valid
-regex (or isn't a string) is dropped with a warning while the remaining
-entries keep filtering.
+Because a pattern covers the whole title, `ci: *` does not fire on
+`PCI: rotate keys` or `revert ci: bump runner`; wrap a keyword in stars
+(`*keyword*`) to match it anywhere. Patterns are not regular expressions —
+`(`, `|`, `$` and friends are literal characters. An entry that is empty,
+not a string, or longer than 200 characters is dropped with a warning while
+the remaining entries keep filtering (at most 50 patterns are used).
 
 ### Review modules (`review.modules`)
 

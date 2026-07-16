@@ -3,12 +3,11 @@
 import base64
 import logging
 import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, TypeAdapter, ValidationError, field_validator
 
 from themis.engines import ENGINE_NAMES
 
@@ -40,39 +39,46 @@ class LimitsConfig(BaseModel):
     clone_depth: int = 50
 
 
-# Bounds on triggers.skip_titles: regex matching runs in the controller's
-# event loop, so both the pattern list and each pattern stay small. GitHub
-# caps PR titles at 256 characters; patterns get double that.
-MAX_SKIP_TITLE_PATTERNS = 100
-MAX_SKIP_TITLE_PATTERN_LEN = 512
+# Bounds on triggers.skip_titles. Title matching is a hand-rolled wildcard
+# scan of O(pattern x title) worst case, so these caps genuinely bound the
+# filtering work an auto-review event can put on the controller's event loop.
+MAX_SKIP_TITLE_PATTERNS = 50
+MAX_SKIP_TITLE_PATTERN_LEN = 200
+
+_LAX_BOOL = TypeAdapter(bool)
 
 
 class TriggersConfig(BaseModel):
     auto_review: bool = True
-    # Case-insensitive regexes; a match against the PR title skips the auto
-    # review (mention/API reviews still run). `re.search` semantics keep
-    # glob-habit entries like `ci: *` working as a prefix filter.
+    # Case-insensitive wildcard patterns covering the whole PR title:
+    # `*` = any run of characters, `?` = one character, everything else
+    # literal. A match skips the auto review; mention/API reviews still run.
     skip_titles: tuple[str, ...] = ()
 
     @field_validator("auto_review", mode="before")
     @classmethod
     def _auto_review_bool_or_default(cls, value: object) -> object:
-        """An invalid flag must not void the rest of the repo config."""
-        if isinstance(value, bool):
-            return value
-        logger.warning("themis_invalid_auto_review value=%s", str(value)[:50])
-        return True
+        """An invalid flag must not void the rest of the repo config. Lax
+        coercion first, so yaml spellings like "false"/"no"/0 keep opting
+        out; only true garbage degrades to the default (enabled)."""
+        try:
+            return _LAX_BOOL.validate_python(value)
+        except ValidationError:
+            logger.warning("themis_invalid_auto_review value=%.50r", value)
+            return True
 
     @field_validator("skip_titles", mode="before")
     @classmethod
-    def _compilable_patterns_only(cls, value: object) -> object:
-        """Invalid patterns degrade individually; the rest keep filtering."""
+    def _usable_patterns_only(cls, value: object) -> object:
+        """Invalid patterns degrade individually; the rest keep filtering.
+        Empty/blank entries are dropped too — under whole-title matching
+        they could only ever be a mistake, never a filter."""
         if value is None:
             return ()
         if isinstance(value, str):
             value = [value]  # a lone pattern without list syntax is unambiguous
         if not isinstance(value, list | tuple):
-            logger.warning("themis_invalid_skip_title value=%s", str(value)[:50])
+            logger.warning("themis_invalid_skip_title value=%.50r", value)
             return ()
         if len(value) > MAX_SKIP_TITLE_PATTERNS:
             logger.warning(
@@ -82,31 +88,54 @@ class TriggersConfig(BaseModel):
             value = value[:MAX_SKIP_TITLE_PATTERNS]
         patterns = []
         for entry in value:
-            if isinstance(entry, str) and len(entry) <= MAX_SKIP_TITLE_PATTERN_LEN:
-                try:
-                    re.compile(entry, re.IGNORECASE)
-                except re.error:
-                    pass
-                else:
-                    patterns.append(entry)
-                    continue
-            logger.warning("themis_invalid_skip_title value=%s", str(entry)[:50])
+            if (
+                isinstance(entry, str)
+                and entry.strip()
+                and len(entry) <= MAX_SKIP_TITLE_PATTERN_LEN
+            ):
+                patterns.append(entry)
+            else:
+                logger.warning("themis_invalid_skip_title value=%.50r", entry)
         return tuple(patterns)
+
+
+def _wildcard_match(pattern: str, text: str) -> bool:
+    """Iterative glob match (`*` = any run, `?` = one char) over all of text.
+
+    Deliberately not the regex engine: PR titles are untrusted content and
+    `re` has no execution bound, so a backtracking-prone pattern would pin
+    the controller's single event loop (`(a+)+$` against 64 chars hangs it).
+    This scan is O(len(pattern) * len(text)) worst case."""
+    p_idx = t_idx = 0
+    star_idx, star_t = -1, 0
+    while t_idx < len(text):
+        if p_idx < len(pattern) and pattern[p_idx] in ("?", text[t_idx]):
+            p_idx += 1
+            t_idx += 1
+        elif p_idx < len(pattern) and pattern[p_idx] == "*":
+            star_idx, star_t = p_idx, t_idx
+            p_idx += 1
+        elif star_idx != -1:  # mismatch: widen the last `*` by one character
+            p_idx = star_idx + 1
+            star_t += 1
+            t_idx = star_t
+        else:
+            return False
+    return all(char == "*" for char in pattern[p_idx:])
 
 
 def skip_title_match(config: "RepoConfig", title: str) -> str | None:
     """First triggers.skip_titles pattern matching the PR title, or None.
 
-    Patterns are searched (not anchored) case-insensitively, so `ci: *`
-    filters conventional-commit prefixes without regex knowledge; `^` anchors
-    when a prefix-only match matters. Patterns come from repo maintainers —
-    the same trust level that already picks the engine and its timeouts."""
+    Patterns cover the entire title, case-insensitively: `ci: *` skips
+    conventional-commit `ci:` PRs without also firing on `PCI: ...`, and
+    `*[skip review]*` matches anywhere. Whole-title semantics keep the naive
+    spelling the safe spelling — regex `WIP*` would match any title
+    containing "wi"; the glob means "starts with WIP"."""
+    folded = title.casefold()
     for pattern in config.triggers.skip_titles:
-        try:
-            if re.search(pattern, title[:MAX_SKIP_TITLE_PATTERN_LEN], re.IGNORECASE):
-                return pattern
-        except re.error:  # pragma: no cover — non-compiling patterns dropped at parse
-            continue
+        if _wildcard_match(pattern.casefold(), folded):
+            return pattern
     return None
 
 
