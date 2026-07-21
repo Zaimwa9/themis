@@ -197,8 +197,20 @@ def test_parse_output__start_line_wrong_type__raises(tmp_path: Path):
         parse_output(tmp_path)
 
 
-def test_parse_output__start_line_not_less_than_line__raises(tmp_path: Path):
-    _write(tmp_path, "s", {"findings": [{"path": "a.py", "line": 5, "start_line": 5, "body": "x"}]})
+def test_parse_output__start_line_equals_line__normalized_to_single_line(tmp_path: Path):
+    _write(tmp_path, "s", {
+        "findings": [{"path": "a.py", "line": 5, "start_line": 5, "start_side": "LEFT", "body": "x"}],
+    })
+
+    actions = parse_output(tmp_path)
+
+    assert actions.findings[0]["line"] == 5
+    assert "start_line" not in actions.findings[0]
+    assert "start_side" not in actions.findings[0]
+
+
+def test_parse_output__start_line_greater_than_line__raises(tmp_path: Path):
+    _write(tmp_path, "s", {"findings": [{"path": "a.py", "line": 5, "start_line": 6, "body": "x"}]})
 
     with pytest.raises(OutputError, match="start_line"):
         parse_output(tmp_path)
