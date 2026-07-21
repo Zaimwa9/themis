@@ -1,6 +1,6 @@
 [project]
 name = "themis"
-version = "0.8.0"
+version = "0.9.0"
 description = "Self-hosted GitHub PR review bot powered by the Codex CLI"
 readme = "README.md"
 requires-python = ">=3.12"
