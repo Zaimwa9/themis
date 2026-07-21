@@ -22,7 +22,7 @@ def test_build_review_prompt__contains_pr_context_and_contract():
 def test_build_review_prompt__summary_format__verdict_severities_no_empty_sections():
     prompt = build_review_prompt("acme/widgets", 7, "main")
 
-    assert "`## ⚖️ Themis judgement: <verdict>`" in prompt
+    assert "`## ⚖️ Themis review: <verdict>`" in prompt
     assert "####" not in prompt
     assert "🔴 Blockers" in prompt
     assert "🟠 Majors" in prompt
