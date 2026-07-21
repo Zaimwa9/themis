@@ -144,7 +144,8 @@ on every job — only Themis writes it.
 
 One `CODEX_HOME` volume holds one `auth.json`, and one
 `CLAUDE_CODE_OAUTH_TOKEN` value is one Claude token, and one
-`GLM_API_KEY` is one coding-plan subscription: each engine ties the
+`GLM_API_KEY` is one coding-plan subscription, and one `KIMI_API_KEY` /
+`OPENROUTER_API_KEY` is one provider account: each engine ties the
 instance to one subscription. Themis is built for one instance per person
 or team: its own GitHub App, its own subscription. Running multiple
 unrelated teams against a shared instance isn't supported: usage quota and

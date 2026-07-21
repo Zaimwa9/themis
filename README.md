@@ -22,6 +22,7 @@ and agent; there is still no database, Redis, or message broker.
 - Docker with the Compose plugin (Docker Desktop, or Docker Engine + `docker compose`)
 - An OpenAI account with Codex access, or a Claude Max subscription (pick your engine): the matching CLI installed (`npm install -g @openai/codex` or `npm install -g @anthropic-ai/claude-code`, Node 22+) and `codex login` or `claude setup-token` working on your machine. Claude Pro is not supported because Themis defaults to Opus.
   The glm engine needs no local CLI login: just a `GLM_API_KEY` (Z.ai GLM Coding Plan) in `.env`.
+  The kimi and openrouter engines are the same: just `KIMI_API_KEY` (Moonshot platform, pay-as-you-go) or `OPENROUTER_API_KEY` (OpenRouter credits) in `.env`.
 - A GitHub account that can create a GitHub App (personal account or an org)
 
 No clone or build needed: Themis ships as a prebuilt image,
@@ -80,9 +81,10 @@ Set up Themis for this repository using the automated GitHub App Manifest bootst
 
 Using the Claude engine instead? Run `claude setup-token`, pass
 `--engine claude` to the bootstrap, and put the resulting token in
-`CLAUDE_CODE_OAUTH_TOKEN` in the generated `.env`. Using glm? No CLI
-login needed: pass `--engine glm` to the bootstrap and put your Z.ai GLM
-Coding Plan key in `GLM_API_KEY` in the generated `.env`. Details in
+`CLAUDE_CODE_OAUTH_TOKEN` in the generated `.env`. Using glm, kimi, or
+openrouter? No CLI login needed: pass `--engine <name>` to the bootstrap
+and put the provider key (`GLM_API_KEY`, `KIMI_API_KEY`, or
+`OPENROUTER_API_KEY`) in the generated `.env`. Details in
 [Engines](#engines).
 
 Install the CLI if you haven't already (Node 22+):
@@ -216,9 +218,11 @@ THEMIS_GH_APP_PRIVATE_KEY=<PEM, or base64 of it>
 THEMIS_GH_WEBHOOK_SECRET=<the webhook secret>
 THEMIS_AGENT_TOKEN=<any long random string>
 THEMIS_PUBLIC_URL=https://your-host    # optional: webhook self-registration
-THEMIS_ENGINE=codex                    # or claude / glm
+THEMIS_ENGINE=codex                    # or claude / glm / kimi / openrouter
 CLAUDE_CODE_OAUTH_TOKEN=<token>        # claude engine only
 GLM_API_KEY=<key>                      # glm engine only
+KIMI_API_KEY=<key>                     # kimi engine only
+OPENROUTER_API_KEY=<key>               # openrouter engine only
 ```
 
 ```bash
@@ -289,9 +293,9 @@ See [`docs/learnings.md`](docs/learnings.md).
 
 | Key | Default | Meaning |
 |---|---|---|
-| `engine` | instance `THEMIS_ENGINE` | `codex`, `claude`, or `glm`, overrides the instance's default engine for this repo |
-| `web_access` | `false` | toggles engine web tooling (`WebFetch`/`WebSearch`); glm behaves like claude here, and Claude's Bash may still egress unless the deployment enforces an external network policy — this caveat applies to all claude-harness engines |
-| `model.name` | engine default | engine default: `gpt-5.4` (codex), `claude-opus-4-6[1m]` (claude), `glm-5.2` (glm) |
+| `engine` | instance `THEMIS_ENGINE` | `codex`, `claude`, `glm`, `kimi`, or `openrouter`, overrides the instance's default engine for this repo |
+| `web_access` | `false` | toggles engine web tooling (`WebFetch`/`WebSearch`); glm/kimi/openrouter behave like claude here, and Claude's Bash may still egress unless the deployment enforces an external network policy — this caveat applies to all claude-harness engines |
+| `model.name` | engine default | engine default: `gpt-5.4` (codex), `claude-opus-4-6[1m]` (claude), `glm-5.2` (glm), `kimi-k3` (kimi), `openrouter/auto` (openrouter — any OpenRouter slug works) |
 | `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` (codex only) |
 | `limits.timeout_seconds` | `1200` | per agent attempt |
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
@@ -302,7 +306,7 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `review.modules.<name>` | full-dress profile | `always` \| `auto` \| `off` per optional review section; all six presentation categories default to enabled and only `off` suppresses them; see [`docs/configuration.md`](docs/configuration.md) |
 | `review.modules.big_picture` | `auto` | the `Big picture:` architecture/maintainability note; `auto` shows it only when the change provides concrete structural evidence (no empty-state filler), `always` pins it, `off` suppresses the note while structural defects still surface as findings |
 | `agent.context` | `false` | agent natively discovers `CLAUDE.md`/`AGENTS.md`, always resolved from the PR base revision so a PR can't steer its own review; see [`docs/configuration.md`](docs/configuration.md) |
-| `agent.skills` | `false` | agent uses `.claude/skills` packages, same base-revision rule — natively on claude/glm, via a synthesized index (skills bridge) on codex |
+| `agent.skills` | `false` | agent uses `.claude/skills` packages, same base-revision rule — natively on claude/glm/kimi/openrouter, via a synthesized index (skills bridge) on codex |
 
 Can't commit `.themis/config.yaml` to the target repo (yet)? Set
 `THEMIS_DEFAULT_REPO_CONFIG` on the controller to the same yaml (raw or
@@ -326,19 +330,21 @@ the finding covers changes materially later, it can come back as open.
 
 ## Engines
 
-Themis runs reviews through an agent CLI, using your Codex, Claude Max, or GLM Coding Plan subscription:
+Themis runs reviews through an agent CLI, using your Codex, Claude Max, or GLM Coding Plan subscription — or pay-per-token Moonshot/OpenRouter credentials:
 
 | Engine | Auth | Setup |
 |---|---|---|
 | `codex` (default) | `auth.json` volume (`CODEX_HOME`) | `codex login` locally; bootstrap copies `auth.json` into the generated volume |
 | `claude` | one env var | run `claude setup-token` locally, set `CLAUDE_CODE_OAUTH_TOKEN` in `.env` |
 | `glm` | one env var | set `GLM_API_KEY` in `.env` (Z.ai GLM Coding Plan key); reviews run through the claude CLI against Z.ai's Anthropic-compatible endpoint |
+| `kimi` | one env var | set `KIMI_API_KEY` in `.env` (Moonshot pay-as-you-go platform key — not a Kimi Code subscription, whose terms exclude non-interactive use); reviews run through the claude CLI against Moonshot's Anthropic-compatible endpoint |
+| `openrouter` | one env var | set `OPENROUTER_API_KEY` in `.env` (prepaid credits); reviews run through the claude CLI against OpenRouter's Anthropic-protocol gateway — `model.name` takes any OpenRouter slug |
 
 Pick the instance default with `THEMIS_ENGINE` in `.env`. A repo can override it
 in `.themis/config.yaml` with `engine:` set to any of them; if that engine
 has no credentials on the instance, Themis posts a comment saying so instead of
-failing silently. The claude and glm paths need no volume: key in
-`.env`, done.
+failing silently. The claude, glm, kimi, and openrouter paths need no
+volume: key in `.env`, done.
 
 ## Troubleshooting
 
@@ -349,7 +355,7 @@ failing silently. The claude and glm paths need no volume: key in
 | Codex sandbox errors | Set `THEMIS_CODEX_SANDBOX=danger-full-access`; the container is the sandbox boundary on runtimes without Landlock. |
 | PR comment says the usage limit was reached | The subscription of whichever engine ran the job has hit its usage window. Mention the bot again once it resets. |
 | Auth that worked starts failing months later | Run `codex login` locally, then refresh the persistent agent credential using the command in [Automated setup: Refreshing Codex authentication](docs/bootstrap.md#refreshing-codex-authentication). |
-| Review comment says engine credentials missing | Set `CLAUDE_CODE_OAUTH_TOKEN` (claude), `GLM_API_KEY` (glm), or seed the codex auth volume (codex), or change `THEMIS_ENGINE` / the repo's `engine:` key. |
+| Review comment says engine credentials missing | Set `CLAUDE_CODE_OAUTH_TOKEN` (claude), `GLM_API_KEY` (glm), `KIMI_API_KEY` (kimi), `OPENROUTER_API_KEY` (openrouter), or seed the codex auth volume (codex), or change `THEMIS_ENGINE` / the repo's `engine:` key. |
 | Webhook deliveries show 401 in the App's settings | `THEMIS_GH_WEBHOOK_SECRET` doesn't match the App's webhook secret. |
 | Where are the logs | `docker compose logs -f themis` |
 | A job queued right before a restart never ran | The in-memory queue doesn't survive restarts; mention the bot again to re-trigger. |
