@@ -86,10 +86,20 @@ _ENGINE_AUTH_HINTS = {
     "claude": "CLAUDE_CODE_OAUTH_TOKEN",
     "glm": "GLM_API_KEY",
 }
-# One agent run at a time so reviews never monopolize the shared worker.
-# Note: this bounds agent runs per worker process only; running several worker
-# processes yields one concurrent agent run per process.
+# Engine-run gate, sized to THEMIS_CONCURRENCY at startup (default one) so
+# the queue's parallel consumers get matching engine slots instead of
+# serializing here. Note: this bounds agent runs per worker process only;
+# running several worker processes yields that many slots per process.
 _agent_slot = asyncio.Semaphore(1)
+
+
+def configure_agent_slot(concurrency: int) -> None:
+    """Rebind the engine-run gate to admit `concurrency` holders.
+
+    Called once at startup, before any job runs; jobs read the module
+    global at acquire time, so the rebind is race-free."""
+    global _agent_slot
+    _agent_slot = asyncio.Semaphore(concurrency)
 
 
 async def api_changed_paths(gh: Any, repo: str, pr_number: int) -> set[str] | None:

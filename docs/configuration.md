@@ -18,6 +18,7 @@ Two planes:
 | `THEMIS_AGENT_TOKEN` | yes | none | controller-to-agent bearer token; use the same random value in both containers |
 | `THEMIS_AGENT_URL` | no | `http://agent:8001` | internal URL of the isolated agent service |
 | `THEMIS_ENGINE` | no | `codex` | instance default review engine; `codex`, `claude`, or `glm` |
+| `THEMIS_CONCURRENCY` | no | `1` | parallel jobs, `1`–`8`; out-of-range or non-integer values warn and fall back to `1`. Sizes the queue consumers and the engine-run slots, and must be set on both the controller and agent containers (the compose templates pass it to both). The practical limit is the operator's engine subscription quota, so keep it small |
 | `THEMIS_DEFAULT_REPO_CONFIG` | no | unset | `.themis/config.yaml` content (raw yaml or base64 of it) used for repos that have no `.themis/config.yaml`; see below |
 | `CODEX_HOME` | no | `/data/codex` | codex auth/state directory |
 | `THEMIS_CODEX_SANDBOX` | no | `workspace-write` | codex sandbox mode; `danger-full-access` for runtimes without Landlock |
@@ -270,4 +271,4 @@ cloning and posting, enforced by the job queue rather than the per-repo
 config. A repo raising `limits.timeout_seconds` past what fits under that
 ceiling is still capped, because the repo config is only fetched inside the
 job, after the queue has already committed to running it. No single repo's
-config can hold the shared, single-concurrency queue past that ceiling.
+config can hold a queue consumer past that ceiling.

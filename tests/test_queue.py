@@ -1,4 +1,4 @@
-"""InMemoryJobQueue: dedup, single consumer, timeout, cancellation, shutdown."""
+"""InMemoryJobQueue: dedup, consumer count, timeout, cancellation, shutdown."""
 
 import asyncio
 
@@ -62,6 +62,54 @@ async def test_jobs_run_one_at_a_time():
     await asyncio.sleep(0.05)
     assert peak == 1
     await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_concurrency_two_runs_jobs_in_parallel():
+    queue = InMemoryJobQueue(concurrency=2)
+    both_running = asyncio.Event()
+    release = asyncio.Event()
+    running = 0
+
+    async def job():
+        nonlocal running
+        running += 1
+        if running == 2:
+            both_running.set()
+        await release.wait()
+
+    queue.start()
+    queue.enqueue("j1", job)
+    queue.enqueue("j2", job)
+    await asyncio.wait_for(both_running.wait(), 2)  # parallel, not serial
+    release.set()
+    await asyncio.sleep(0.05)
+    assert queue.enqueue("j1", job) is True  # both ids freed
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_all_consumers_and_running_jobs():
+    queue = InMemoryJobQueue(concurrency=2)
+    started = 0
+    cancelled = 0
+
+    async def stuck():
+        nonlocal started, cancelled
+        started += 1
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled += 1
+            raise
+
+    queue.start()
+    queue.enqueue("s1", stuck)
+    queue.enqueue("s2", stuck)
+    await asyncio.sleep(0.05)
+    assert started == 2
+    await queue.stop()
+    assert cancelled == 2
 
 
 @pytest.mark.asyncio
