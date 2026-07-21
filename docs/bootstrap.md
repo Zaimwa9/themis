@@ -110,13 +110,15 @@ CLAUDE_CODE_OAUTH_TOKEN=<token>
 
 The generated Compose file exposes it only to the isolated agent service.
 
-## GLM engine
+## GLM, Kimi, and OpenRouter engines
 
-Pass `--engine glm` and omit `--codex-auth`. No CLI login is needed: place
-your Z.ai GLM Coding Plan key in the generated `.env`:
+Pass `--engine glm` (or `kimi` / `openrouter`) and omit `--codex-auth`. No
+CLI login is needed: place the provider key in the generated `.env`:
 
 ```text
-GLM_API_KEY=<key>
+GLM_API_KEY=<key>          # glm: Z.ai GLM Coding Plan key
+KIMI_API_KEY=<key>         # kimi: Moonshot pay-as-you-go platform key
+OPENROUTER_API_KEY=<key>   # openrouter: OpenRouter prepaid-credits key
 ```
 
 The generated Compose file exposes it only to the isolated agent service.
