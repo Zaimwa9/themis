@@ -42,6 +42,7 @@ async def test_run__env__key_mapped_and_endpoint_baked(tmp_path, monkeypatch, wo
     # and sibling engine credentials must stay invisible.
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://attacker.example")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "host-leak")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "host-api-key-leak")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-fake")
     monkeypatch.setenv("KIMI_API_KEY", "kimi-key-sibling")
 
@@ -51,6 +52,11 @@ async def test_run__env__key_mapped_and_endpoint_baked(tmp_path, monkeypatch, wo
     assert "ANTHROPIC_BASE_URL=https://openrouter.ai/api" in env_dump
     assert "ANTHROPIC_AUTH_TOKEN=or-key-123456" in env_dump
     assert "API_TIMEOUT_MS=3000000" in env_dump
+    # OpenRouter's Claude Code guide requires an explicitly blank
+    # ANTHROPIC_API_KEY so the harness never falls back to direct Anthropic
+    # API-key auth; the host value must not leak.
+    assert "ANTHROPIC_API_KEY=" in env_dump.splitlines()
+    assert "host-api-key-leak" not in env_dump
     # The raw key var, sibling keys, and the claude subscription token
     # never cross over.
     assert "OPENROUTER_API_KEY" not in env_dump

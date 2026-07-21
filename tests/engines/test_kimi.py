@@ -42,6 +42,7 @@ async def test_run__env__key_mapped_and_endpoint_baked(tmp_path, monkeypatch, wo
     # and sibling engine credentials must stay invisible.
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://attacker.example")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "host-leak")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "host-api-key-leak")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-fake")
     monkeypatch.setenv("GLM_API_KEY", "glm-key-sibling")
 
@@ -51,6 +52,10 @@ async def test_run__env__key_mapped_and_endpoint_baked(tmp_path, monkeypatch, wo
     assert "ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic" in env_dump
     assert "ANTHROPIC_AUTH_TOKEN=kimi-key-123456" in env_dump
     assert "API_TIMEOUT_MS=3000000" in env_dump
+    # Explicitly blank per provider guidance, so the harness can never fall
+    # back to direct Anthropic API-key auth; the host value must not leak.
+    assert "ANTHROPIC_API_KEY=" in env_dump.splitlines()
+    assert "host-api-key-leak" not in env_dump
     # The raw key var, sibling keys, and the claude subscription token
     # never cross over.
     assert "KIMI_API_KEY" not in env_dump
