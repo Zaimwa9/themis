@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.0](https://github.com/Zaimwa9/themis/compare/v0.8.0...v0.9.0) (2026-07-21)
+
+
+### Features
+
+* kimi and openrouter engines ([#69](https://github.com/Zaimwa9/themis/issues/69)) ([#76](https://github.com/Zaimwa9/themis/issues/76)) ([6abef04](https://github.com/Zaimwa9/themis/commit/6abef04c741f7115b2111c6393d8d815d0ef44c8))
+* **queue:** THEMIS_CONCURRENCY setting for parallel consumers (up to 8) ([#74](https://github.com/Zaimwa9/themis/issues/74)) ([54590d5](https://github.com/Zaimwa9/themis/commit/54590d5275d27933579e7ff66d6410931157993f))
+
+
+### Bug Fixes
+
+* **events:** explicit review requests and questions bypass draft status ([#75](https://github.com/Zaimwa9/themis/issues/75)) ([1b7f537](https://github.com/Zaimwa9/themis/commit/1b7f53790c0188958140b22d7e8a7c033f5fdec9)), closes [#70](https://github.com/Zaimwa9/themis/issues/70)
+* **output:** normalise start_line == line findings to single-line comments ([#73](https://github.com/Zaimwa9/themis/issues/73)) ([3eb75e6](https://github.com/Zaimwa9/themis/commit/3eb75e60cd82f885fef0ca50606968cb3b6f22e1)), closes [#72](https://github.com/Zaimwa9/themis/issues/72)
+* **release:** bump uv.lock atomically in the release PR via extra-files ([#66](https://github.com/Zaimwa9/themis/issues/66)) ([d7cb4e5](https://github.com/Zaimwa9/themis/commit/d7cb4e59f6e30b894512784e50b6a6003417d4cf))
+
 ## [0.8.0](https://github.com/Zaimwa9/themis/compare/v0.7.1...v0.8.0) (2026-07-15)
 
 
