@@ -62,7 +62,7 @@ async def _register_webhook(settings: Settings, app_jwt: str) -> None:
 def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = load_settings()  # SettingsError here = crash, on purpose
-    queue = InMemoryJobQueue()
+    queue = InMemoryJobQueue(concurrency=settings.concurrency)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

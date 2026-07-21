@@ -11,7 +11,9 @@ doctrine from your own repository, under `.themis/`.
 ## How it works
 
 A GitHub App webhook delivers PR and comment events to Themis. Each event
-becomes a job on an in-memory queue, processed one at a time. The worker
+becomes a job on an in-memory queue, processed one at a time by default
+(`THEMIS_CONCURRENCY` runs up to 8 in parallel; the practical limit is your
+engine subscription quota). The worker
 shallow-clones the PR head, runs the configured engine (`codex exec`, or
 `claude -p` — natively or in API mode for GLM) against your repo's review doctrine, and posts findings and a
 summary back to GitHub as the App. One image runs as an isolated controller
