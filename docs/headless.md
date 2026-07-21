@@ -33,6 +33,12 @@ i.e. when the trigger API is disabled.
 Enqueues a full review, same dedup id as the webhook path
 (`review:{repo}#{pr_number}`).
 
+Calls to this route count as explicit requests: a draft PR is reviewed
+(only closed PRs are skipped), unlike the automatic webhook triggers,
+which skip drafts. If you forward `opened`/`ready_for_review` events here
+and want drafts skipped, filter on `payload["pull_request"]["draft"]` in
+your handler.
+
 Body:
 
 ```json

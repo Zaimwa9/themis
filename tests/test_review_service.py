@@ -421,7 +421,7 @@ async def test_review__happy_path__posts_review_replies_resolves_summary(service
     gh.post_summary_comment.assert_awaited_once()
 
 
-async def test_review__draft_pr__does_nothing(service, gh):
+async def test_review__draft_pr_auto__does_nothing(service, gh):
     gh.get_pr.return_value = {**gh.get_pr.return_value, "draft": True}
 
     await service.review(REPO, 7, 42, auto=True)
@@ -430,10 +430,26 @@ async def test_review__draft_pr__does_nothing(service, gh):
     gh.post_review.assert_not_awaited()
 
 
+async def test_review__draft_pr_explicit_request__runs(service, gh):
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "draft": True}
+
+    await service.review(REPO, 7, 42, auto=False, trigger_comment_id=501)
+
+    gh.post_summary_comment.assert_awaited_once()
+
+
 async def test_review__closed_pr__does_nothing(service, gh):
     gh.get_pr.return_value = {**gh.get_pr.return_value, "state": "closed"}
 
     await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__closed_pr_explicit_request__still_skipped(service, gh):
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "state": "closed", "draft": True}
+
+    await service.review(REPO, 7, 42, auto=False, trigger_comment_id=501)
 
     gh.post_summary_comment.assert_not_awaited()
 
@@ -1017,6 +1033,19 @@ async def test_discuss__conversation__posts_issue_comment(service, gh):
 
     gh.post_issue_comment.assert_awaited_once_with(REPO, 7, "here is the answer")
     gh.add_reaction.assert_not_awaited()
+
+
+async def test_discuss__draft_pr__still_answers(service, gh):
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "draft": True}
+    service.resolve_engine = _resolver(_reply_agent())
+
+    await service.discuss(
+        repo=REPO, pr_number=7, installation_id=42, comment_id=501,
+        body="@test-reviewer why?", kind="conversation",
+        in_reply_to_id=None, mentions_bot=True,
+    )
+
+    gh.post_issue_comment.assert_awaited_once_with(REPO, 7, "here is the answer")
 
 
 async def test_discuss__reply_in_bot_thread_without_mention__adds_reaction_and_replies(
