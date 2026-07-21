@@ -17,6 +17,10 @@ class AnthropicApiEngine(ClaudeEngine):
     def _auth_env(self) -> dict[str, str]:
         env = {
             "ANTHROPIC_BASE_URL": self._base_url,
+            # Explicitly blank (OpenRouter's Claude Code guide requires it):
+            # the harness must authenticate with the bearer token only and
+            # never fall back to direct Anthropic API-key auth.
+            "ANTHROPIC_API_KEY": "",
             # Providers recommend a generous request timeout for long agentic
             # turns; run_cli's wall clock still bounds the whole attempt.
             "API_TIMEOUT_MS": "3000000",

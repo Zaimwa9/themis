@@ -1,11 +1,11 @@
 # Themis per-repo config. Every key is optional; these are the defaults.
 # Drop this directory into your repo root as `.themis/`.
-# engine: codex            # codex | claude | glm; unset = the instance's THEMIS_ENGINE
+# engine: codex            # codex | claude | glm | kimi | openrouter; unset = the instance's THEMIS_ENGINE
 # web_access: false        # toggles engine web tooling; Claude Bash egress
                            # requires deployment-level controls (see docs/security.md)
 model:
-  # name: gpt-5.4          # unset = engine default (codex: gpt-5.4, claude: claude-opus-4-6[1m], glm: glm-5.2)
-  reasoning_effort: high   # low | medium | high (codex only; claude/glm ignore it)
+  # name: gpt-5.4          # unset = engine default (codex: gpt-5.4, claude: claude-opus-4-6[1m], glm: glm-5.2, kimi: kimi-k3, openrouter: openrouter/auto)
+  reasoning_effort: high   # low | medium | high (codex only; claude-harness engines ignore it)
 limits:
   timeout_seconds: 1200    # per agent attempt
   max_attempts: 2
@@ -19,7 +19,7 @@ agent:
   context: false           # true = native CLAUDE.md/AGENTS.md discovery, resolved
                            # from the PR base revision (never the PR head)
   skills: false            # true = native .claude/skills discovery, same rule
-                           # (claude/glm engines; codex has no skills surface)
+                           # (claude/glm/kimi/openrouter engines; codex has no skills surface)
 review:
   modules:                 # always | auto | off (true = auto, false = off)
     scorecard: always      # canonical four-row numeric /5 table

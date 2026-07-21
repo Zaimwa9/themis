@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from themis.engines.base import EngineError, EngineQuotaError
-from themis.engines.glm import GlmEngine
+from themis.engines.openrouter import OpenRouterEngine
 
 pytestmark = pytest.mark.asyncio
 
@@ -29,33 +29,38 @@ def workspace(tmp_path: Path) -> Path:
 async def _run(workspace: Path, **overrides) -> str:
     kwargs = dict(
         prompt="review this", workspace=workspace,
-        model="glm-5.2", effort="high", timeout=10,
+        model="openrouter/auto", effort="high", timeout=10,
     )
     kwargs.update(overrides)
-    return await GlmEngine().run(**kwargs)
+    return await OpenRouterEngine().run(**kwargs)
 
 
 async def test_run__env__key_mapped_and_endpoint_baked(tmp_path, monkeypatch, workspace):
     _fake_cli(tmp_path, monkeypatch, "env > env.txt")
-    monkeypatch.setenv("GLM_API_KEY", "glm-key-123456")
-    # A hostile/misconfigured host env must not redirect the provider key.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key-123456")
+    # A hostile/misconfigured host env must not redirect the provider key,
+    # and sibling engine credentials must stay invisible.
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://attacker.example")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "host-leak")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "host-api-key-leak")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-fake")
+    monkeypatch.setenv("KIMI_API_KEY", "kimi-key-sibling")
 
     await _run(workspace)
 
     env_dump = (workspace / "env.txt").read_text()
-    assert "ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic" in env_dump
-    assert "ANTHROPIC_AUTH_TOKEN=glm-key-123456" in env_dump
+    assert "ANTHROPIC_BASE_URL=https://openrouter.ai/api" in env_dump
+    assert "ANTHROPIC_AUTH_TOKEN=or-key-123456" in env_dump
     assert "API_TIMEOUT_MS=3000000" in env_dump
-    # Explicitly blank per provider guidance, so the harness can never fall
-    # back to direct Anthropic API-key auth; the host value must not leak.
+    # OpenRouter's Claude Code guide requires an explicitly blank
+    # ANTHROPIC_API_KEY so the harness never falls back to direct Anthropic
+    # API-key auth; the host value must not leak.
     assert "ANTHROPIC_API_KEY=" in env_dump.splitlines()
     assert "host-api-key-leak" not in env_dump
-    # The raw key var and the claude subscription token never cross over.
-    assert "GLM_API_KEY" not in env_dump
+    # The raw key var, sibling keys, and the claude subscription token
+    # never cross over.
+    assert "OPENROUTER_API_KEY" not in env_dump
+    assert "KIMI_API_KEY" not in env_dump
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in env_dump
     assert "attacker.example" not in env_dump
     assert "host-leak" not in env_dump
@@ -67,7 +72,7 @@ async def test_run__argv__hardening_flags_and_model(tmp_path, monkeypatch, works
     await _run(workspace)
 
     args = (workspace / "args.txt").read_text()
-    assert "glm-5.2" in args
+    assert "openrouter/auto" in args
     assert "--dangerously-skip-permissions" in args
     assert "--safe-mode" in args
     assert "--setting-sources  --strict-mcp-config" in args
@@ -75,43 +80,14 @@ async def test_run__argv__hardening_flags_and_model(tmp_path, monkeypatch, works
     assert "--disallowedTools WebFetch,WebSearch" in args
 
 
-async def test_run__native_context__project_setting_source(
-    tmp_path, monkeypatch, workspace
-):
-    _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt')
-
-    await _run(workspace, native_context=True)
-
-    args = (workspace / "args.txt").read_text()
-    assert "--setting-sources project" in args
-    assert "--strict-mcp-config" in args
-
-
-async def test_run__config_dir__isolated(tmp_path, monkeypatch, workspace):
-    _fake_cli(tmp_path, monkeypatch, "env > env.txt")
-
-    await _run(workspace)
-
-    env_dump = (workspace / "env.txt").read_text()
-    config_dir = next(
-        line.removeprefix("CLAUDE_CONFIG_DIR=")
-        for line in env_dump.splitlines()
-        if line.startswith("CLAUDE_CONFIG_DIR=")
-    )
-    assert config_dir != os.path.expanduser("~/.claude")
-
-
 @pytest.mark.parametrize(
     "message",
     [
-        # True plan exhaustion (Z.ai 1308/1310/1309): retryable by design until
-        # quota can be classified from provider-structured output (#28) —
-        # any text marker here could be echoed by a prompt-steered agent.
-        "Usage limit reached for the past 5 hours. Resets at 18:00.",
-        "Weekly/Monthly Limit Exhausted. Your limit will reset at Monday.",
-        "Your GLM Coding Plan package has expired.",
-        # Transient throttling (Z.ai 1302) and generic agent prose.
-        "Rate limit reached for requests",
+        # OpenRouter credit/limit prose: retryable by design — no text quota
+        # markers (spoofable; a 402 out-of-credits never auto-resets, so the
+        # "retry later" quota comment would mislead). See spec.
+        "This request requires more credits. Please add credits.",
+        "Rate limit exceeded, please slow down",
         "the retry limit exhausted while calling the API",
     ],
 )
@@ -126,12 +102,12 @@ async def test_run__any_failure__is_retryable_engine_error(
 
 
 def test_available__key_set__true(monkeypatch):
-    monkeypatch.setenv("GLM_API_KEY", "glm-key-123456")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key-123456")
 
-    assert GlmEngine().available() is True
+    assert OpenRouterEngine().available() is True
 
 
 def test_available__key_missing__false(monkeypatch):
-    monkeypatch.delenv("GLM_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
-    assert GlmEngine().available() is False
+    assert OpenRouterEngine().available() is False

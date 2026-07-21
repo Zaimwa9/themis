@@ -17,13 +17,15 @@ Two planes:
 | `THEMIS_GH_WEBHOOK_SECRET` | yes, unless `THEMIS_WEBHOOK_ENABLED=false` | none | webhook HMAC secret, shared with the App settings |
 | `THEMIS_AGENT_TOKEN` | yes | none | controller-to-agent bearer token; use the same random value in both containers |
 | `THEMIS_AGENT_URL` | no | `http://agent:8001` | internal URL of the isolated agent service |
-| `THEMIS_ENGINE` | no | `codex` | instance default review engine; `codex`, `claude`, or `glm` |
+| `THEMIS_ENGINE` | no | `codex` | instance default review engine; `codex`, `claude`, `glm`, `kimi`, or `openrouter` |
 | `THEMIS_CONCURRENCY` | no | `1` | parallel jobs, `1`–`8`; out-of-range or non-integer values warn and fall back to `1`. Sizes the queue consumers and the engine-run slots, and must be set on both the controller and agent containers (the compose templates pass it to both). The practical limit is the operator's engine subscription quota, so keep it small |
 | `THEMIS_DEFAULT_REPO_CONFIG` | no | unset | `.themis/config.yaml` content (raw yaml or base64 of it) used for repos that have no `.themis/config.yaml`; see below |
 | `CODEX_HOME` | no | `/data/codex` | codex auth/state directory |
 | `THEMIS_CODEX_SANDBOX` | no | `workspace-write` | codex sandbox mode; `danger-full-access` for runtimes without Landlock |
 | `CLAUDE_CODE_OAUTH_TOKEN` | agent only | unset | Claude Max token from `claude setup-token`; never set it on the controller |
 | `GLM_API_KEY` | agent only | unset | Z.ai GLM Coding Plan key for the glm engine; never set it on the controller |
+| `KIMI_API_KEY` | agent only | unset | Moonshot pay-as-you-go platform key for the kimi engine; never set it on the controller. Deliberately not the Kimi Code subscription key — that plan's guidelines restrict it to personal interactive use, which excludes review bots |
+| `OPENROUTER_API_KEY` | agent only | unset | OpenRouter key for the openrouter engine (prepaid credits, pay-per-token — not a subscription); never set it on the controller |
 | `THEMIS_PUBLIC_URL` | no | unset | enables webhook self-registration at `<url>/webhook` |
 | `THEMIS_TUNNEL_API` | no | unset | ngrok agent API URL for tunnel discovery |
 | `THEMIS_WEBHOOK_ENABLED` | no | `true` | set `false` for headless mode |
@@ -36,7 +38,8 @@ Two planes:
 
 Names and defaults come straight from `../src/themis/config.py`, except
 `PORT` and `THEMIS_ROLE` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and
-`CLAUDE_CODE_OAUTH_TOKEN` and `GLM_API_KEY` (read directly by
+`CLAUDE_CODE_OAUTH_TOKEN`, `GLM_API_KEY`, `KIMI_API_KEY`, and
+`OPENROUTER_API_KEY` (read directly by
 the engine adapters in `../src/themis/engines/`, not part of `Settings`). Model, limit, and trigger configuration
 lives in `.themis/config.yaml` (or its `THEMIS_DEFAULT_REPO_CONFIG`
 fallback, below), not in dedicated environment variables. There is no
@@ -51,10 +54,10 @@ in as `.themis/`, see the README's Quickstart). Every key is optional; a
 repo with no `.themis/` directory at all gets full defaults.
 
 ```yaml
-# engine: codex            # codex | claude | glm; unset = instance default (THEMIS_ENGINE)
+# engine: codex            # codex | claude | glm | kimi | openrouter; unset = instance default (THEMIS_ENGINE)
 # web_access: false        # toggles engine web tools; see the table below
 model:
-  # name: gpt-5.4          # unset = engine default (codex: gpt-5.4, claude: claude-opus-4-6[1m], glm: glm-5.2)
+  # name: gpt-5.4          # unset = engine default (codex: gpt-5.4, claude: claude-opus-4-6[1m], glm: glm-5.2, kimi: kimi-k3, openrouter: openrouter/auto)
   reasoning_effort: high   # low | medium | high (codex only; claude-harness engines ignore it)
 limits:
   timeout_seconds: 1200
@@ -83,10 +86,10 @@ review:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `engine` | unset (instance `THEMIS_ENGINE`) | `codex`, `claude`, or `glm`; an invalid value warns and falls back to the instance default |
-| `web_access` | `false` | toggles engine web tooling: codex enables sandbox network access; claude enables `WebFetch`/`WebSearch`; glm behaves like claude (`WebFetch`/`WebSearch`). Claude's unsandboxed Bash may still egress unless the deployment enforces an external network policy. Only the repo's default branch controls this |
-| `model.name` | unset (engine default) | `gpt-5.4` for codex, `claude-opus-4-6[1m]` for claude, `glm-5.2` for glm |
-| `model.reasoning_effort` | `high` | `low`, `medium`, or `high`; codex only, ignored by claude/glm |
+| `engine` | unset (instance `THEMIS_ENGINE`) | `codex`, `claude`, `glm`, `kimi`, or `openrouter`; an invalid value warns and falls back to the instance default |
+| `web_access` | `false` | toggles engine web tooling: codex enables sandbox network access; claude enables `WebFetch`/`WebSearch`; glm/kimi/openrouter behave like claude (`WebFetch`/`WebSearch`). Claude's unsandboxed Bash may still egress unless the deployment enforces an external network policy. Only the repo's default branch controls this |
+| `model.name` | unset (engine default) | `gpt-5.4` for codex, `claude-opus-4-6[1m]` for claude, `glm-5.2` for glm, `kimi-k3` for kimi, `openrouter/auto` for openrouter — any OpenRouter model slug (e.g. `moonshotai/kimi-k3`) can be set, but OpenRouter's Claude Code integration only guarantees Anthropic first-party models; other providers' slugs may not work reliably as review agents |
+| `model.reasoning_effort` | `high` | `low`, `medium`, or `high`; codex only, ignored by the claude-harness engines (claude/glm/kimi/openrouter) |
 | `limits.timeout_seconds` | `1200` | wall-clock budget per agent attempt, in seconds |
 | `limits.max_attempts` | `2` | attempts before Themis gives up and posts a failure comment |
 | `limits.clone_depth` | `50` | git fetch depth for the shallow PR clone |
@@ -95,7 +98,7 @@ review:
 | `learnings.digest_threshold` | `10` | pending learnings needed before Themis opens/updates the digest PR (min 1) |
 | `review.modules.<name>` | per-module profile | tri-state presence per optional review section: `always`, `auto`, or `off`; see below |
 | `agent.context` | `false` | the review agent natively discovers instruction files (`CLAUDE.md`, `AGENTS.md`) — resolved from the PR base revision, never the PR head; see below |
-| `agent.skills` | `false` | the review agent uses `.claude/skills` packages — same base-revision rule; native discovery on claude/glm, a synthesized index (skills bridge) on codex |
+| `agent.skills` | `false` | the review agent uses `.claude/skills` packages — same base-revision rule; native discovery on claude/glm/kimi/openrouter, a synthesized index (skills bridge) on codex |
 
 A partial file overlays the defaults key by key, so you only need to set the
 fields you want to change. Unknown fields are ignored. An invalid field warns
@@ -189,7 +192,7 @@ without the injection risk:
   including nested ones) are discovered natively by the engine, plus the
   files they `@`-reference.
 - `agent.skills: true` — skill packages under `.claude/skills/` are
-  discovered natively (claude/glm engines). Engines without native skill
+  discovered natively (claude/glm/kimi/openrouter engines). Engines without native skill
   discovery (codex) get the **skills bridge** instead: Themis synthesizes
   `.review-input/skills-index.md` from the base-revision `SKILL.md`
   frontmatter (name and description, capped at 50 entries and 200

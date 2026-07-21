@@ -225,6 +225,8 @@ def _compose_text(image: str) -> str:
       THEMIS_CONCURRENCY: ${{THEMIS_CONCURRENCY:-1}}
       CLAUDE_CODE_OAUTH_TOKEN: ${{CLAUDE_CODE_OAUTH_TOKEN:-}}
       GLM_API_KEY: ${{GLM_API_KEY:-}}
+      KIMI_API_KEY: ${{KIMI_API_KEY:-}}
+      OPENROUTER_API_KEY: ${{OPENROUTER_API_KEY:-}}
       HTTP_PROXY: ${{HTTP_PROXY:-}}
       HTTPS_PROXY: ${{HTTPS_PROXY:-}}
     volumes:
@@ -305,6 +307,8 @@ def write_deployment(options: BootstrapOptions, credentials: dict[str, object]) 
         f"NGROK_AUTHTOKEN={_dotenv(options.ngrok_authtoken or '')}",
         "CLAUDE_CODE_OAUTH_TOKEN=''",
         "GLM_API_KEY=''",
+        "KIMI_API_KEY=''",
+        "OPENROUTER_API_KEY=''",
     ]
     _write_exclusive(env_path, ("\n".join(lines) + "\n").encode(), 0o600)
     _write_exclusive(compose_path, _compose_text(options.image).encode(), 0o644)

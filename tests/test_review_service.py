@@ -2912,6 +2912,16 @@ async def test_review__code_suggestions_off__unclosed_suggestion_fence_stripped(
     assert "Off-by-one." in posted
 
 
+def test_engine_tables_cover_all_engines():
+    # Every registered engine must have a default model and an auth hint;
+    # a gap surfaces as a KeyError mid-review otherwise.
+    from themis.engines import ENGINE_NAMES
+    from themis.review_service import _ENGINE_AUTH_HINTS, DEFAULT_MODELS
+
+    assert set(DEFAULT_MODELS) == set(ENGINE_NAMES)
+    assert set(_ENGINE_AUTH_HINTS) == set(ENGINE_NAMES)
+
+
 async def test_configure_agent_slot_admits_that_many_engine_runs():
     from themis import review_service
 

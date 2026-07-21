@@ -141,3 +141,19 @@ def test_redact__glm_api_key(monkeypatch):
     text = redact_outbound("keys: glm-key-abcdef123456")
 
     assert "glm-key-abcdef123456" not in text
+
+
+def test_redact__kimi_api_key(monkeypatch):
+    monkeypatch.setenv("KIMI_API_KEY", "kimi-key-abcdef123456")
+
+    text = redact_outbound("keys: kimi-key-abcdef123456")
+
+    assert "kimi-key-abcdef123456" not in text
+
+
+def test_redact__openrouter_api_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "or-key-abcdef123456")
+
+    text = redact_outbound("keys: or-key-abcdef123456")
+
+    assert "or-key-abcdef123456" not in text

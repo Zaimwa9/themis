@@ -63,6 +63,8 @@ DEFAULT_MODELS = {
     "codex": "gpt-5.4",
     "claude": "claude-opus-4-6[1m]",
     "glm": "glm-5.2",
+    "kimi": "kimi-k3",
+    "openrouter": "openrouter/auto",
 }
 
 QUOTA_COMMENT = (
@@ -85,6 +87,8 @@ _ENGINE_AUTH_HINTS = {
     "codex": "auth.json in CODEX_HOME",
     "claude": "CLAUDE_CODE_OAUTH_TOKEN",
     "glm": "GLM_API_KEY",
+    "kimi": "KIMI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
 }
 # Engine-run gate, sized to THEMIS_CONCURRENCY at startup (default one) so
 # the queue's parallel consumers get matching engine slots instead of

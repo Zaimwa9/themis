@@ -171,6 +171,8 @@ def test_write_deployment_keeps_secrets_out_of_compose_and_sets_modes(tmp_path):
     assert f"THEMIS_GH_APP_PRIVATE_KEY='{encoded_pem}'" in env_text
     assert "hook-secret" in env_text
     assert "GLM_API_KEY=''" in env_text
+    assert "KIMI_API_KEY=''" in env_text
+    assert "OPENROUTER_API_KEY=''" in env_text
     assert "secret-key" not in compose_text
     assert "hook-secret" not in compose_text
     assert "image: ${THEMIS_IMAGE:-ghcr.io/example/themis:1.2.3}" in compose_text
@@ -202,6 +204,8 @@ def test_write_deployment_keeps_secrets_out_of_compose_and_sets_modes(tmp_path):
         "THEMIS_CONCURRENCY": "${THEMIS_CONCURRENCY:-1}",
         "CLAUDE_CODE_OAUTH_TOKEN": "${CLAUDE_CODE_OAUTH_TOKEN:-}",
         "GLM_API_KEY": "${GLM_API_KEY:-}",
+        "KIMI_API_KEY": "${KIMI_API_KEY:-}",
+        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY:-}",
         "HTTP_PROXY": "${HTTP_PROXY:-}",
         "HTTPS_PROXY": "${HTTPS_PROXY:-}",
     }
