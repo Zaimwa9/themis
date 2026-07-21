@@ -15,7 +15,7 @@ becomes a job on an in-memory queue, processed one at a time by default
 (`THEMIS_CONCURRENCY` runs up to 8 in parallel; the practical limit is your
 engine subscription quota). The worker
 shallow-clones the PR head, runs the configured engine (`codex exec`, or
-`claude -p` — natively or in API mode for GLM) against your repo's review doctrine, and posts findings and a
+`claude -p` — natively or in API mode for GLM, Kimi, and OpenRouter) against your repo's review doctrine, and posts findings and a
 summary back to GitHub as the App. One image runs as an isolated controller
 and agent; there is still no database, Redis, or message broker.
 
@@ -297,7 +297,7 @@ See [`docs/learnings.md`](docs/learnings.md).
 |---|---|---|
 | `engine` | instance `THEMIS_ENGINE` | `codex`, `claude`, `glm`, `kimi`, or `openrouter`, overrides the instance's default engine for this repo |
 | `web_access` | `false` | toggles engine web tooling (`WebFetch`/`WebSearch`); glm/kimi/openrouter behave like claude here, and Claude's Bash may still egress unless the deployment enforces an external network policy — this caveat applies to all claude-harness engines |
-| `model.name` | engine default | engine default: `gpt-5.4` (codex), `claude-opus-4-6[1m]` (claude), `glm-5.2` (glm), `kimi-k3` (kimi), `openrouter/auto` (openrouter — any OpenRouter slug works) |
+| `model.name` | engine default | engine default: `gpt-5.4` (codex), `claude-opus-4-6[1m]` (claude), `glm-5.2` (glm), `kimi-k3` (kimi), `openrouter/auto` (openrouter — any OpenRouter slug can be set; only Anthropic first-party models are guaranteed by OpenRouter's Claude Code integration) |
 | `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` (codex only) |
 | `limits.timeout_seconds` | `1200` | per agent attempt |
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
@@ -340,7 +340,7 @@ Themis runs reviews through an agent CLI, using your Codex, Claude Max, or GLM C
 | `claude` | one env var | run `claude setup-token` locally, set `CLAUDE_CODE_OAUTH_TOKEN` in `.env` |
 | `glm` | one env var | set `GLM_API_KEY` in `.env` (Z.ai GLM Coding Plan key); reviews run through the claude CLI against Z.ai's Anthropic-compatible endpoint |
 | `kimi` | one env var | set `KIMI_API_KEY` in `.env` (Moonshot pay-as-you-go platform key — not a Kimi Code subscription, whose terms exclude non-interactive use); reviews run through the claude CLI against Moonshot's Anthropic-compatible endpoint |
-| `openrouter` | one env var | set `OPENROUTER_API_KEY` in `.env` (prepaid credits); reviews run through the claude CLI against OpenRouter's Anthropic-protocol gateway — `model.name` takes any OpenRouter slug |
+| `openrouter` | one env var | set `OPENROUTER_API_KEY` in `.env` (prepaid credits); reviews run through the claude CLI against OpenRouter's Anthropic-protocol gateway — `model.name` accepts any OpenRouter slug, though OpenRouter only guarantees Anthropic first-party models with Claude Code |
 
 Pick the instance default with `THEMIS_ENGINE` in `.env`. A repo can override it
 in `.themis/config.yaml` with `engine:` set to any of them; if that engine

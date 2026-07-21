@@ -88,7 +88,7 @@ review:
 |---|---|---|
 | `engine` | unset (instance `THEMIS_ENGINE`) | `codex`, `claude`, `glm`, `kimi`, or `openrouter`; an invalid value warns and falls back to the instance default |
 | `web_access` | `false` | toggles engine web tooling: codex enables sandbox network access; claude enables `WebFetch`/`WebSearch`; glm/kimi/openrouter behave like claude (`WebFetch`/`WebSearch`). Claude's unsandboxed Bash may still egress unless the deployment enforces an external network policy. Only the repo's default branch controls this |
-| `model.name` | unset (engine default) | `gpt-5.4` for codex, `claude-opus-4-6[1m]` for claude, `glm-5.2` for glm, `kimi-k3` for kimi, `openrouter/auto` for openrouter (any OpenRouter model slug, e.g. `moonshotai/kimi-k3`, works here) |
+| `model.name` | unset (engine default) | `gpt-5.4` for codex, `claude-opus-4-6[1m]` for claude, `glm-5.2` for glm, `kimi-k3` for kimi, `openrouter/auto` for openrouter — any OpenRouter model slug (e.g. `moonshotai/kimi-k3`) can be set, but OpenRouter's Claude Code integration only guarantees Anthropic first-party models; other providers' slugs may not work reliably as review agents |
 | `model.reasoning_effort` | `high` | `low`, `medium`, or `high`; codex only, ignored by the claude-harness engines (claude/glm/kimi/openrouter) |
 | `limits.timeout_seconds` | `1200` | wall-clock budget per agent attempt, in seconds |
 | `limits.max_attempts` | `2` | attempts before Themis gives up and posts a failure comment |
