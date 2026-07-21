@@ -28,7 +28,7 @@ def _set_env(monkeypatch, extra=None, omit=()):
         "THEMIS_CODEX_SANDBOX", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
         "THEMIS_WEBHOOK_ENABLED", "THEMIS_API_TOKEN", "THEMIS_WORKSPACE_ROOT", "THEMIS_ENGINE",
         "THEMIS_AGENT_URL", "THEMIS_AGENT_TOKEN", "THEMIS_DATA_ROOT",
-        "THEMIS_DEFAULT_REPO_CONFIG",
+        "THEMIS_DEFAULT_REPO_CONFIG", "THEMIS_CONCURRENCY",
     ):
         monkeypatch.delenv(key, raising=False)
     for key, value in {**REQUIRED, **(extra or {})}.items():
@@ -162,6 +162,32 @@ def test_load_settings__engine_unknown__raises(monkeypatch):
 
     with pytest.raises(SettingsError, match="invalid engine"):
         load_settings()
+
+
+def test_load_settings__concurrency_default_one(monkeypatch):
+    _set_env(monkeypatch)
+
+    assert load_settings().concurrency == 1
+
+
+def test_load_settings__concurrency_from_env(monkeypatch):
+    _set_env(monkeypatch)
+    monkeypatch.setenv("THEMIS_CONCURRENCY", "4")
+
+    assert load_settings().concurrency == 4
+
+
+@pytest.mark.parametrize("raw", ["0", "9", "-2", "two", "1.5", " "])
+def test_load_settings__concurrency_invalid_degrades_to_one(monkeypatch, caplog, raw):
+    _set_env(monkeypatch)
+    monkeypatch.setenv("THEMIS_CONCURRENCY", raw)
+
+    with caplog.at_level(logging.WARNING):
+        settings = load_settings()
+
+    assert settings.concurrency == 1
+    if raw.strip():  # blank means unset: default silently, no warning
+        assert "themis_invalid_concurrency" in caplog.text
 
 
 # --- repo engine + web_access -------------------------------------------------

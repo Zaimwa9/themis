@@ -302,7 +302,7 @@ GitHub access.
 
 1. `.review-output/summary.md` - always.
 
-   First line: `## ⚖️ Themis judgement: <verdict>` where <verdict> matches your worst
+   First line: `## ⚖️ Themis review: <verdict>` where <verdict> matches your worst
    unacknowledged finding: `✅ Ship it` (nothing to flag) / `🧹 Ship it, nits inside`
    (nits only) / `🟠 Fix before merge` (majors) / `🔴 Hold the merge` (blockers).
 

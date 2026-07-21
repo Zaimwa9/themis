@@ -75,12 +75,12 @@ async def test_post_summary_comment__always_creates_new_comment_with_marker():
         captured["json"] = json.loads(request.content)
         return httpx.Response(201, json={"id": 2})
 
-    await _client(handler).post_summary_comment("acme/widgets", 7, "#### ⚖️ Themis judgement\nok")
+    await _client(handler).post_summary_comment("acme/widgets", 7, "#### ⚖️ Themis review\nok")
 
     assert requests_seen == ["POST"]
     assert captured["path"] == "/repos/acme/widgets/issues/7/comments"
     assert captured["json"]["body"].startswith(SUMMARY_MARKER)
-    assert "#### ⚖️ Themis judgement" in captured["json"]["body"]
+    assert "#### ⚖️ Themis review" in captured["json"]["body"]
 
 
 async def test_list_pr_files__two_pages__returns_all_filenames():

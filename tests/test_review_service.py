@@ -104,7 +104,7 @@ def _review_agent():
     async def agent(*, prompt, workspace, model, effort, timeout, web_access, **kwargs) -> str:
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{"path": "a.py", "line": 3, "body": "bug"}],
             "resolve_thread_ids": ["T_1"],
@@ -171,7 +171,7 @@ async def test_review__agent_opt_in__trusted_context_applied_and_flags_flow(
         captured.update(kwargs)
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({"findings": []}))
         return "ok"
     service.resolve_engine = _resolver(agent)
@@ -281,7 +281,7 @@ async def test_review__agent_defaults__masking_runs_and_flags_stay_off(service, 
         captured.update(kwargs)
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({"findings": []}))
         return "ok"
     service.resolve_engine = _resolver(agent)
@@ -338,7 +338,7 @@ async def test_review__malformed_output_secret_redacted_from_logs_and_error(
     async def malformed(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nsummary")
+        (out / "summary.md").write_text("#### Themis review\nsummary")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{"body": secret}],
         }))
@@ -421,7 +421,7 @@ async def test_review__happy_path__posts_review_replies_resolves_summary(service
     gh.post_summary_comment.assert_awaited_once()
 
 
-async def test_review__draft_pr__does_nothing(service, gh):
+async def test_review__draft_pr_auto__does_nothing(service, gh):
     gh.get_pr.return_value = {**gh.get_pr.return_value, "draft": True}
 
     await service.review(REPO, 7, 42, auto=True)
@@ -430,10 +430,26 @@ async def test_review__draft_pr__does_nothing(service, gh):
     gh.post_review.assert_not_awaited()
 
 
+async def test_review__draft_pr_explicit_request__runs(service, gh):
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "draft": True}
+
+    await service.review(REPO, 7, 42, auto=False, trigger_comment_id=501)
+
+    gh.post_summary_comment.assert_awaited_once()
+
+
 async def test_review__closed_pr__does_nothing(service, gh):
     gh.get_pr.return_value = {**gh.get_pr.return_value, "state": "closed"}
 
     await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__closed_pr_explicit_request__still_skipped(service, gh):
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "state": "closed", "draft": True}
+
+    await service.review(REPO, 7, 42, auto=False, trigger_comment_id=501)
 
     gh.post_summary_comment.assert_not_awaited()
 
@@ -563,7 +579,7 @@ async def test_review__no_findings__summary_only(service, gh):
     async def clean_agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nclean")
+        (out / "summary.md").write_text("#### Themis review\nclean")
         return "ok"
     service.resolve_engine = _resolver(clean_agent)
 
@@ -577,7 +593,7 @@ async def test_review__finding_outside_diff__dropped_and_noted_in_summary(servic
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [
                 {"path": "a.py", "line": 3, "body": "bug"},
@@ -600,7 +616,7 @@ async def test_review__all_findings_outside_diff__no_inline_review(service, gh):
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{"path": "b.py", "line": 9, "body": "stale anchor"}],
         }))
@@ -618,7 +634,7 @@ async def test_review__finding_on_unchanged_line_of_changed_file__dropped(servic
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{"path": "a.py", "line": 4, "body": "not a changed line"}],
         }))
@@ -649,7 +665,7 @@ async def test_review__resolve_only_bot_authored_threads(service, gh):
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "resolve_thread_ids": ["T_1", "T_2", "T_unknown"],
         }))
@@ -686,7 +702,7 @@ async def test_review__inline_post_non_422__raises(service, gh, cleanup_calls):
 async def test_review__oversized_summary_with_422_fallback__truncated_before_upsert(service, gh):
     gh.list_review_threads.return_value = [_bot_thread()]
     gh.post_review.side_effect = _http_error(422)
-    big_summary = "#### Themis judgement\n" + ("x" * (MAX_BODY_LEN - 100))
+    big_summary = "#### Themis review\n" + ("x" * (MAX_BODY_LEN - 100))
 
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
@@ -829,7 +845,7 @@ async def test_review__stale_output_from_failed_attempt_not_reused(service, gh):
         if calls["n"] == 1:
             out = workspace / OUTPUT_DIR
             out.mkdir(exist_ok=True)
-            (out / "summary.md").write_text("#### Themis judgement\nstale")
+            (out / "summary.md").write_text("#### Themis review\nstale")
             (out / "actions.json").write_text(json.dumps({
                 "findings": [{"path": "a.py", "line": 3, "body": "stale"}],
             }))
@@ -856,7 +872,7 @@ async def test_review__inputs_written_for_agent(service, gh, tmp_path):
         )
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nclean")
+        (out / "summary.md").write_text("#### Themis review\nclean")
         return "ok"
 
     gh.list_review_threads.return_value = [_bot_thread()]
@@ -1017,6 +1033,19 @@ async def test_discuss__conversation__posts_issue_comment(service, gh):
 
     gh.post_issue_comment.assert_awaited_once_with(REPO, 7, "here is the answer")
     gh.add_reaction.assert_not_awaited()
+
+
+async def test_discuss__draft_pr__still_answers(service, gh):
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "draft": True}
+    service.resolve_engine = _resolver(_reply_agent())
+
+    await service.discuss(
+        repo=REPO, pr_number=7, installation_id=42, comment_id=501,
+        body="@test-reviewer why?", kind="conversation",
+        in_reply_to_id=None, mentions_bot=True,
+    )
+
+    gh.post_issue_comment.assert_awaited_once_with(REPO, 7, "here is the answer")
 
 
 async def test_discuss__reply_in_bot_thread_without_mention__adds_reaction_and_replies(
@@ -1443,7 +1472,7 @@ async def test_review__secret_in_summary_redacted(service, gh, monkeypatch):
     async def leaky(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nleak api-token-value here")
+        (out / "summary.md").write_text("#### Themis review\nleak api-token-value here")
         return "ok"
 
     service.resolve_engine = _resolver(leaky)
@@ -1532,7 +1561,7 @@ async def test_review__repo_learnings__written_to_inputs_and_prompt_flagged(
         seen_prompts.append(prompt)
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         input_file = workspace / ".review-input" / "learnings.jsonl"
         assert input_file.exists()
         assert "lrn-aaaaaaaa" in input_file.read_text()
@@ -1556,7 +1585,7 @@ async def test_review__learnings_disabled__no_injection(service, gh, tmp_path):
         seen_prompts.append(prompt)
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         assert not (workspace / ".review-input" / "learnings.jsonl").exists()
         return "ok"
 
@@ -2359,7 +2388,7 @@ def _capturing_agent(prompts: list):
         prompts.append(prompt)
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         return "ok"
     return agent
 
@@ -2378,7 +2407,7 @@ async def test_review__no_doctrine_in_checkout__default_doctrine_full_dress(
     assert "## Severity calibration" in prompts[0]
     # The global presentation profile requires the full-dress sections.
     assert "required on every review" in flat
-    assert "`## ⚖️ Themis judgement: <verdict>`" in prompts[0]
+    assert "`## ⚖️ Themis review: <verdict>`" in prompts[0]
     assert "| 🎯 Correctness | n/5 |" in prompts[0]
     assert "<details><summary><b>📝 Walkthrough</b></summary>" in prompts[0]
     assert "dry humor welcome, never snark" in flat
@@ -2443,7 +2472,7 @@ async def test_review__code_suggestions_off__suggestion_blocks_stripped(service,
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{
                 "path": "a.py", "line": 3,
@@ -2477,7 +2506,7 @@ async def test_review__code_suggestions_off__literal_marker_in_code_sample_survi
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{"path": "a.py", "line": 3, "body": body}],
         }))
@@ -2500,7 +2529,7 @@ async def test_review__inline_findings_off__every_folded_finding_stays_visible(
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [
                 {"path": "a.py", "line": 3, "body": "first " + "x" * 64_000},
@@ -2537,7 +2566,7 @@ async def test_review__code_suggestions_off__four_backtick_fence_example_survive
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{"path": "a.py", "line": 3, "body": body}],
         }))
@@ -2559,7 +2588,7 @@ async def test_review__inline_findings_off__near_limit_summary_keeps_findings(
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\n" + "z" * 64_000)
+        (out / "summary.md").write_text("#### Themis review\n" + "z" * 64_000)
         (out / "actions.json").write_text(json.dumps({
             "findings": [
                 {"path": "a.py", "line": 3, "body": "first " + "x" * 1500},
@@ -2587,7 +2616,7 @@ async def test_review__inline_findings_off__outside_diff_finding_keeps_caveat(
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [
                 {"path": "a.py", "line": 3, "body": "anchored"},
@@ -2624,7 +2653,7 @@ async def test_review__code_suggestions_off__indented_suggestion_fence_stripped(
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{"path": "a.py", "line": 3, "body": body}],
         }))
@@ -2648,7 +2677,7 @@ async def test_review__inline_findings_off__many_findings_all_stay_visible(
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [
                 {"path": "a.py", "line": 3, "body": f"finding-{i} " + "x" * 700}
@@ -2680,7 +2709,7 @@ async def test_review__code_suggestions_off__padded_info_string_stripped(service
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{"path": "a.py", "line": 3, "body": body}],
         }))
@@ -2704,7 +2733,7 @@ async def test_review__inline_findings_off__extreme_count_falls_back_to_pointers
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [
                 {"path": "a.py", "line": 3, "body": f"finding-{i} " + "x" * 300}
@@ -2738,7 +2767,7 @@ async def test_review__code_suggestions_off__tilde_fenced_suggestion_stripped(
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{"path": "a.py", "line": 3, "body": body}],
         }))
@@ -2759,7 +2788,7 @@ async def test_review__inline_findings_off__long_paths_do_not_drop_tail(service,
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [
                 {"path": long_path, "line": i + 1, "body": f"finding-{i} " + "x" * 400}
@@ -2800,7 +2829,7 @@ async def test_review__inline_findings_off__redaction_expansion_keeps_all_pointe
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [
                 {"path": "a.py", "line": i + 1, "body": body} for i in range(100)
@@ -2834,7 +2863,7 @@ async def test_review__code_suggestions_off__suggestion_only_body_keeps_placehol
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{
                 "path": "a.py", "line": 3,
@@ -2866,7 +2895,7 @@ async def test_review__code_suggestions_off__unclosed_suggestion_fence_stripped(
     async def agent(*, workspace, **kwargs):
         out = workspace / OUTPUT_DIR
         out.mkdir(exist_ok=True)
-        (out / "summary.md").write_text("#### Themis judgement\nfine")
+        (out / "summary.md").write_text("#### Themis review\nfine")
         (out / "actions.json").write_text(json.dumps({
             "findings": [{"path": "a.py", "line": 3, "body": body}],
         }))
@@ -2891,3 +2920,17 @@ def test_engine_tables_cover_all_engines():
 
     assert set(DEFAULT_MODELS) == set(ENGINE_NAMES)
     assert set(_ENGINE_AUTH_HINTS) == set(ENGINE_NAMES)
+
+
+async def test_configure_agent_slot_admits_that_many_engine_runs():
+    from themis import review_service
+
+    review_service.configure_agent_slot(2)
+    try:
+        slot = review_service._agent_slot
+        async with slot:
+            assert not slot.locked()  # a second engine run can still enter
+            async with slot:
+                assert slot.locked()  # but not a third
+    finally:
+        review_service.configure_agent_slot(1)

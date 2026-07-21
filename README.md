@@ -11,7 +11,9 @@ doctrine from your own repository, under `.themis/`.
 ## How it works
 
 A GitHub App webhook delivers PR and comment events to Themis. Each event
-becomes a job on an in-memory queue, processed one at a time. The worker
+becomes a job on an in-memory queue, processed one at a time by default
+(`THEMIS_CONCURRENCY` runs up to 8 in parallel; the practical limit is your
+engine subscription quota). The worker
 shallow-clones the PR head, runs the configured engine (`codex exec`, or
 `claude -p` — natively or in API mode for GLM) against your repo's review doctrine, and posts findings and a
 summary back to GitHub as the App. One image runs as an isolated controller
@@ -359,7 +361,7 @@ volume: key in `.env`, done.
 | Webhook deliveries show 401 in the App's settings | `THEMIS_GH_WEBHOOK_SECRET` doesn't match the App's webhook secret. |
 | Where are the logs | `docker compose logs -f themis` |
 | A job queued right before a restart never ran | The in-memory queue doesn't survive restarts; mention the bot again to re-trigger. |
-| Opened a PR, nothing happened | Check in order: PR is a draft (skipped until marked ready); PR author is a bot account (ignored); `auto_review: false` in `.themis/config.yaml`; the GitHub App isn't installed on that repo; webhook deliveries are failing (App settings > Advanced > Recent Deliveries). |
+| Opened a PR, nothing happened | Check in order: PR is a draft (auto-review skips drafts until marked ready; an explicit `review` mention or `/api/review` call still runs, and questions are always answered); PR author is a bot account (ignored); `auto_review: false` in `.themis/config.yaml`; the GitHub App isn't installed on that repo; webhook deliveries are failing (App settings > Advanced > Recent Deliveries). |
 
 ## Documentation
 

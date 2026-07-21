@@ -1,4 +1,4 @@
-"""In-memory job queue: dedup by id, one job at a time, bounded runtime.
+"""In-memory job queue: dedup by id, N consumers (default one), bounded runtime.
 
 The queue seam for a future durable backend: keep this surface (enqueue ->
 bool, start, stop) and swap the implementation.
@@ -27,7 +27,7 @@ class _Job:
 
 
 class InMemoryJobQueue:
-    """Single-consumer asyncio queue.
+    """Asyncio queue drained by `concurrency` consumer tasks (default one).
 
     Dedup: an id that is queued or currently running is rejected as a
     duplicate; the id frees up when the job finishes (success, failure,
@@ -35,11 +35,14 @@ class InMemoryJobQueue:
     restart; re-triggering (mention) is the documented recovery path.
     """
 
-    def __init__(self, job_timeout: float = DEFAULT_JOB_TIMEOUT) -> None:
+    def __init__(
+        self, job_timeout: float = DEFAULT_JOB_TIMEOUT, concurrency: int = 1
+    ) -> None:
         self._timeout = job_timeout
+        self._concurrency = concurrency
         self._queue: asyncio.Queue[_Job] = asyncio.Queue()
         self._active_ids: set[str] = set()
-        self._consumer: asyncio.Task[None] | None = None
+        self._consumers: list[asyncio.Task[None]] = []
 
     def enqueue(self, job_id: str, run: JobFactory) -> bool:
         """True when queued, False when a job with this id is already active."""
@@ -51,17 +54,22 @@ class InMemoryJobQueue:
         return True
 
     def start(self) -> None:
-        if self._consumer is None:
-            self._consumer = asyncio.get_running_loop().create_task(self._consume())
+        if not self._consumers:
+            loop = asyncio.get_running_loop()
+            self._consumers = [
+                loop.create_task(self._consume()) for _ in range(self._concurrency)
+            ]
 
     async def stop(self) -> None:
-        """Cancel the consumer (and any running job) and wait for it to die."""
-        if self._consumer is None:
+        """Cancel every consumer (and any running jobs) and wait for them to die."""
+        if not self._consumers:
             return
-        self._consumer.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._consumer
-        self._consumer = None
+        for consumer in self._consumers:
+            consumer.cancel()
+        for consumer in self._consumers:
+            with contextlib.suppress(asyncio.CancelledError):
+                await consumer
+        self._consumers = []
 
     async def _consume(self) -> None:
         while True:

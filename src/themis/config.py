@@ -20,6 +20,10 @@ VALID_SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
 
 REPO_CONFIG_PATH = ".themis/config.yaml"
 
+# Ceiling for THEMIS_CONCURRENCY. Parallel jobs multiply engine subscription
+# usage, so the cap stays small on purpose.
+MAX_CONCURRENCY = 8
+
 
 class SettingsError(Exception):
     """Missing or invalid instance configuration; fail fast at startup."""
@@ -247,12 +251,33 @@ class Settings:
     agent_token: str = field(repr=False)
     data_root: Path = field(default_factory=lambda: Path.home() / ".themis")
     default_repo_config: str | None = None  # fallback .themis/config.yaml text
+    concurrency: int = 1  # parallel queue consumers, 1..MAX_CONCURRENCY
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_concurrency(name: str = "THEMIS_CONCURRENCY", default: int = 1) -> int:
+    """Parallel consumer count from the env, lenient: a value that is not an
+    integer in [1, MAX_CONCURRENCY] degrades to the default with a warning
+    rather than refusing to boot."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = None
+    if value is None or not 1 <= value <= MAX_CONCURRENCY:
+        logger.warning(
+            "themis_invalid_concurrency value=%s max=%d using=%d",
+            raw[:50], MAX_CONCURRENCY, default,
+        )
+        return default
+    return value
 
 
 def _decode_private_key(raw: str) -> str:
@@ -346,4 +371,5 @@ def load_settings() -> Settings:
             if (raw_default := os.getenv("THEMIS_DEFAULT_REPO_CONFIG") or None)
             else None
         ),
+        concurrency=_env_concurrency(),
     )
