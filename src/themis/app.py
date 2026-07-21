@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from themis.config import Settings, load_settings
 from themis.github.auth import get_app_slug, make_app_jwt, update_webhook_url
 from themis.queue import InMemoryJobQueue
+from themis.review_service import configure_agent_slot
 from themis.router import create_router
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = load_settings()  # SettingsError here = crash, on purpose
     queue = InMemoryJobQueue(concurrency=settings.concurrency)
+    configure_agent_slot(settings.concurrency)  # engine slots match consumers
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

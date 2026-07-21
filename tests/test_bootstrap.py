@@ -143,6 +143,20 @@ def test_verify_repo_installation_explains_missing_repo(monkeypatch):
         verify_repo_installation(credentials(), "acme/widgets", 42)
 
 
+def test_concurrency_env_reaches_both_services_in_both_compose_templates():
+    """THEMIS_CONCURRENCY sizes the controller's queue/engine slots and the
+    agent's engine slots, so both env blocks of both compose templates
+    (checked-in and bootstrap-generated) must pass it through."""
+    repo_compose = yaml.safe_load(
+        (Path(__file__).resolve().parent.parent / "docker-compose.yml").read_text()
+    )
+    generated = yaml.safe_load(bootstrap._compose_text("ghcr.io/example/themis:1.2.3"))
+    for compose in (repo_compose, generated):
+        for service in ("themis", "agent"):
+            environment = compose["services"][service]["environment"]
+            assert environment["THEMIS_CONCURRENCY"] == "${THEMIS_CONCURRENCY:-1}"
+
+
 def test_write_deployment_keeps_secrets_out_of_compose_and_sets_modes(tmp_path):
     source_auth = tmp_path / "source-auth.json"
     source_auth.write_text('{"token":"model-secret"}')
@@ -169,6 +183,7 @@ def test_write_deployment_keeps_secrets_out_of_compose_and_sets_modes(tmp_path):
         "THEMIS_AGENT_TOKEN": "${THEMIS_AGENT_TOKEN}",
         "THEMIS_AGENT_URL": "http://agent:8001",
         "THEMIS_ENGINE": "${THEMIS_ENGINE:-codex}",
+        "THEMIS_CONCURRENCY": "${THEMIS_CONCURRENCY:-1}",
         "THEMIS_DEFAULT_REPO_CONFIG": "${THEMIS_DEFAULT_REPO_CONFIG:-}",
         "THEMIS_PUBLIC_URL": "${THEMIS_PUBLIC_URL:-}",
         "THEMIS_TUNNEL_API": "${THEMIS_TUNNEL_API:-}",
@@ -184,6 +199,7 @@ def test_write_deployment_keeps_secrets_out_of_compose_and_sets_modes(tmp_path):
         "THEMIS_AGENT_TOKEN": "${THEMIS_AGENT_TOKEN}",
         "THEMIS_WORKSPACE_ROOT": "/tmp/themis",
         "THEMIS_CODEX_SANDBOX": "${THEMIS_CODEX_SANDBOX:-workspace-write}",
+        "THEMIS_CONCURRENCY": "${THEMIS_CONCURRENCY:-1}",
         "CLAUDE_CODE_OAUTH_TOKEN": "${CLAUDE_CODE_OAUTH_TOKEN:-}",
         "GLM_API_KEY": "${GLM_API_KEY:-}",
         "HTTP_PROXY": "${HTTP_PROXY:-}",

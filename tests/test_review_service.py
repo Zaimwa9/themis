@@ -2881,3 +2881,17 @@ async def test_review__code_suggestions_off__unclosed_suggestion_fence_stripped(
     assert "```suggestion" not in posted
     assert "range(n + 1)" not in posted
     assert "Off-by-one." in posted
+
+
+async def test_configure_agent_slot_admits_that_many_engine_runs():
+    from themis import review_service
+
+    review_service.configure_agent_slot(2)
+    try:
+        slot = review_service._agent_slot
+        async with slot:
+            assert not slot.locked()  # a second engine run can still enter
+            async with slot:
+                assert slot.locked()  # but not a third
+    finally:
+        review_service.configure_agent_slot(1)
