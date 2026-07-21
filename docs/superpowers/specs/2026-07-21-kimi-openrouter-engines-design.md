@@ -82,6 +82,7 @@ structured quota classification.
 | `src/themis/review_service.py` | `DEFAULT_MODELS`: `kimi-k3`, `openrouter/auto`; `_ENGINE_AUTH_HINTS`: `KIMI_API_KEY`, `OPENROUTER_API_KEY`. |
 | `src/themis/security.py` | Both key vars join the secret-env list for outbound redaction. |
 | `docker-compose.yml` | Agent service: `KIMI_API_KEY: ${KIMI_API_KEY:-}`, `OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}`. |
+| `src/themis/bootstrap.py` | Compose template + generated `.env` gain the two key passthroughs (its `--engine` flag already takes `choices=ENGINE_NAMES`). |
 | Docs | README (prereqs, Engines, repo-config table), `docs/configuration.md` (env vars, engine values, OpenRouter slug note, billing-model note), `docs/security.md` (credential-isolation paragraph naming `GLM_API_KEY`), `examples/themis/config.yaml`. |
 
 No changes to `base.py`, `claude.py`, `anthropic_api.py`, prompts, queue, or
