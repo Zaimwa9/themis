@@ -60,6 +60,8 @@ def _parse_pull_request(payload: dict[str, Any]) -> ReviewJob | None:
     if payload.get("action") not in _PR_ACTIONS:
         return None
     pr = payload["pull_request"]
+    # Automatic triggers skip drafts. Explicit requests (mention commands,
+    # /api/review) carry auto=False and bypass draft status downstream.
     if pr.get("draft"):
         return None
     return ReviewJob(

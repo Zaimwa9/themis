@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from themis.config import VALID_SANDBOXES
+from themis.config import VALID_SANDBOXES, _env_concurrency
 from themis.engines import ENGINE_NAMES, EngineError, EngineQuotaError, resolve
 from themis.output import OUTPUT_DIR, OUTPUT_FILES
 from themis.security import redact_outbound
@@ -49,8 +49,11 @@ def create_agent_app() -> FastAPI:
         raise RuntimeError(
             f"invalid THEMIS_CODEX_SANDBOX {sandbox!r}; expected one of {VALID_SANDBOXES}"
         )
-    slot = asyncio.Semaphore(1)
+    # Engine-run slots, same lenient THEMIS_CONCURRENCY clamp as the
+    # controller so both sides of the split agree on parallelism.
+    slot = asyncio.Semaphore(_env_concurrency())
     app = FastAPI(title="themis-agent")
+    app.state.slot = slot
 
     def authorize(authorization: str | None) -> None:
         scheme, _, supplied = (authorization or "").partition(" ")

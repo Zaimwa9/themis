@@ -39,6 +39,20 @@ def test_invalid_codex_sandbox_fails_at_startup(monkeypatch, tmp_path):
         create_agent_app()
 
 
+def test_engine_slot_sized_from_concurrency_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("THEMIS_AGENT_TOKEN", "agent-secret")
+    monkeypatch.setenv("THEMIS_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("THEMIS_CONCURRENCY", "2")
+    assert create_agent_app().state.slot._value == 2
+
+
+def test_engine_slot_invalid_concurrency_degrades_to_one(monkeypatch, tmp_path):
+    monkeypatch.setenv("THEMIS_AGENT_TOKEN", "agent-secret")
+    monkeypatch.setenv("THEMIS_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("THEMIS_CONCURRENCY", "99")  # over the cap: degrade to 1
+    assert create_agent_app().state.slot._value == 1
+
+
 def test_run_requires_agent_token(monkeypatch, tmp_path):
     response = client(monkeypatch, tmp_path).post("/run", json={
         "engine": "claude", "workspace": "job123", "prompt": "p",

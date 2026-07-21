@@ -58,6 +58,19 @@ def test_parse_event__pr_draft__none():
     assert parse_event("pull_request", _pr_payload(draft=True), MENTION) is None
 
 
+def test_parse_event__review_command_on_draft_pr__explicit_review_job():
+    # The draft skip gates automatic pull_request triggers only; a mention
+    # command always parses into an explicit (auto=False) job, and the
+    # pipeline lets explicit jobs run on drafts (issue #70).
+    payload = _issue_comment_payload(f"{MENTION} review")
+    payload["issue"]["draft"] = True
+
+    job = parse_event("issue_comment", payload, MENTION)
+
+    assert isinstance(job, ReviewJob)
+    assert job.auto is False
+
+
 def test_parse_event__pr_synchronize__none():
     assert parse_event("pull_request", _pr_payload("synchronize"), MENTION) is None
 

@@ -188,13 +188,17 @@ def _validate_finding(raw: Any) -> dict[str, Any]:
 
     if "start_line" in raw:
         start_line = raw.get("start_line")
-        if not _is_valid_int(start_line) or start_line < 1 or start_line >= line:
+        if not _is_valid_int(start_line) or start_line < 1 or start_line > line:
             raise OutputError(f"finding has invalid 'start_line': {raw}")
-        start_side = raw.get("start_side", side)
-        if start_side not in VALID_SIDES:
-            raise OutputError(f"finding has invalid 'start_side': {raw}")
-        finding["start_line"] = start_line
-        finding["start_side"] = start_side
+        if start_line < line:
+            start_side = raw.get("start_side", side)
+            if start_side not in VALID_SIDES:
+                raise OutputError(f"finding has invalid 'start_side': {raw}")
+            finding["start_line"] = start_line
+            finding["start_side"] = start_side
+        # start_line == line is a degenerate range; normalise to a single-line
+        # comment by dropping start_line/start_side rather than discarding
+        # the whole finding.
 
     return finding
 

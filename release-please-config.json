@@ -13,6 +13,13 @@
     { "type": "test", "section": "Tests", "hidden": true },
     { "type": "ci", "section": "CI", "hidden": true }
   ],
+  "extra-files": [
+    {
+      "type": "toml",
+      "path": "uv.lock",
+      "jsonpath": "$.package[?(@.name.value=='themis')].version"
+    }
+  ],
   "packages": {
     ".": {}
   }

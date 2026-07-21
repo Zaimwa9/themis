@@ -100,10 +100,22 @@ def _code_span_safe(text: str) -> str:
     newline would break out of the span and render as live Markdown (team
     @-mentions would ping as the bot)."""
     return text.replace("`", "'").replace("\r", " ").replace("\n", " ")
-# One agent run at a time so reviews never monopolize the shared worker.
-# Note: this bounds agent runs per worker process only; running several worker
-# processes yields one concurrent agent run per process.
+
+
+# Engine-run gate, sized to THEMIS_CONCURRENCY at startup (default one) so
+# the queue's parallel consumers get matching engine slots instead of
+# serializing here. Note: this bounds agent runs per worker process only;
+# running several worker processes yields that many slots per process.
 _agent_slot = asyncio.Semaphore(1)
+
+
+def configure_agent_slot(concurrency: int) -> None:
+    """Rebind the engine-run gate to admit `concurrency` holders.
+
+    Called once at startup, before any job runs; jobs read the module
+    global at acquire time, so the rebind is race-free."""
+    global _agent_slot
+    _agent_slot = asyncio.Semaphore(concurrency)
 
 
 async def api_changed_paths(gh: Any, repo: str, pr_number: int) -> set[str] | None:
@@ -266,8 +278,14 @@ class ReviewService:
         gh = self.make_client(token)
         async with gh:
             pr = await gh.get_pr(repo, pr_number)
-            if pr.get("draft") or pr.get("state") != "open":
-                logger.info("themis_skip_pr repo=%s pr=%s", repo, pr_number)
+            # Draft status gates automatic triggers only: an explicit request
+            # (mention command, /api/review) is a deliberate ask and runs on a
+            # draft (issue #70). Closed PRs are always skipped.
+            if pr.get("state") != "open" or (auto and pr.get("draft")):
+                logger.info(
+                    "themis_skip_pr repo=%s pr=%s state=%s draft=%s auto=%s",
+                    repo, pr_number, pr.get("state"), bool(pr.get("draft")), auto,
+                )
                 return
             repo_config = await self._fetch_repo_config(gh, repo)
             if auto and not repo_config.triggers.auto_review:
