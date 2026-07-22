@@ -22,6 +22,7 @@ from themis.learnings import Learning, PendingStore, to_jsonl
 from themis.review_service import (
     DEFAULT_MODELS,
     ReviewService,
+    TITLE_SKIP_MARKER,
     _ENGINE_AUTH_HINTS,
     api_changed_paths,
     git_changed_lines,
@@ -92,6 +93,7 @@ def gh() -> AsyncMock:
     # Repo config: None -> RepoConfig defaults; tests set this to a yaml string
     # to exercise per-repo behavior config.
     mock.get_file_text.return_value = None
+    mock.list_issue_comments.return_value = []
     return mock
 
 
@@ -900,9 +902,114 @@ async def test_auto_review_disabled_skips(service, gh):
     await service.review(REPO, 7, 42, auto=True)
     assert prepare_calls == []
     gh.add_reaction.assert_not_awaited()
+    # The repo-wide opt-out is deliberate silence: no explanatory comment.
+    gh.post_issue_comment.assert_not_awaited()
 
     await service.review(REPO, 7, 42, auto=False)
     assert len(prepare_calls) == 1
+
+
+async def test_auto_review_skipped_by_title_pattern(service, gh):
+    """A triggers.skip_titles pattern matching the PR title skips the auto
+    review before cloning, leaving a courtesy comment naming the rule so the
+    silence is explainable from the PR; a manual (mention/API) job still
+    reviews, without the comment."""
+    gh.get_file_text.return_value = "triggers:\n  skip_titles:\n    - 'ci: *'\n"
+    gh.get_pr.return_value = {
+        **gh.get_pr.return_value, "title": "ci: bump runner image"
+    }
+    original_prepare = service.prepare
+    prepare_calls: list[dict] = []
+
+    async def recording_prepare(**kwargs):
+        prepare_calls.append(kwargs)
+        return await original_prepare(**kwargs)
+    service.prepare = recording_prepare
+
+    await service.review(REPO, 7, 42, auto=True)
+    assert prepare_calls == []
+    gh.add_reaction.assert_not_awaited()
+    gh.post_issue_comment.assert_awaited_once()
+    comment_body = gh.post_issue_comment.await_args.args[2]
+    assert "skip_titles" in comment_body
+    assert "ci: *" in comment_body
+    assert BOT_MENTION in comment_body  # how to request a review anyway
+    gh.post_issue_comment.reset_mock()
+
+    await service.review(REPO, 7, 42, auto=False)
+    assert len(prepare_calls) == 1
+    # An explicitly requested review needs no skip explanation.
+    assert not any(
+        "skip_titles" in call.args[2]
+        for call in gh.post_issue_comment.await_args_list
+    )
+
+
+async def test_title_skip_comment_not_reposted(service, gh):
+    """Draft/ready toggles re-fire ready_for_review; an existing skip
+    comment (found by its marker) must not be duplicated."""
+    gh.get_file_text.return_value = "triggers:\n  skip_titles:\n    - 'ci: *'\n"
+    gh.get_pr.return_value = {
+        **gh.get_pr.return_value, "title": "ci: bump runner image"
+    }
+    gh.list_issue_comments.return_value = [
+        {"id": 1, "body": "unrelated"},
+        {"id": 2, "body": TITLE_SKIP_MARKER + "\nAutomatic review skipped: ..."},
+    ]
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_issue_comment.assert_not_awaited()
+
+
+async def test_title_skip_comment_posted_when_dedup_check_fails(service, gh):
+    """The dedup pre-check is best effort: a failed or garbled comment
+    listing may duplicate the explanation, never suppress it or kill the
+    job (a non-JSON 200 surfaces as ValueError/AttributeError, not only
+    httpx errors)."""
+    gh.get_file_text.return_value = "triggers:\n  skip_titles:\n    - 'ci: *'\n"
+    gh.get_pr.return_value = {
+        **gh.get_pr.return_value, "title": "ci: bump runner image"
+    }
+    for error in (_http_error(500), ValueError("not json")):
+        gh.list_issue_comments.side_effect = error
+        await service.review(REPO, 7, 42, auto=True)
+        gh.post_issue_comment.assert_awaited_once()
+        assert "skip_titles" in gh.post_issue_comment.await_args.args[2]
+        gh.post_issue_comment.reset_mock()
+
+
+async def test_title_skip_comment_neutralizes_markdown_breakout(service, gh):
+    """A pattern containing backticks must not escape the comment's code
+    span (a breakout would let repo config render live markdown or ping
+    teams as the bot)."""
+    gh.get_file_text.return_value = 'triggers:\n  skip_titles:\n    - "*`*"\n'
+    gh.get_pr.return_value = {
+        **gh.get_pr.return_value, "title": "add `code` docs"
+    }
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    comment_body = gh.post_issue_comment.await_args.args[2]
+    assert "*'*" in comment_body       # backtick swapped for a quote
+    assert "`*`*`" not in comment_body  # raw pattern would break the span
+
+
+async def test_auto_review_title_pattern_without_match_reviews(service, gh):
+    """Non-matching skip_titles patterns leave the auto review untouched."""
+    gh.get_file_text.return_value = "triggers:\n  skip_titles:\n    - 'ci: *'\n"
+    original_prepare = service.prepare
+    prepare_calls: list[dict] = []
+
+    async def recording_prepare(**kwargs):
+        prepare_calls.append(kwargs)
+        return await original_prepare(**kwargs)
+    service.prepare = recording_prepare
+
+    await service.review(REPO, 7, 42, auto=True)  # fixture title: "Fix"
+
+    assert len(prepare_calls) == 1
+    gh.post_summary_comment.assert_awaited_once()
 
 
 async def test_repo_config_drives_clone_depth(service, gh):

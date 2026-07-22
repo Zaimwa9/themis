@@ -4,6 +4,7 @@ import base64
 import logging
 
 import pytest
+import yaml
 
 from themis.config import (
     MODULE_NAMES,
@@ -12,6 +13,7 @@ from themis.config import (
     load_settings,
     parse_repo_config,
     resolve_modules,
+    skip_title_match,
 )
 
 REQUIRED = {
@@ -138,6 +140,182 @@ def test_repo_config_wrong_shape_falls_back_to_defaults():
 
 def test_repo_config_empty_file_is_defaults():
     assert parse_repo_config("") == RepoConfig()
+
+
+# --- triggers.skip_titles ----------------------------------------------------
+
+
+def test_repo_config__skip_titles_default_empty():
+    assert parse_repo_config(None).triggers.skip_titles == ()
+
+
+def test_repo_config__skip_titles_parsed():
+    text = "triggers:\n  skip_titles:\n    - 'ci: *'\n    - 'chore: *'\n"
+    assert parse_repo_config(text).triggers.skip_titles == ("ci: *", "chore: *")
+
+
+def test_repo_config__skip_titles_single_string_coerced():
+    text = "triggers:\n  skip_titles: 'ci: *'\n"
+    assert parse_repo_config(text).triggers.skip_titles == ("ci: *",)
+
+
+def test_repo_config__skip_titles_empty_entries_dropped(caplog):
+    """An empty (or whitespace-only) pattern can never be intent; keeping it
+    would be at best noise, and must not survive validation silently."""
+    text = "triggers:\n  skip_titles:\n    - ''\n    - '   '\n    - 'ci: *'\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.skip_titles == ("ci: *",)
+    assert "themis_invalid_skip_title" in caplog.text
+
+
+def test_repo_config__skip_titles_non_string_entries_dropped(caplog):
+    text = "triggers:\n  skip_titles:\n    - 3\n    - 'ci: *'\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.skip_titles == ("ci: *",)
+    assert "themis_invalid_skip_title" in caplog.text
+
+
+def test_repo_config__skip_titles_overlong_entry_dropped(caplog):
+    text = f"triggers:\n  skip_titles:\n    - '{'x' * 300}'\n    - 'ci: *'\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.skip_titles == ("ci: *",)
+    assert "themis_invalid_skip_title" in caplog.text
+
+
+def test_repo_config__skip_titles_surrounding_whitespace_trimmed():
+    """yaml flow style and block scalars easily smuggle stray spaces or a
+    trailing newline into a pattern; under whole-title matching those would
+    make the filter silently never fire."""
+    text = "triggers:\n  skip_titles:\n    - ' ci: * '\n"
+    assert parse_repo_config(text).triggers.skip_titles == ("ci: *",)
+
+
+def test_repo_config__skip_titles_cap_counts_only_usable_entries(caplog):
+    """Invalid entries must not consume cap slots: filtering runs before the
+    50-pattern cap, so valid patterns past a run of garbage survive."""
+    entries = ["", 42] + [f"p{i}: *" for i in range(51)]
+    text = yaml.safe_dump({"triggers": {"skip_titles": entries}})
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert len(config.triggers.skip_titles) == 50
+    assert config.triggers.skip_titles[0] == "p0: *"
+    assert config.triggers.skip_titles[-1] == "p49: *"
+    assert "themis_skip_titles_truncated" in caplog.text
+
+
+def test_repo_config__skip_titles_wrong_shape_keeps_rest_of_triggers(caplog):
+    text = "triggers:\n  skip_titles:\n    nested: mapping\n  auto_review: false\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.skip_titles == ()
+    assert config.triggers.auto_review is False
+    assert "themis_invalid_skip_title" in caplog.text
+
+
+def test_repo_config__triggers_wrong_shape_keeps_rest_of_config(caplog):
+    text = "triggers: nope\nlimits:\n  max_attempts: 5\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.auto_review is True
+    assert config.limits.max_attempts == 5
+    assert "themis_invalid_triggers_config" in caplog.text
+
+
+def test_repo_config__auto_review_invalid_degrades_to_default(caplog):
+    text = "triggers:\n  auto_review: banana\n  skip_titles:\n    - 'ci: *'\n"
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config(text)
+    assert config.triggers.auto_review is True
+    assert config.triggers.skip_titles == ("ci: *",)
+    assert "themis_invalid_auto_review" in caplog.text
+
+
+def test_repo_config__auto_review_bare_key_is_default_without_warning(caplog):
+    """`auto_review:` with no value is the same commented-out idiom the
+    section validators accept silently; it must not be reported as garbage."""
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config("triggers:\n  auto_review:\n")
+    assert config.triggers.auto_review is True
+    assert "themis_invalid_auto_review" not in caplog.text
+
+
+def test_repo_config__auto_review_yaml_spellings_still_coerce():
+    """Quoted booleans that pydantic's lax mode accepted before the lenient
+    validator must keep working: a repo that opted out with `'false'` or `0`
+    must not silently get auto-reviews re-enabled."""
+    for raw in ('"false"', "'no'", "0"):
+        text = f"triggers:\n  auto_review: {raw}\n"
+        assert parse_repo_config(text).triggers.auto_review is False, raw
+    assert parse_repo_config(
+        "triggers:\n  auto_review: 'yes'\n"
+    ).triggers.auto_review is True
+
+
+def test_skip_title_match__wildcard_and_case_insensitive():
+    config = parse_repo_config("triggers:\n  skip_titles:\n    - 'ci: *'\n")
+    assert skip_title_match(config, "ci: bump runner image") == "ci: *"
+    assert skip_title_match(config, "CI: bump runner image") == "ci: *"
+    assert skip_title_match(config, "fix: broken login") is None
+
+
+def test_skip_title_match__whole_title_semantics():
+    """Patterns cover the whole title: a prefix glob must not fire on
+    mid-title or mid-word hits (`PCI:` is not `ci:`)."""
+    config = parse_repo_config("triggers:\n  skip_titles:\n    - 'ci: *'\n")
+    assert skip_title_match(config, "PCI: rotate keys") is None
+    assert skip_title_match(config, "revert ci: bump runner") is None
+
+
+def test_skip_title_match__star_is_glob_not_regex():
+    """`WIP*` means "starts with WIP", never regex `WI(P)*` — the latter
+    would skip any title containing "wi"."""
+    config = parse_repo_config("triggers:\n  skip_titles:\n    - 'WIP*'\n")
+    assert skip_title_match(config, "WIP: new dashboard") == "WIP*"
+    assert skip_title_match(config, "wip stuff") == "WIP*"
+    assert skip_title_match(config, "Fix window resize handling") is None
+
+
+def test_skip_title_match__regex_metacharacters_are_literals():
+    """Regex syntax has no power here: `(a+)+$` neither matches "aaaa!"
+    nor reaches the regex engine (the classic ReDoS pattern is inert)."""
+    config = parse_repo_config("triggers:\n  skip_titles:\n    - '(a+)+$'\n")
+    assert skip_title_match(config, "a" * 64 + "!") is None
+    assert skip_title_match(config, "(a+)+$") == "(a+)+$"
+
+
+def test_skip_title_match__question_mark_and_infix_star():
+    config = parse_repo_config(
+        "triggers:\n  skip_titles:\n    - '*[skip review]*'\n    - 'v?.?.? release'\n"
+    )
+    assert skip_title_match(config, "feat: thing [skip review]") == "*[skip review]*"
+    assert skip_title_match(config, "v1.2.3 release") == "v?.?.? release"
+    assert skip_title_match(config, "v1.2.30 release") is None
+
+
+def test_skip_title_match__literal_star_in_title():
+    """A `*` in the *pattern* must stay a wildcard even when the title
+    character under the cursor is a literal `*` — the literal branch must
+    not consume it (regression: fuzz found `*` failing against `*b`)."""
+    config = parse_repo_config(
+        "triggers:\n  skip_titles:\n    - '*new feature'\n    - 'x*y'\n"
+    )
+    assert skip_title_match(config, "*WIP* new feature") == "*new feature"
+    assert skip_title_match(config, "x***y") == "x*y"
+
+
+def test_skip_title_match__hostile_title_length_clamped():
+    """GitHub caps titles at 256 chars, but the clamp must not depend on
+    that: an API-crafted multi-kB title stays inside the O(n*m) budget."""
+    config = parse_repo_config("triggers:\n  skip_titles:\n    - 'ci: *'\n")
+    assert skip_title_match(config, "ci: " + "a" * 10_000) == "ci: *"
+    assert skip_title_match(config, "x" * 10_000) is None
+
+
+def test_skip_title_match__no_patterns_matches_nothing():
+    assert skip_title_match(parse_repo_config(None), "ci: anything") is None
 
 
 # --- engine settings ----------------------------------------------------------
