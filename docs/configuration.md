@@ -59,6 +59,7 @@ repo with no `.themis/` directory at all gets full defaults.
 model:
   # name: gpt-5.4          # unset = engine default (codex: gpt-5.4, claude: claude-opus-4-6[1m], glm: glm-5.2, kimi: kimi-k3, openrouter: openrouter/auto)
   reasoning_effort: high   # low | medium | high (codex only; claude-harness engines ignore it)
+  # max_thinking_tokens: 31999  # claude only: pin the extended-thinking budget; unset = model's adaptive default
 limits:
   timeout_seconds: 1200
   max_attempts: 2
@@ -90,6 +91,7 @@ review:
 | `web_access` | `false` | toggles engine web tooling: codex enables sandbox network access; claude enables `WebFetch`/`WebSearch`; glm/kimi/openrouter behave like claude (`WebFetch`/`WebSearch`). Claude's unsandboxed Bash may still egress unless the deployment enforces an external network policy. Only the repo's default branch controls this |
 | `model.name` | unset (engine default) | `gpt-5.4` for codex, `claude-opus-4-6[1m]` for claude, `glm-5.2` for glm, `kimi-k3` for kimi, `openrouter/auto` for openrouter — any OpenRouter model slug (e.g. `moonshotai/kimi-k3`) can be set, but OpenRouter's Claude Code integration only guarantees Anthropic first-party models; other providers' slugs may not work reliably as review agents |
 | `model.reasoning_effort` | `high` | `low`, `medium`, or `high`; codex only, ignored by the claude-harness engines (claude/glm/kimi/openrouter) |
+| `model.max_thinking_tokens` | unset (adaptive) | claude-harness engines only: a positive integer pins the extended-thinking budget via `MAX_THINKING_TOKENS`; unset leaves the model's adaptive default. Ignored by codex (use `reasoning_effort`) |
 | `limits.timeout_seconds` | `1200` | wall-clock budget per agent attempt, in seconds |
 | `limits.max_attempts` | `2` | attempts before Themis gives up and posts a failure comment |
 | `limits.clone_depth` | `50` | git fetch depth for the shallow PR clone |

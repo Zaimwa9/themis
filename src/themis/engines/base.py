@@ -32,6 +32,7 @@ class Engine(Protocol):
     async def run(
         self, *, prompt: str, workspace: Path, model: str, effort: str,
         timeout: float, web_access: bool = False,
+        max_thinking_tokens: int | None = None,
     ) -> str: ...
 
 

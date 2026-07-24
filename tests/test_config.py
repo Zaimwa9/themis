@@ -113,6 +113,7 @@ def test_repo_config_defaults():
     config = parse_repo_config(None)
     assert config.model.name is None
     assert config.model.reasoning_effort == "high"
+    assert config.model.max_thinking_tokens is None
     assert config.limits.timeout_seconds == 1200
     assert config.limits.max_attempts == 2
     assert config.limits.clone_depth == 50
@@ -201,6 +202,21 @@ def test_repo_config__engine_default_none():
 
 def test_repo_config__engine_claude():
     assert parse_repo_config("engine: claude\n").engine == "claude"
+
+
+@pytest.mark.parametrize(
+    "yaml_value, expected",
+    [
+        ("32000", 32000),
+        ("0", None),        # non-positive degrades to unset
+        ("-5", None),
+        ("true", None),     # bool is not a valid budget
+        ("nope", None),     # non-int degrades to unset
+    ],
+)
+def test_repo_config__max_thinking_tokens__positive_or_unset(yaml_value, expected):
+    config = parse_repo_config(f"model:\n  max_thinking_tokens: {yaml_value}\n")
+    assert config.model.max_thinking_tokens == expected
 
 
 def test_repo_config__engine_invalid__coerces_to_none_and_keeps_rest(caplog):
