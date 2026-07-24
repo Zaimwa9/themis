@@ -7,12 +7,13 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from themis.config import Settings
 from themis.queue import InMemoryJobQueue
-from themis.router import create_router
+from themis.router import _repo_allowed, create_router
 
 
 def make_settings(**overrides) -> Settings:
@@ -522,3 +523,22 @@ def test_api_discuss_association_defaults_untrusted(monkeypatch):
     asyncio.run(runs[0]())
     assert job.await_args.kwargs["author_association"] == "NONE"
     assert job.await_args.kwargs["author_login"] == ""
+
+
+@pytest.mark.parametrize(
+    "repo, allowlist, expected",
+    [
+        ("acme/widgets", None, True),
+        ("acme/widgets", frozenset({"acme/widgets"}), True),
+        ("acme/gadgets", frozenset({"acme/widgets"}), False),
+        ("acme/gadgets", frozenset({"acme/*"}), True),
+        ("other/gadgets", frozenset({"acme/*"}), False),
+        ("acme/widgets", frozenset({"acme/*", "other/thing"}), True),
+        ("acme/widgets", frozenset(), False),
+    ],
+)
+def test_repo_allowed__various_allowlists__matches_exact_and_owner_wildcard(
+    repo: str, allowlist: "frozenset[str] | None", expected: bool
+) -> None:
+    # Given / When / Then
+    assert _repo_allowed(repo, allowlist) is expected
