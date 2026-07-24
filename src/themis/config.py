@@ -251,6 +251,7 @@ class Settings:
     agent_token: str = field(repr=False)
     data_root: Path = field(default_factory=lambda: Path.home() / ".themis")
     default_repo_config: str | None = None  # fallback .themis/config.yaml text
+    repos: frozenset[str] | None = None  # THEMIS_REPOS allowlist; None = all
     concurrency: int = 1  # parallel queue consumers, 1..MAX_CONCURRENCY
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -369,6 +370,12 @@ def load_settings() -> Settings:
         default_repo_config=(
             _decode_default_repo_config(raw_default)
             if (raw_default := os.getenv("THEMIS_DEFAULT_REPO_CONFIG") or None)
+            else None
+        ),
+        repos=(
+            frozenset(part.strip() for part in raw_repos.split(",") if part.strip())
+            or None
+            if (raw_repos := os.getenv("THEMIS_REPOS"))
             else None
         ),
         concurrency=_env_concurrency(),
