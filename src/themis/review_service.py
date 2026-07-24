@@ -543,6 +543,7 @@ class ReviewService:
                         web_access=repo_config.web_access,
                         native_context=native_context,
                         native_skills=native_skills,
+                        max_thinking_tokens=repo_config.model.max_thinking_tokens,
                     )
                 try:
                     return parser(workspace)

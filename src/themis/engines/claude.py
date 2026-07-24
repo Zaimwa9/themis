@@ -70,15 +70,20 @@ class ClaudeEngine:
         self, *, prompt: str, workspace: Path, model: str, effort: str,
         timeout: float, web_access: bool = False,
         native_context: bool = False, native_skills: bool = False,
+        max_thinking_tokens: int | None = None,
     ) -> str:
         # effort is accepted for protocol parity; the claude CLI has no
-        # reasoning-effort flag.
+        # reasoning-effort flag. Thinking depth is instead controlled by
+        # MAX_THINKING_TOKENS: unset leaves the model's adaptive default in
+        # place, a positive value pins the extended-thinking budget.
         # CLAUDE_CONFIG_DIR also isolates ~/.claude.json and user plugins,
         # which setting-sources intentionally does not cover.
         with tempfile.TemporaryDirectory(prefix=f"themis-{self.name}-") as config_dir:
             env = allowlisted_env(frozenset()) | _HYGIENE_ENV | self._auth_env() | {
                 "CLAUDE_CONFIG_DIR": config_dir,
             }
+            if max_thinking_tokens is not None:
+                env["MAX_THINKING_TOKENS"] = str(max_thinking_tokens)
             return await run_cli(
                 name=self.name,
                 command=build_command(
