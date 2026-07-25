@@ -34,6 +34,32 @@ async def test_get_pr__ok__returns_payload():
     assert pr["head"]["sha"] == "abc123"
 
 
+async def test_get_issue__ok__returns_payload():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/acme/widgets/issues/12"
+        return httpx.Response(200, json={"number": 12, "title": "bug"})
+
+    issue = await _client(handler).get_issue("acme/widgets", 12)
+
+    assert issue == {"number": 12, "title": "bug"}
+
+
+async def test_get_issue__missing_or_gone__returns_none():
+    for status in (404, 410):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(status, json={"message": "Not Found"})
+
+        assert await _client(handler).get_issue("acme/widgets", 12) is None
+
+
+async def test_get_issue__server_error__raises():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await _client(handler).get_issue("acme/widgets", 12)
+
+
 async def test_post_review__findings__posts_batched_comment_review():
     captured = {}
 

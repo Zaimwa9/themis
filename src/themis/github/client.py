@@ -140,6 +140,19 @@ class GitHubClient:
         response.raise_for_status()
         return dict(response.json())
 
+    async def get_issue(self, repo: str, number: int) -> dict[str, Any] | None:
+        """Issue or pull request by number, or None when it does not exist or
+        the token cannot see it (GitHub answers 404 for both). The REST
+        issues endpoint covers PRs too; a PR payload carries a
+        `pull_request` key."""
+        response = await self._client.get(
+            f"{self._api_url}/repos/{repo}/issues/{number}"
+        )
+        if response.status_code in (404, 410):
+            return None
+        response.raise_for_status()
+        return dict(response.json())
+
     async def get_ci_snapshot(self, repo: str, commit_sha: str) -> dict[str, Any]:
         """Return one non-blocking snapshot of checks and legacy statuses.
 

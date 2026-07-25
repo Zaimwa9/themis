@@ -259,6 +259,28 @@ workspace disables that capability for the run and leaves its namespace
 empty — exactly the no-opt-in behavior. Reviews only; discussion jobs keep
 the fully-disabled baseline.
 
+### Linked issue and PR context
+
+When the PR title or description references other issues or pull requests —
+`Fixes #12`, `owner/repo#34`, or a full `github.com/.../issues/N` /
+`.../pull/N` URL — Themis resolves them with its installation token before
+the review and writes them to `.review-input/linked_issues.json` (title,
+state, author, body), so the agent can judge the change against what it
+claims to address. This is automatic and needs no configuration.
+
+Scope and bounds, in the same spirit as the rest of the trust model:
+
+- Same-owner references only. A reference to a repository under another
+  owner is ignored; Themis never fetches third-party content on behalf of
+  a PR description.
+- At most 5 references per review, bodies clamped to 4000 characters
+  (`body_truncated: true` marks a clipped body).
+- Best effort: a reference the token cannot see (deleted, private,
+  uninstalled repo) is skipped with a log line and never blocks the review.
+- The fetched content is handed to the agent as **data, not instructions**,
+  with the same prompt guardrails as requester-supplied extra context: it
+  cannot suppress findings, change severities, or alter the output contract.
+
 ### Instance-level default (`THEMIS_DEFAULT_REPO_CONFIG`)
 
 When you can't (or don't want to) commit `.themis/config.yaml` to a target
