@@ -51,9 +51,11 @@ class CodexEngine:
         self, *, prompt: str, workspace: Path, model: str, effort: str,
         timeout: float, web_access: bool = False,
         native_context: bool = False, native_skills: bool = False,
+        max_thinking_tokens: int | None = None,
     ) -> str:
         # native_skills is accepted for protocol parity; codex has no skills
-        # surface, so the skills opt-in changes nothing here.
+        # surface, so the skills opt-in changes nothing here. max_thinking_tokens
+        # is likewise claude-only; codex thinking is driven by reasoning_effort.
         return await run_cli(
             name="codex",
             command=build_command(

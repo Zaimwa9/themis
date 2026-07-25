@@ -116,3 +116,26 @@ async def test_run_forwards_native_capability_flags(tmp_path):
     )
     assert b'"native_context":true' in seen["payload"]
     assert b'"native_skills":false' in seen["payload"]
+
+
+@pytest.mark.parametrize(
+    "budget, expected",
+    [(31999, b'"max_thinking_tokens":31999'), (None, b'"max_thinking_tokens":null')],
+)
+async def test_run_forwards_max_thinking_tokens(tmp_path, budget, expected):
+    # In split-role mode the controller reaches the engine only through this
+    # payload: a field missing here makes the repo setting a silent no-op.
+    seen = {}
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = request.read()
+        return httpx.Response(200, json={"output": "done"})
+
+    engine = RemoteEngine(
+        "claude", "http://agent", "secret", transport=httpx.MockTransport(capture)
+    )
+    await engine.run(
+        prompt="review", workspace=tmp_path / "job123", model="opus", effort="high",
+        timeout=10, max_thinking_tokens=budget,
+    )
+    assert expected in seen["payload"]

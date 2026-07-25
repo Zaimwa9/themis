@@ -134,6 +134,35 @@ def test_run_defaults_native_capability_flags_off(monkeypatch, tmp_path):
     assert FakeEngine.last_kwargs["native_skills"] is False
 
 
+def test_run_passes_max_thinking_tokens_to_engine(monkeypatch, tmp_path):
+    (tmp_path / "job123").mkdir()
+    response = client(monkeypatch, tmp_path).post(
+        "/run",
+        headers={"Authorization": "Bearer agent-secret"},
+        json={
+            "engine": "claude", "workspace": "job123", "prompt": "p",
+            "model": "opus", "effort": "high", "timeout": 10,
+            "max_thinking_tokens": 31999,
+        },
+    )
+    assert response.status_code == 200
+    assert FakeEngine.last_kwargs["max_thinking_tokens"] == 31999
+
+
+def test_run_defaults_max_thinking_tokens_unset(monkeypatch, tmp_path):
+    (tmp_path / "job123").mkdir()
+    response = client(monkeypatch, tmp_path).post(
+        "/run",
+        headers={"Authorization": "Bearer agent-secret"},
+        json={
+            "engine": "claude", "workspace": "job123", "prompt": "p",
+            "model": "opus", "effort": "high", "timeout": 10,
+        },
+    )
+    assert response.status_code == 200
+    assert FakeEngine.last_kwargs["max_thinking_tokens"] is None
+
+
 def test_run_redacts_engine_secret_before_crossing_boundary(monkeypatch, tmp_path):
     workspace = tmp_path / "job123"
     workspace.mkdir()

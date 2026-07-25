@@ -130,6 +130,28 @@ async def test_run__env__token_passed_secrets_stripped(tmp_path, monkeypatch, wo
     assert config_dir != os.path.expanduser("~/.claude")
 
 
+async def test_run__max_thinking_tokens_set__exports_env_var(tmp_path, monkeypatch, workspace):
+    # Given
+    _fake_cli(tmp_path, monkeypatch, "env > env.txt")
+
+    # When
+    await _run(workspace, max_thinking_tokens=31999)
+
+    # Then
+    assert "MAX_THINKING_TOKENS=31999" in (workspace / "env.txt").read_text()
+
+
+async def test_run__max_thinking_tokens_unset__no_env_var(tmp_path, monkeypatch, workspace):
+    # Given
+    _fake_cli(tmp_path, monkeypatch, "env > env.txt")
+
+    # When
+    await _run(workspace)
+
+    # Then
+    assert "MAX_THINKING_TOKENS" not in (workspace / "env.txt").read_text()
+
+
 async def test_run__subscription_limit__raises_quota_error(tmp_path, monkeypatch, workspace):
     _fake_cli(tmp_path, monkeypatch, "echo \"You've hit your session limit\"; exit 1")
 

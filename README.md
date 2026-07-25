@@ -299,6 +299,7 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `web_access` | `false` | toggles engine web tooling (`WebFetch`/`WebSearch`); glm/kimi/openrouter behave like claude here, and Claude's Bash may still egress unless the deployment enforces an external network policy — this caveat applies to all claude-harness engines |
 | `model.name` | engine default | engine default: `gpt-5.4` (codex), `claude-opus-4-6[1m]` (claude), `glm-5.2` (glm), `kimi-k3` (kimi), `openrouter/auto` (openrouter — any OpenRouter slug can be set; only Anthropic first-party models are guaranteed by OpenRouter's Claude Code integration) |
 | `model.reasoning_effort` | `high` | `low` \| `medium` \| `high` (codex only) |
+| `model.max_thinking_tokens` | unset (adaptive) | positive integer pins the extended-thinking budget; claude-harness engines only (claude/glm/kimi/openrouter), ignored by codex |
 | `limits.timeout_seconds` | `1200` | per agent attempt |
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
 | `limits.clone_depth` | `50` | shallow clone depth |

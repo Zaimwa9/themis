@@ -35,6 +35,19 @@ class SettingsError(Exception):
 class ModelConfig(BaseModel):
     name: str | None = None   # None = engine default, resolved in the service
     reasoning_effort: str = "high"
+    # None = let the engine/model decide (claude: adaptive thinking). A positive
+    # int pins the claude extended-thinking budget; ignored by other engines.
+    max_thinking_tokens: int | None = None
+
+    @field_validator("max_thinking_tokens", mode="before")
+    @classmethod
+    def _positive_or_unset(cls, value: object) -> object:
+        """An invalid budget must not void the rest of the config; fall back to
+        unset (adaptive) with a warning."""
+        if value is None or (isinstance(value, int) and not isinstance(value, bool) and value >= 1):
+            return value
+        logger.warning("themis_invalid_max_thinking_tokens value=%s", str(value)[:50])
+        return None
 
 
 class LimitsConfig(BaseModel):

@@ -297,6 +297,29 @@ async def test_review__agent_defaults__masking_runs_and_flags_stay_off(service, 
     assert captured["native_skills"] is False
 
 
+async def test_review__max_thinking_tokens__reaches_the_engine(service, gh):
+    gh.get_file_text.return_value = "model:\n  max_thinking_tokens: 31999\n"
+
+    async def fake_trust(workspace, base_ref, *, context, skills, skills_index):
+        return False, False
+
+    service.trust_context = fake_trust
+    captured = {}
+
+    async def agent(*, workspace, **kwargs):
+        captured.update(kwargs)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### Themis review\nfine")
+        (out / "actions.json").write_text(json.dumps({"findings": []}))
+        return "ok"
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert captured["max_thinking_tokens"] == 31999
+
+
 async def test_discuss__masking_runs_with_capabilities_off(service, gh):
     trust_calls = {}
 
