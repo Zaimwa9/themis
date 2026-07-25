@@ -1,6 +1,9 @@
+import asyncio
+
 import httpx
 from unittest.mock import AsyncMock
 
+import themis.linked_context as linked_context
 from themis.linked_context import (
     MAX_LINKED_BODY_LEN,
     MAX_LINKED_REFS,
@@ -221,6 +224,29 @@ async def test_fetch__own_repo_reference__no_visibility_check():
     await fetch_linked_context(gh, REPO, _pr("#12"))
 
     gh.get_repo_private.assert_not_awaited()
+
+
+async def test_fetch__slow_reference__one_overall_deadline_partial_result(
+    monkeypatch,
+):
+    # Regression: N slow lookups must not serialize into N HTTP timeouts of
+    # optional work holding the review worker; one deadline covers them all
+    # and the already-resolved prefix still ships.
+    monkeypatch.setattr(linked_context, "LINKED_CONTEXT_TIMEOUT_SECONDS", 0.05)
+    gh = AsyncMock()
+
+    async def slow_after_first(repo, number):
+        if number != 1:
+            await asyncio.sleep(30)
+        return _issue(number)
+
+    gh.get_issue.side_effect = slow_after_first
+
+    linked = await asyncio.wait_for(
+        fetch_linked_context(gh, REPO, _pr("#1 #2 #3 #4 #5", number=99)), 5
+    )
+
+    assert [item["ref"] for item in linked] == ["acme/widgets#1"]
 
 
 async def test_fetch__no_refs__no_api_calls():

@@ -7,6 +7,7 @@ the result to the engine as a review input file; the engine itself never
 gets GitHub access (issues #82, #79).
 """
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -17,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 MAX_LINKED_REFS = 5
 MAX_LINKED_BODY_LEN = 4000
+# One deadline for the whole linked-context operation. The per-call HTTP
+# timeout alone would let MAX_LINKED_REFS slow references serialize into
+# minutes of optional work holding a review worker before the clone starts.
+LINKED_CONTEXT_TIMEOUT_SECONDS = 20.0
 # The reference scan is a regex pass over untrusted text; the clamp bounds
 # its work the way MAX_SKIP_TITLE_MATCH_LEN bounds title matching. Real
 # references ("Fixes #12", a linked PR) live at the top of descriptions.
@@ -95,42 +100,52 @@ async def fetch_linked_context(
         refs = refs[:MAX_LINKED_REFS]
     linked: list[dict[str, Any]] = []
     cross_repo_public: dict[str, bool] = {}
-    for ref_repo, number in refs:
-        try:
-            key = ref_repo.casefold()
-            if key != repo.casefold():
-                if key not in cross_repo_public:
-                    cross_repo_public[key] = (
-                        await gh.get_repo_private(ref_repo) is False
+    try:
+        # One deadline over every lookup, not per call: the timeout cancels
+        # the in-flight await (CancelledError is not swallowed by the
+        # per-reference handler below) and the resolved prefix still ships.
+        async with asyncio.timeout(LINKED_CONTEXT_TIMEOUT_SECONDS):
+            for ref_repo, number in refs:
+                try:
+                    key = ref_repo.casefold()
+                    if key != repo.casefold():
+                        if key not in cross_repo_public:
+                            cross_repo_public[key] = (
+                                await gh.get_repo_private(ref_repo) is False
+                            )
+                        if not cross_repo_public[key]:
+                            logger.info(
+                                "themis_linked_ref_skipped repo=%s ref=%s#%d reason=not_public",
+                                repo, ref_repo, number,
+                            )
+                            continue
+                    issue = await gh.get_issue(ref_repo, number)
+                    if issue is None:
+                        logger.info(
+                            "themis_linked_issue_missing repo=%s ref=%s#%d",
+                            repo, ref_repo, number,
+                        )
+                        continue
+                    body = issue.get("body") or ""
+                    linked.append({
+                        "ref": f"{ref_repo}#{number}",
+                        "type": "pull_request" if issue.get("pull_request") else "issue",
+                        "repo": ref_repo,
+                        "number": number,
+                        "title": issue.get("title"),
+                        "state": issue.get("state"),
+                        "author": (issue.get("user") or {}).get("login"),
+                        "body": body[:MAX_LINKED_BODY_LEN],
+                        "body_truncated": len(body) > MAX_LINKED_BODY_LEN,
+                    })
+                except (httpx.HTTPError, ValueError, AttributeError, TypeError) as error:
+                    logger.warning(
+                        "themis_linked_issue_fetch_failed repo=%s ref=%s#%d error=%s",
+                        repo, ref_repo, number, str(error)[:200],
                     )
-                if not cross_repo_public[key]:
-                    logger.info(
-                        "themis_linked_ref_skipped repo=%s ref=%s#%d reason=not_public",
-                        repo, ref_repo, number,
-                    )
-                    continue
-            issue = await gh.get_issue(ref_repo, number)
-            if issue is None:
-                logger.info(
-                    "themis_linked_issue_missing repo=%s ref=%s#%d",
-                    repo, ref_repo, number,
-                )
-                continue
-            body = issue.get("body") or ""
-            linked.append({
-                "ref": f"{ref_repo}#{number}",
-                "type": "pull_request" if issue.get("pull_request") else "issue",
-                "repo": ref_repo,
-                "number": number,
-                "title": issue.get("title"),
-                "state": issue.get("state"),
-                "author": (issue.get("user") or {}).get("login"),
-                "body": body[:MAX_LINKED_BODY_LEN],
-                "body_truncated": len(body) > MAX_LINKED_BODY_LEN,
-            })
-        except (httpx.HTTPError, ValueError, AttributeError, TypeError) as error:
-            logger.warning(
-                "themis_linked_issue_fetch_failed repo=%s ref=%s#%d error=%s",
-                repo, ref_repo, number, str(error)[:200],
-            )
+    except TimeoutError:
+        logger.warning(
+            "themis_linked_context_deadline repo=%s resolved=%d of=%d",
+            repo, len(linked), len(refs),
+        )
     return linked

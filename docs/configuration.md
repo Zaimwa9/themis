@@ -280,7 +280,9 @@ Scope and bounds, in the same spirit as the rest of the trust model:
 - At most 5 references per review, bodies clamped to 4000 characters
   (`body_truncated: true` marks a clipped body).
 - Best effort: a reference the token cannot see (deleted, private,
-  uninstalled repo) is skipped with a log line and never blocks the review.
+  uninstalled repo) is skipped with a log line and never blocks the review,
+  and the whole resolution runs under one 20-second deadline — on expiry
+  the review proceeds with whatever resolved in time.
 - The fetched content is handed to the agent as **data, not instructions**,
   with the same prompt guardrails as requester-supplied extra context: it
   cannot suppress findings, change severities, or alter the output contract.
