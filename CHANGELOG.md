@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.0](https://github.com/Zaimwa9/themis/compare/v0.9.0...v0.10.0) (2026-07-25)
+
+
+### Features
+
+* **config:** skip auto-reviews by PR title wildcard patterns (triggers.skip_titles) ([#68](https://github.com/Zaimwa9/themis/issues/68)) ([2a5b2c0](https://github.com/Zaimwa9/themis/commit/2a5b2c03d450dcc1b80dab70ae31f61d15dabd28))
+* dedicated engine credentials and auth-death watchdog ([#88](https://github.com/Zaimwa9/themis/issues/88)) ([01e030f](https://github.com/Zaimwa9/themis/commit/01e030f9039c4abeec5c85d1c4fb95b60a8fa691))
+* fetch linked issues and PRs from the PR description as review context ([#89](https://github.com/Zaimwa9/themis/issues/89)) ([4a2a06b](https://github.com/Zaimwa9/themis/commit/4a2a06b64fd9ed64724a90b68962ddd0217c5c3a))
+* THEMIS_REPOS allowlist with owner/* wildcard ([#83](https://github.com/Zaimwa9/themis/issues/83)) ([d5ad7d8](https://github.com/Zaimwa9/themis/commit/d5ad7d8bd621725e898dd94b8a408c19db059568))
+
+
+### Bug Fixes
+
+* **prompts:** give the scorecard table a real header instead of an empty row ([#90](https://github.com/Zaimwa9/themis/issues/90)) ([09e8e80](https://github.com/Zaimwa9/themis/commit/09e8e80d365cdbff91b3fab4857fc4e22525bf9a))
+
 ## [0.9.0](https://github.com/Zaimwa9/themis/compare/v0.8.0...v0.9.0) (2026-07-21)
 
 
