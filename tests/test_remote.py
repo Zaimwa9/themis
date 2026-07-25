@@ -1,7 +1,12 @@
 import httpx
 import pytest
 
-from themis.engines import EngineError, EngineQuotaError, EngineUnavailableError
+from themis.engines import (
+    EngineAuthError,
+    EngineError,
+    EngineQuotaError,
+    EngineUnavailableError,
+)
 from themis.remote import RemoteEngine
 
 
@@ -116,3 +121,19 @@ async def test_run_forwards_native_capability_flags(tmp_path):
     )
     assert b'"native_context":true' in seen["payload"]
     assert b'"native_skills":false' in seen["payload"]
+
+
+async def test_auth_expired_code_maps_to_engine_auth_error(tmp_path):
+    transport = httpx.MockTransport(lambda request: httpx.Response(503, json={
+        "detail": {
+            "code": "engine_auth_expired",
+            "message": "codex credentials expired",
+        }
+    }))
+    engine = RemoteEngine("codex", "http://agent", "secret", transport=transport)
+
+    with pytest.raises(EngineAuthError, match="credentials expired"):
+        await engine.run(
+            prompt="review", workspace=tmp_path, model="gpt-5.4", effort="high",
+            timeout=10,
+        )

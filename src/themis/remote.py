@@ -4,7 +4,12 @@ from pathlib import Path
 
 import httpx
 
-from themis.engines.base import EngineError, EngineQuotaError, EngineUnavailableError
+from themis.engines.base import (
+    EngineAuthError,
+    EngineError,
+    EngineQuotaError,
+    EngineUnavailableError,
+)
 
 
 class RemoteEngine:
@@ -66,6 +71,8 @@ class RemoteEngine:
         )
         if response.status_code == 429:
             raise EngineQuotaError(message)
+        if code == "engine_auth_expired":
+            raise EngineAuthError(message)
         if code == "engine_credentials_unavailable":
             raise EngineUnavailableError(message)
         raise EngineError(message)

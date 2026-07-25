@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from themis.agent import create_agent_app
+from themis.engines import EngineAuthError
 
 
 class FakeEngine:
@@ -16,6 +17,8 @@ class FakeEngine:
     async def run(self, *, workspace: Path, **kwargs):
         type(self).last_kwargs = kwargs
         (workspace / "ran").write_text("yes")
+        if kwargs.get("prompt") == "auth-dead":
+            raise EngineAuthError("claude credentials expired: run /login")
         if kwargs.get("prompt") == "leak":
             output = workspace / ".review-output"
             output.mkdir()
@@ -170,3 +173,21 @@ def test_missing_credentials_return_machine_readable_code(monkeypatch, tmp_path)
     )
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "engine_credentials_unavailable"
+
+
+def test_run_engine_auth_error_returns_503_with_auth_code(monkeypatch, tmp_path):
+    workspace = tmp_path / "job123"
+    workspace.mkdir()
+    response = client(monkeypatch, tmp_path).post(
+        "/run",
+        headers={"Authorization": "Bearer agent-secret"},
+        json={
+            "engine": "claude", "workspace": "job123", "prompt": "auth-dead",
+            "model": "opus", "effort": "high", "timeout": 10,
+        },
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "engine_auth_expired",
+        "message": "claude credentials expired: run /login",
+    }

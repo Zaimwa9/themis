@@ -9,7 +9,13 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from themis.config import VALID_SANDBOXES, _env_concurrency
-from themis.engines import ENGINE_NAMES, EngineError, EngineQuotaError, resolve
+from themis.engines import (
+    ENGINE_NAMES,
+    EngineAuthError,
+    EngineError,
+    EngineQuotaError,
+    resolve,
+)
 from themis.output import OUTPUT_DIR, OUTPUT_FILES
 from themis.security import redact_outbound
 
@@ -101,6 +107,11 @@ def create_agent_app() -> FastAPI:
                 )
             _redact_agent_outputs(workspace)
             return {"output": redact_outbound(output)}
+        except EngineAuthError as error:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "engine_auth_expired", "message": str(error)},
+            ) from error
         except EngineQuotaError as error:
             raise HTTPException(status_code=429, detail=str(error)) from error
         except EngineError as error:
