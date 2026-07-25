@@ -262,7 +262,7 @@ the fully-disabled baseline.
 ### Linked issue and PR context
 
 When the PR title or description references other issues or pull requests —
-`Fixes #12`, `owner/repo#34`, or a full `github.com/.../issues/N` /
+`Fixes #12`, `GH-12`, `owner/repo#34`, or a full `github.com/.../issues/N` /
 `.../pull/N` URL — Themis resolves them with its installation token before
 the review and writes them to `.review-input/linked_issues.json` (title,
 state, author, body), so the agent can judge the change against what it

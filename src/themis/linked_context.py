@@ -29,17 +29,19 @@ MAX_SCAN_LEN = 10_000
 # GitHub issue numbers are far below this; anything larger is noise.
 _MAX_REF_NUMBER = 10**8
 
-# The three spellings GitHub itself autolinks: a full issue/PR URL, a
-# cross-repo `owner/repo#N` shorthand, and a bare `#N`. Alternation order
-# makes the URL branch win over the bare-`#N` branch at the same position.
-# Every number requires a terminator (`/issues/12draft` is not issue 12);
-# a skipped ambiguous spelling only costs context, a misfire costs a fetch.
+# The spellings GitHub itself autolinks: a full issue/PR URL, a cross-repo
+# `owner/repo#N` shorthand, a bare `#N`, and the `GH-N` shorthand.
+# Alternation order makes the URL branch win over the bare-`#N` branch at
+# the same position. Every number requires a terminator (`/issues/12draft`
+# is not issue 12); a skipped ambiguous spelling only costs context, a
+# misfire costs a fetch.
 _REF_PATTERN = re.compile(
     r"https://github\.com/(?P<url_owner>[A-Za-z0-9-]+)/(?P<url_repo>[\w.-]+)"
     r"/(?:issues|pull)/(?P<url_number>\d+)(?![\w-])"
     r"|(?<![\w.-])(?P<slug_owner>[A-Za-z0-9-]+)/(?P<slug_repo>[\w.-]+)"
     r"#(?P<slug_number>\d+)(?![\w-])"
     r"|(?<![\w/])#(?P<bare_number>\d+)(?![\w-])"
+    r"|(?<![\w/-])[Gg][Hh]-(?P<gh_number>\d+)(?![\w-])"
 )
 
 
@@ -55,9 +57,10 @@ def extract_refs(repo: str, pr_number: int, text: str) -> list[tuple[str, int]]:
     refs: list[tuple[str, int]] = []
     seen: set[tuple[str, int]] = {(repo.casefold(), pr_number)}
     for match in _REF_PATTERN.finditer(text[:MAX_SCAN_LEN]):
-        if match["bare_number"] is not None:
+        own_repo_number = match["bare_number"] or match["gh_number"]
+        if own_repo_number is not None:
             ref_repo = repo
-            number = int(match["bare_number"])
+            number = int(own_repo_number)
         else:
             ref_owner = match["url_owner"] or match["slug_owner"]
             ref_name = match["url_repo"] or match["slug_repo"]

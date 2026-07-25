@@ -59,6 +59,17 @@ def test_extract__word_adjacent_hash__not_a_reference():
     assert extract_refs(REPO, 7, "deadbeef#1 and path/to#2") == []
 
 
+def test_extract__gh_shorthand__resolves_to_own_repo_and_dedupes():
+    assert extract_refs(REPO, 7, "Fixes GH-12, also gh-13 and #12") == [
+        (REPO, 12),
+        (REPO, 13),
+    ]
+
+
+def test_extract__gh_shorthand__word_adjacent_or_unterminated__ignored():
+    assert extract_refs(REPO, 7, "SIGH-12, x-gh-12, GH-12x, gh-pages") == []
+
+
 def test_extract__number_without_terminator__not_a_reference():
     # `/issues/12draft` is not issue 12; the same holds for every spelling.
     text = (
