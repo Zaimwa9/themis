@@ -492,7 +492,7 @@ def test_mint_claude_token__runs_setup_token_then_prompts_for_paste(monkeypatch)
         lambda command, **kwargs: calls.append(command)
         or subprocess.CompletedProcess(command, 0),
     )
-    monkeypatch.setattr("builtins.input", lambda _prompt: "  sk-ant-oat01-tok  ")
+    monkeypatch.setattr(bootstrap.getpass, "getpass", lambda _prompt: "  sk-ant-oat01-tok  ")
     assert bootstrap.mint_claude_token() == "sk-ant-oat01-tok"
     assert calls == [["claude", "setup-token"]]
 
@@ -511,6 +511,55 @@ def test_mint_claude_token__empty_paste__raises(monkeypatch):
         bootstrap.subprocess, "run",
         lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
     )
-    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    monkeypatch.setattr(bootstrap.getpass, "getpass", lambda _prompt: "")
     with pytest.raises(BootstrapError, match="token"):
         bootstrap.mint_claude_token()
+
+
+def test_run_bootstrap__claude_without_token__mints_setup_token(
+    monkeypatch, tmp_path
+):
+    seen_options = {}
+
+    def session_factory(options):
+        seen_options["options"] = options
+        session = type("FakeSession", (), {})()
+        session.done = type("Done", (), {"wait": lambda self, timeout: True})()
+        session.error = None
+        session.credentials = credentials()
+        session.handler = lambda: object
+        return session
+
+    fake_server = type(
+        "FakeServer",
+        (),
+        {
+            "serve_forever": lambda self: None,
+            "shutdown": lambda self: None,
+            "server_close": lambda self: None,
+        },
+    )()
+    monkeypatch.setattr(bootstrap, "mint_claude_token", lambda: "sk-ant-oat01-minted")
+    monkeypatch.setattr(bootstrap, "BootstrapSession", session_factory)
+    monkeypatch.setattr(bootstrap, "ThreadingHTTPServer", lambda address, handler: fake_server)
+    monkeypatch.setattr(bootstrap.threading, "Thread", lambda **kwargs: type(
+        "Thread", (), {"start": lambda self: None, "join": lambda self, timeout: None}
+    )())
+
+    run_bootstrap(options(tmp_path, engine="claude", claude_token=None))
+
+    assert seen_options["options"].claude_token == "sk-ant-oat01-minted"
+
+
+def test_options_from_args__claude_env_token__gated_on_engine(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-env")
+    args = argparse.Namespace(
+        repo="acme/widgets", organization=None, output=tmp_path,
+        public_url="https://x.example.com", tunnel=False, engine="codex",
+        codex_auth=None, image="ghcr.io/example/themis:1.2.3",
+        callback_port=8976, bind_host="127.0.0.1", callback_host="127.0.0.1",
+        timeout=1, no_browser=True,
+    )
+    assert bootstrap.options_from_args(args).claude_token is None
+    args.engine = "claude"
+    assert bootstrap.options_from_args(args).claude_token == "sk-ant-oat01-env"

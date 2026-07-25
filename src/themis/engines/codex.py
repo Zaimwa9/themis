@@ -8,10 +8,12 @@ from themis.engines.base import allowlisted_env, run_cli
 _QUOTA_MARKERS = ("usage limit",)
 # Codex CLI diagnostics for a dead ChatGPT OAuth chain (single-use rotating
 # refresh tokens: a sibling install refreshing the same chain kills this
-# one). Retries cannot help; the operator must re-login.
+# one). Retries cannot help; the operator must re-login. Deliberately only
+# refresh-specific phrases: markers match the agent-visible output tail, so
+# generic instructions like "log out and sign in again" could be echoed by
+# a prompt-steered agent and fake a terminal auth failure.
 _AUTH_MARKERS = (
     "refresh token was already used",
-    "log out and sign in again",
     "token could not be refreshed",
 )
 _EXTRA_ENV = frozenset({"CODEX_HOME"})

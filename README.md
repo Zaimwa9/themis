@@ -241,14 +241,18 @@ OPENROUTER_API_KEY=<key>               # openrouter engine only
 docker compose up -d
 ```
 
-For the codex engine, seed the auth volume once the agent is up. The pipe
-runs as the container's unprivileged `themis` user, so ownership and `0600`
-mode come out right (`docker compose cp` would leave the file root-owned and
-unreadable to the agent):
+For the codex engine, mint a dedicated chain and seed the auth volume once
+the agent is up — never your personal `~/.codex/auth.json` (see the chain
+warning above). The pipe runs as the container's unprivileged `themis`
+user, so ownership and `0600` mode come out right (`docker compose cp`
+would leave the file root-owned and unreadable to the agent):
 
 ```bash
+scratch=$(mktemp -d)
+CODEX_HOME="$scratch" codex login
 docker compose exec -T agent sh -c 'umask 077; cat > /data/codex/auth.json' \
-  < ~/.codex/auth.json
+  < "$scratch/auth.json"
+rm -rf "$scratch"
 ```
 
 PaaS deployment, upgrades, and the full env reference:

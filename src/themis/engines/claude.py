@@ -14,13 +14,13 @@ _QUOTA_MARKERS = (
     "you've hit your opus limit",
     "you've hit your limit · resets",
 )
-# Claude CLI diagnostics for dead credentials (expired/revoked setup-token
-# or invalid API key on API-mode subclasses). Deliberately narrow: agent
-# output can echo prompt text, and a false match skips retries.
+# Claude CLI diagnostics for a dead setup-token. Deliberately narrow: agent
+# output can echo prompt text, and a false match skips retries — so only
+# oauth-token-specific diagnostics qualify; generic instructions like
+# "please run /login" or "invalid api key" do not.
 _AUTH_MARKERS = (
     "oauth token has expired",
     "oauth token is invalid",
-    "please run /login",
 )
 # No self-updates or third-party telemetry from inside a review job.
 _HYGIENE_ENV = {

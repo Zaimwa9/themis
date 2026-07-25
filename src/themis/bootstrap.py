@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 import html
 import json
 import os
@@ -371,7 +372,7 @@ def mint_claude_token() -> str:
         ) from error
     if completed.returncode != 0:
         raise BootstrapError("claude setup-token failed; rerun the bootstrap")
-    token = input("Paste the token printed above: ").strip()
+    token = getpass.getpass("Paste the token printed above: ").strip()
     if not token:
         raise BootstrapError("no token pasted; rerun the bootstrap")
     return token
@@ -523,7 +524,10 @@ def run_bootstrap(options: BootstrapOptions) -> None:
             if not session.done.wait(options.timeout):
                 if session.error:
                     raise BootstrapError(f"setup did not complete: {session.error}")
-                raise BootstrapError("timed out waiting for GitHub App setup")
+                raise BootstrapError(
+                "timed out waiting for GitHub App setup; any engine login "
+                "minted this run was discarded — rerun the bootstrap"
+            )
         finally:
             server.shutdown()
             server.server_close()
@@ -586,6 +590,10 @@ def options_from_args(args: argparse.Namespace) -> BootstrapOptions:
         timeout=args.timeout,
         open_browser=not args.no_browser,
         # Headless escape hatch: a pre-minted token in the environment skips
-        # the interactive setup-token flow.
-        claude_token=os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or None,
+        # the interactive setup-token flow. Engine-gated so an exported token
+        # never lands in a deployment that does not use it.
+        claude_token=(
+            os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or None
+            if args.engine == "claude" else None
+        ),
     )

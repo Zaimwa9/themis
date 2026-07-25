@@ -37,21 +37,24 @@ startup, so this stays hands-off. If you have an ngrok static domain (the
 free tier includes one), the URL is stable across restarts too, useful if
 you want to avoid a webhook redelivery gap right after a restart.
 
-## Reusing your laptop's Codex login
+## Codex login for a local stack
 
-Mount your existing `~/.codex` directly instead of seeding a copy, via
-`docker-compose.override.yml` next to `docker-compose.yml`:
+Do not mount or copy your personal `~/.codex`: ChatGPT refresh tokens are
+single-use rotating, so any second consumer of the same chain — even a
+mounted one, once the host and container refresh concurrently — risks
+invalidating the login for both. Mint a chain dedicated to this stack and
+seed it into the agent volume instead:
 
-```yaml
-services:
-  agent:
-    volumes:
-      - ~/.codex:/data/codex
+```bash
+scratch=$(mktemp -d)
+CODEX_HOME="$scratch" codex login
+docker compose exec -T agent sh -c 'umask 077; cat > /data/codex/auth.json' \
+  < "$scratch/auth.json"
+rm -rf "$scratch"
 ```
 
-Compose merges override files automatically. Token refreshes land back in
-your real `~/.codex`, so `codex` on the host and Themis in the container
-share one login.
+The container then refreshes that chain in place indefinitely; your
+laptop's own `codex` login stays untouched.
 
 ## THEMIS_PUBLIC_URL wins
 

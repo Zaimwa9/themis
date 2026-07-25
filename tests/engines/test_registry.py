@@ -46,3 +46,19 @@ def test_native_skills_engines_are_claude_harness_only():
 
     assert NATIVE_SKILLS_ENGINES == frozenset({"claude", "glm", "kimi", "openrouter"})
     assert NATIVE_SKILLS_ENGINES <= frozenset(ENGINE_NAMES)
+
+
+def test_every_engine_declares_auth_markers_explicitly():
+    # Text auth markers are agent-echoable; each engine must make its own
+    # explicit call rather than silently inheriting claude's. A new
+    # AnthropicApiEngine subclass that forgets `_auth_markers = ()` fails
+    # here, not in production with a false "credentials expired" comment.
+    for name in ENGINE_NAMES:
+        engine = resolve(name)
+        if name == "codex":
+            continue  # codex passes a module constant, not a class attribute
+        assert "_auth_markers" in type(engine).__dict__, (
+            f"{name} must declare _auth_markers explicitly"
+        )
+        if name != "claude":
+            assert type(engine).__dict__["_auth_markers"] == ()
