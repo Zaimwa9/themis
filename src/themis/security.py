@@ -17,6 +17,7 @@ REDACTED = "[redacted]"
 # hostile PR can instruct the agent to echo secrets it legitimately holds.
 _SECRET_ENV_VARS = (
     "CLAUDE_CODE_OAUTH_TOKEN",
+    "GITHUB_TOKEN",
     "GLM_API_KEY",
     "KIMI_API_KEY",
     "OPENROUTER_API_KEY",

@@ -231,6 +231,38 @@ def test_parse_event__unknown_event__none():
     assert parse_event("push", {"repository": {"full_name": REPO}}, MENTION) is None
 
 
+def test_parse_event__pr_without_installation__review_job_id_zero():
+    # GitHub Actions event payloads carry no "installation" key (no App is
+    # involved); action mode never uses the id, so it degrades to 0.
+    payload = _pr_payload()
+    del payload["installation"]
+
+    job = parse_event("pull_request", payload, MENTION)
+
+    assert isinstance(job, ReviewJob)
+    assert job.installation_id == 0
+
+
+def test_parse_event__issue_comment_without_installation__job_id_zero():
+    payload = _issue_comment_payload(f"{MENTION} review")
+    del payload["installation"]
+
+    job = parse_event("issue_comment", payload, MENTION)
+
+    assert isinstance(job, ReviewJob)
+    assert job.installation_id == 0
+
+
+def test_parse_event__review_comment_without_installation__job_id_zero():
+    payload = _review_comment_payload("I disagree", in_reply_to=11)
+    del payload["installation"]
+
+    job = parse_event("pull_request_review_comment", payload, MENTION)
+
+    assert isinstance(job, DiscussJob)
+    assert job.installation_id == 0
+
+
 def test_parse_event__discussion__carries_author_association_and_login():
     payload = _issue_comment_payload(f"{MENTION} what does this do?",
                                      author_association="MEMBER")

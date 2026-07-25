@@ -157,3 +157,13 @@ def test_redact__openrouter_api_key(monkeypatch):
     text = redact_outbound("keys: or-key-abcdef123456")
 
     assert "or-key-abcdef123456" not in text
+
+
+def test_redact__github_token_env_value(monkeypatch):
+    # Action mode posts with the workflow's GITHUB_TOKEN; redact it by value,
+    # not only by the ghs_ shape (custom PATs may not match any pattern).
+    monkeypatch.setenv("GITHUB_TOKEN", "v1.super-secret-workflow-token")
+
+    text = redact_outbound("leak: v1.super-secret-workflow-token")
+
+    assert "v1.super-secret-workflow-token" not in text
