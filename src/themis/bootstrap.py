@@ -9,9 +9,11 @@ import json
 import os
 import re
 import secrets
+import subprocess
+import tempfile
 import threading
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
@@ -329,6 +331,31 @@ def write_deployment(options: BootstrapOptions, credentials: dict[str, object]) 
         _write_exclusive(destination, options.codex_auth.read_bytes(), 0o600)
 
 
+def mint_codex_auth(home: Path) -> Path:
+    """Run `codex login` against a private CODEX_HOME, minting a refresh
+    chain owned solely by this deployment. ChatGPT refresh tokens are
+    single-use rotating: sharing the host's ~/.codex chain lets whichever
+    install refreshes first kill the others."""
+    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        completed = subprocess.run(
+            ["codex", "login"], env=os.environ | {"CODEX_HOME": str(home)}
+        )
+    except FileNotFoundError as error:
+        raise BootstrapError(
+            "codex CLI not found (npm install -g @openai/codex), or pass "
+            "--codex-auth with an auth.json minted for this deployment only"
+        ) from error
+    auth = home / "auth.json"
+    if completed.returncode != 0 or not auth.is_file():
+        raise BootstrapError(
+            "codex login did not produce an auth.json; on a headless host, "
+            "run `CODEX_HOME=$(mktemp -d) codex login` on a workstation and "
+            "pass the resulting auth.json via --codex-auth"
+        )
+    return auth
+
+
 def _page(title: str, body: str) -> bytes:
     return (
         "<!doctype html><meta charset=utf-8>"
@@ -449,23 +476,35 @@ def run_bootstrap(options: BootstrapOptions) -> None:
     if (options.output / ".env").exists() or (options.output / "compose.yaml").exists():
         raise BootstrapError("output already contains .env or compose.yaml")
 
-    session = BootstrapSession(options)
-    server = ThreadingHTTPServer((options.bind_host, options.bind_port), session.handler())
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    start_url = f"{options.callback_url}/"
-    print(f"Open this URL to authorize the GitHub App:\n\n  {start_url}\n", flush=True)
-    if options.open_browser:
-        webbrowser.open(start_url)
-    try:
-        if not session.done.wait(options.timeout):
-            if session.error:
-                raise BootstrapError(f"setup did not complete: {session.error}")
-            raise BootstrapError("timed out waiting for GitHub App setup")
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+    # The scratch dir must outlive write_deployment (run by the callback
+    # handler during the wait below), which copies the minted seed.
+    with tempfile.TemporaryDirectory(prefix="themis-codex-login-") as scratch:
+        if options.engine == "codex" and options.codex_auth is None:
+            print(
+                "Minting a dedicated Codex login for this deployment "
+                "(your browser will open; approve the login)...",
+                flush=True,
+            )
+            options = replace(
+                options, codex_auth=mint_codex_auth(Path(scratch) / "codex")
+            )
+        session = BootstrapSession(options)
+        server = ThreadingHTTPServer((options.bind_host, options.bind_port), session.handler())
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        start_url = f"{options.callback_url}/"
+        print(f"Open this URL to authorize the GitHub App:\n\n  {start_url}\n", flush=True)
+        if options.open_browser:
+            webbrowser.open(start_url)
+        try:
+            if not session.done.wait(options.timeout):
+                if session.error:
+                    raise BootstrapError(f"setup did not complete: {session.error}")
+                raise BootstrapError("timed out waiting for GitHub App setup")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
     if session.credentials is None:  # guarded by session.done, narrows the type
         raise BootstrapError("GitHub App credentials were not received")
@@ -489,7 +528,10 @@ def add_init_parser(subparsers: argparse._SubParsersAction) -> None:
     reachability.add_argument("--public-url", type=_public_url_argument)
     reachability.add_argument("--tunnel", action="store_true", help="use the bundled ngrok tunnel")
     parser.add_argument("--engine", choices=ENGINE_NAMES, default="codex")
-    parser.add_argument("--codex-auth", type=Path, help="auth.json to seed into the agent")
+    parser.add_argument(
+        "--codex-auth", type=Path,
+        help="auth.json to seed into the agent (must be a chain no other install uses)",
+    )
     parser.add_argument("--image", type=_image_argument, default=DEFAULT_IMAGE)
     parser.add_argument("--callback-port", type=_positive_int, default=8976)
     parser.add_argument("--bind-host", default="127.0.0.1")
@@ -500,10 +542,11 @@ def add_init_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def options_from_args(args: argparse.Namespace) -> BootstrapOptions:
     callback_url = f"http://{args.callback_host}:{args.callback_port}"
+    # Never default to ~/.codex/auth.json: copying the host's live chain is
+    # the collision footgun (single-use rotating refresh tokens — whichever
+    # install refreshes first invalidates the others). run_bootstrap mints a
+    # dedicated chain instead when no --codex-auth is given.
     codex_auth = args.codex_auth
-    default_auth = Path.home() / ".codex" / "auth.json"
-    if codex_auth is None and args.engine == "codex" and default_auth.is_file():
-        codex_auth = default_auth
     return BootstrapOptions(
         repo=args.repo,
         output=args.output.resolve(),

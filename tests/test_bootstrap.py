@@ -1,8 +1,10 @@
 """GitHub App manifest bootstrap."""
 
+import argparse
 import base64
 import json
 import stat
+import subprocess
 import threading
 from pathlib import Path
 
@@ -22,6 +24,17 @@ from themis.bootstrap import (
     verify_repo_installation,
     write_deployment,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cli(monkeypatch):
+    # Bootstrap can shell out to `codex login` / `claude setup-token`; a test
+    # reaching a real CLI would pop OAuth prompts on the developer's machine.
+    def _blocked(*args, **kwargs):
+        raise AssertionError(
+            "test attempted to run a real CLI; monkeypatch bootstrap.subprocess.run"
+        )
+    monkeypatch.setattr(bootstrap.subprocess, "run", _blocked)
 
 
 def options(tmp_path: Path, **overrides) -> BootstrapOptions:
@@ -328,7 +341,9 @@ def test_run_bootstrap_validates_before_listening(tmp_path, overrides, message):
 
 
 def test_run_bootstrap_prints_bot_mention_and_info_path(monkeypatch, tmp_path, capsys):
-    opts = options(tmp_path, bind_port=9999)
+    seed = tmp_path / "seed-auth.json"
+    seed.write_text("{}")
+    opts = options(tmp_path, bind_port=9999, codex_auth=seed)
     fake_server = type(
         "FakeServer",
         (),
@@ -359,3 +374,102 @@ def test_run_bootstrap_prints_bot_mention_and_info_path(monkeypatch, tmp_path, c
     assert "GitHub bot: @themis-acme-123" in output
     assert "@themis-acme-123 review" in output
     assert str(tmp_path / "themis-info.json") in output
+
+
+def test_options_from_args__codex__does_not_default_to_host_auth(tmp_path, monkeypatch):
+    # A copied live chain is the collision footgun: single-use rotating
+    # refresh tokens mean host and container would kill each other.
+    fake_home = tmp_path / "home"
+    (fake_home / ".codex").mkdir(parents=True)
+    (fake_home / ".codex" / "auth.json").write_text("{}")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+    args = argparse.Namespace(
+        repo="acme/widgets", organization=None, output=tmp_path,
+        public_url="https://x.example.com", tunnel=False, engine="codex",
+        codex_auth=None, image="ghcr.io/example/themis:1.2.3",
+        callback_port=8976, bind_host="127.0.0.1", callback_host="127.0.0.1",
+        timeout=1, no_browser=True,
+    )
+    assert bootstrap.options_from_args(args).codex_auth is None
+
+
+def test_mint_codex_auth__runs_codex_login_in_private_home(tmp_path, monkeypatch):
+    calls = {}
+
+    def fake_run(command, **kwargs):
+        calls["command"] = command
+        calls["codex_home"] = kwargs["env"]["CODEX_HOME"]
+        Path(kwargs["env"]["CODEX_HOME"], "auth.json").write_text("{}")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake_run)
+    auth = bootstrap.mint_codex_auth(tmp_path / "chain")
+    assert calls["command"] == ["codex", "login"]
+    assert calls["codex_home"] == str(tmp_path / "chain")
+    assert auth == tmp_path / "chain" / "auth.json"
+
+
+def test_mint_codex_auth__missing_cli__raises_with_escape_hatch_hint(
+    tmp_path, monkeypatch
+):
+    def fake_run(command, **kwargs):
+        raise FileNotFoundError("codex")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake_run)
+    with pytest.raises(BootstrapError, match="--codex-auth"):
+        bootstrap.mint_codex_auth(tmp_path / "chain")
+
+
+def test_mint_codex_auth__login_without_auth_json__raises_headless_hint(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        bootstrap.subprocess, "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
+    with pytest.raises(BootstrapError, match="headless"):
+        bootstrap.mint_codex_auth(tmp_path / "chain")
+
+
+def test_run_bootstrap__codex_without_auth__mints_dedicated_chain(
+    monkeypatch, tmp_path
+):
+    minted = {}
+
+    def fake_mint(home: Path) -> Path:
+        minted["home"] = home
+        auth = home / "auth.json"
+        auth.parent.mkdir(parents=True, exist_ok=True)
+        auth.write_text("{}")
+        return auth
+
+    seen_options = {}
+
+    def session_factory(options):
+        seen_options["options"] = options
+        session = type("FakeSession", (), {})()
+        session.done = type("Done", (), {"wait": lambda self, timeout: True})()
+        session.error = None
+        session.credentials = credentials()
+        session.handler = lambda: object
+        return session
+
+    fake_server = type(
+        "FakeServer",
+        (),
+        {
+            "serve_forever": lambda self: None,
+            "shutdown": lambda self: None,
+            "server_close": lambda self: None,
+        },
+    )()
+    monkeypatch.setattr(bootstrap, "mint_codex_auth", fake_mint)
+    monkeypatch.setattr(bootstrap, "BootstrapSession", session_factory)
+    monkeypatch.setattr(bootstrap, "ThreadingHTTPServer", lambda address, handler: fake_server)
+    monkeypatch.setattr(bootstrap.threading, "Thread", lambda **kwargs: type(
+        "Thread", (), {"start": lambda self: None, "join": lambda self, timeout: None}
+    )())
+
+    run_bootstrap(options(tmp_path, engine="codex", codex_auth=None))
+
+    assert seen_options["options"].codex_auth == minted["home"] / "auth.json"
