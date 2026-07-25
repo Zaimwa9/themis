@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -251,4 +252,26 @@ def test_run_forged_auth_marker_downgrades_to_502(monkeypatch, tmp_path):
 
 def test_run_ambiguous_probe_failure_downgrades_to_502(monkeypatch, tmp_path):
     response = _auth_dead_request(monkeypatch, tmp_path, FlakyProbeEngine())
+    assert response.status_code == 502
+
+
+class HungProbeEngine(FakeEngine):
+    """Auth marker on the job run; the probe never returns (hung CLI or a
+    slot queue congested by other reviews)."""
+
+    async def run(self, *, workspace: Path, **kwargs):
+        if kwargs.get("prompt") == "auth-dead":
+            raise EngineAuthError("claude credentials expired: run /login")
+        await asyncio.sleep(30)
+        return "ok"
+
+
+def test_run_hung_probe_stays_within_budget_and_downgrades_to_502(
+    monkeypatch, tmp_path,
+):
+    # The controller's HTTP allowance is timeout + 30 + AUTH_PROBE_BUDGET; a
+    # probe that outlives the budget must be abandoned as unconfirmed, not
+    # keep the request open until the controller hangs up.
+    monkeypatch.setattr("themis.agent.AUTH_PROBE_BUDGET", 0.05)
+    response = _auth_dead_request(monkeypatch, tmp_path, HungProbeEngine())
     assert response.status_code == 502

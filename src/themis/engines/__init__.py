@@ -2,6 +2,7 @@
 values of THEMIS_ENGINE and the repo config engine: key."""
 
 from themis.engines.base import (
+    AUTH_PROBE_BUDGET,
     Engine,
     EngineAuthError,
     EngineError,
@@ -21,7 +22,7 @@ ENGINE_NAMES = ("codex", "claude", "glm", "kimi", "openrouter")
 NATIVE_SKILLS_ENGINES = frozenset({"claude", "glm", "kimi", "openrouter"})
 
 __all__ = [
-    "ENGINE_NAMES", "Engine", "EngineAuthError", "EngineError",
+    "AUTH_PROBE_BUDGET", "ENGINE_NAMES", "Engine", "EngineAuthError", "EngineError",
     "EngineQuotaError", "EngineUnavailableError", "NATIVE_SKILLS_ENGINES",
     "resolve",
 ]

@@ -27,6 +27,15 @@ class EngineUnavailableError(EngineError):
     """The isolated agent does not have credentials for this engine."""
 
 
+# Worst case extra time the agent may spend after a job fails with an auth
+# marker: waiting for an engine slot plus one confirmation probe run. The
+# agent abandons the probe at this budget, and the controller's HTTP client
+# allows for it on top of the job timeout — both sides must share the value
+# or a slow genuine auth death gets cut off mid-probe and misread as a
+# transient agent error.
+AUTH_PROBE_BUDGET = 150.0
+
+
 class Engine(Protocol):
     name: str
 

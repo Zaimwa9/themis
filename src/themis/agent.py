@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from themis.config import VALID_SANDBOXES, _env_concurrency
 from themis.engines import (
+    AUTH_PROBE_BUDGET,
     ENGINE_NAMES,
     EngineAuthError,
     EngineError,
@@ -141,12 +142,20 @@ def create_agent_app() -> FastAPI:
             _redact_agent_outputs(workspace)
             return {"output": redact_outbound(output)}
         except EngineAuthError as error:
-            # Probe holds the slot: it is a real engine run and must respect
-            # the same parallelism budget as the job that triggered it.
-            async with slot:
-                confirmed = await _confirm_auth_dead(
-                    engine, request.model, request.effort
-                )
+            try:
+                # The budget bounds slot wait + probe run: the controller's
+                # HTTP allowance is timeout + 30 + AUTH_PROBE_BUDGET, so an
+                # unbounded wait here would make it hang up mid-probe and
+                # misread a genuine auth death as a transient agent error.
+                async with asyncio.timeout(AUTH_PROBE_BUDGET):
+                    # Probe holds the slot: it is a real engine run and must
+                    # respect the same parallelism budget as the job.
+                    async with slot:
+                        confirmed = await _confirm_auth_dead(
+                            engine, request.model, request.effort
+                        )
+            except TimeoutError:
+                confirmed = False
             logger.warning(
                 "themis_auth_probe engine=%s confirmed=%s",
                 request.engine, confirmed,

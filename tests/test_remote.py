@@ -2,6 +2,7 @@ import httpx
 import pytest
 
 from themis.engines import (
+    AUTH_PROBE_BUDGET,
     EngineAuthError,
     EngineError,
     EngineQuotaError,
@@ -137,3 +138,24 @@ async def test_auth_expired_code_maps_to_engine_auth_error(tmp_path):
             prompt="review", workspace=tmp_path, model="gpt-5.4", effort="high",
             timeout=10,
         )
+
+
+async def test_client_allowance_covers_engine_timeout_and_auth_probe(monkeypatch, tmp_path):
+    # A job that dies with an auth marker right at its deadline still needs
+    # the agent to finish the confirmation probe; hanging up at timeout+30
+    # would misclassify a real auth death as a transient agent error.
+    captured = {}
+    real_client = httpx.AsyncClient
+
+    def capture_client(**kwargs):
+        captured.update(kwargs)
+        return real_client(**kwargs)
+
+    monkeypatch.setattr("themis.remote.httpx.AsyncClient", capture_client)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"output": "ok"})
+    )
+    await RemoteEngine("claude", "http://agent", "secret", transport=transport).run(
+        prompt="review", workspace=tmp_path, model="opus", effort="high", timeout=10,
+    )
+    assert captured["timeout"] == 10 + 30 + AUTH_PROBE_BUDGET
