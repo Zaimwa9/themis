@@ -13,7 +13,8 @@ from themis.engines.anthropic_api import AnthropicApiEngine
 # agent-visible output tail and can be echoed by a prompt-steered agent,
 # and pay-as-you-go exhaustion (insufficient balance) never auto-resets,
 # so the "mention me later to retry" quota comment would mislead.
-# Structured classification is #28.
+# Structured classification is #28. The same echo risk applies to auth
+# markers, so auth death stays a retryable EngineError.
 
 
 class KimiEngine(AnthropicApiEngine):
@@ -21,3 +22,4 @@ class KimiEngine(AnthropicApiEngine):
     _token_env = "KIMI_API_KEY"
     _base_url = "https://api.moonshot.ai/anthropic"
     _quota_markers = ()
+    _auth_markers = ()

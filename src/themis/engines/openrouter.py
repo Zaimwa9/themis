@@ -8,7 +8,8 @@ from themis.engines.anthropic_api import AnthropicApiEngine
 # agent-visible output tail and can be echoed by a prompt-steered agent,
 # and running out of prepaid credits (402) never auto-resets, so the
 # "mention me later to retry" quota comment would mislead. Structured
-# classification is #28.
+# classification is #28. The same echo risk applies to auth markers, so
+# auth death stays a retryable EngineError.
 
 
 class OpenRouterEngine(AnthropicApiEngine):
@@ -16,3 +17,4 @@ class OpenRouterEngine(AnthropicApiEngine):
     _token_env = "OPENROUTER_API_KEY"
     _base_url = "https://openrouter.ai/api"
     _quota_markers = ()
+    _auth_markers = ()
