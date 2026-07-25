@@ -113,8 +113,12 @@ the boundary moves to the process level:
 
 ## Limits and caveats
 
-- **Fork PRs:** `pull_request` runs triggered from a fork get neither
-  secrets nor a writable token, so no review can be posted. Themis does
+- **Fork PRs are refused, fail closed.** `pull_request` runs from a fork
+  get no secrets anyway, but comment-triggered workflows (`issue_comment`,
+  `pull_request_review_comment`) run in the base-repo context *with*
+  secrets even for fork PRs — so the entrypoint checks the PR head's
+  repository via the API before any clone or engine start and refuses
+  foreign (or deleted-fork) heads with an explanatory comment. Themis does
   not recommend `pull_request_target` (it runs workflow config from the
   base branch against attacker-controlled code — safe only with care that
   defeats the point of a drop-in action). For public repos with heavy

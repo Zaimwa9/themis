@@ -301,9 +301,29 @@ def test_action_yml__run_step_never_receives_the_token_as_env():
 # --- run_action ---------------------------------------------------------------
 
 
+class FakeClient:
+    def __init__(self, head_repo: dict | None):
+        self._head_repo = head_repo
+        self.comments: list[tuple[str, int, str]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return None
+
+    async def get_pr(self, repo, number):
+        return {"number": number, "head": {"repo": self._head_repo}}
+
+    async def post_issue_comment(self, repo, number, body):
+        self.comments.append((repo, number, body))
+
+
 class FakeService:
-    def __init__(self):
+    def __init__(self, head_repo: dict | None):
         self.calls: list[tuple] = []
+        self.client = FakeClient(head_repo)
+        self.make_client = lambda token: self.client
 
     async def review(
         self, repo, pr_number, installation_id, auto,
@@ -317,13 +337,17 @@ class FakeService:
         self.calls.append(("discuss", kwargs))
 
 
-@pytest.fixture
-def fake_service(monkeypatch):
-    service = FakeService()
+def _install_fake_service(monkeypatch, head_repo: dict | None) -> FakeService:
+    service = FakeService(head_repo)
     monkeypatch.setattr(
         action_module, "build_action_service", lambda *args, **kwargs: service
     )
     return service
+
+
+@pytest.fixture
+def fake_service(monkeypatch):
+    return _install_fake_service(monkeypatch, {"full_name": REPO})
 
 
 async def test_run_action__pr_opened__runs_auto_review(
@@ -401,6 +425,56 @@ async def test_run_action__thread_reply__discussion(
     assert kwargs["comment_id"] == 601
     assert kwargs["in_reply_to_id"] == 11
     assert kwargs["mentions_bot"] is False
+
+
+async def test_run_action__fork_pr_review_command__refused(tmp_path, monkeypatch):
+    # issue_comment workflows run in the base-repo context WITH secrets even
+    # for fork PRs, so the guard must reject them before any clone or engine
+    # start: the engine would otherwise run attacker-controlled code with the
+    # engine credential in reach.
+    service = _install_fake_service(
+        monkeypatch, {"full_name": "attacker/widgets"}
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    _write_event(
+        tmp_path, monkeypatch, "issue_comment",
+        _issue_comment_payload(f"{DEFAULT_MENTION} review"),
+    )
+
+    outcome = await run_action()
+
+    assert outcome == "skipped"
+    assert service.calls == []
+    [(repo, number, body)] = service.client.comments
+    assert (repo, number) == (REPO, 7)
+    assert "fork" in body
+
+
+async def test_run_action__deleted_fork_head__refused(tmp_path, monkeypatch):
+    # head.repo is null once a fork is deleted; provenance unknowable, so
+    # the guard fails closed.
+    service = _install_fake_service(monkeypatch, None)
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    _write_event(tmp_path, monkeypatch, "pull_request", _pr_payload())
+
+    assert await run_action() == "skipped"
+    assert service.calls == []
+
+
+async def test_run_action__fork_thread_reply__refused_without_engine(
+    tmp_path, monkeypatch
+):
+    service = _install_fake_service(
+        monkeypatch, {"full_name": "attacker/widgets"}
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    _write_event(
+        tmp_path, monkeypatch, "pull_request_review_comment",
+        _review_comment_payload("thoughts?", in_reply_to=11),
+    )
+
+    assert await run_action() == "skipped"
+    assert service.calls == []
 
 
 async def test_run_action__missing_token__raises(tmp_path, monkeypatch, fake_service):

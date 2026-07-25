@@ -14,6 +14,8 @@ import logging
 import os
 from pathlib import Path
 
+import httpx
+
 from themis.config import (
     VALID_SANDBOXES,
     Settings,
@@ -185,6 +187,45 @@ def resolve_github_token() -> str:
     return token
 
 
+FORK_SKIPPED_COMMENT = (
+    "Fork pull requests are not reviewed in GitHub Action mode: "
+    "comment-triggered workflows run with this repository's secrets, and "
+    "the review engine must not execute fork-controlled code with an engine "
+    "credential in reach. Push the branch to this repository, or use the "
+    "server deployment."
+)
+
+
+async def _refuse_foreign_head(service: ReviewService, token: str, job) -> bool:
+    """True when the PR head lives outside the base repository (fail closed).
+
+    The `pull_request` no-secrets protection does not cover comment events:
+    those run in the base-repo context with secrets even for fork PRs. The
+    provenance check must come from the API, not the event payload — and
+    before any clone or engine start. A head without a repo (deleted fork)
+    is unknowable provenance, so it refuses too."""
+    gh = service.make_client(token)
+    async with gh:
+        pr = await gh.get_pr(job.repo, job.pr_number)
+        head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+        if head_repo == job.repo:
+            return False
+        logger.warning(
+            "themis_action_fork_refused repo=%s pr=%s head=%s",
+            job.repo, job.pr_number, head_repo,
+        )
+        try:
+            await gh.post_issue_comment(job.repo, job.pr_number, FORK_SKIPPED_COMMENT)
+        except httpx.HTTPError as error:
+            # Best effort: fork-triggered `pull_request` runs hold a
+            # read-only token and cannot comment.
+            logger.warning(
+                "themis_action_fork_comment_failed repo=%s pr=%s error=%s",
+                job.repo, job.pr_number, error,
+            )
+        return True
+
+
 async def run_action() -> str:
     """Route the triggering event to one review/discussion run.
 
@@ -202,6 +243,8 @@ async def run_action() -> str:
         logger.info("themis_action_skipped event=%s", event)
         return "skipped"
     service = build_action_service(action_settings(), token, bot_login, mention)
+    if await _refuse_foreign_head(service, token, job):
+        return "skipped"
     if isinstance(job, ReviewJob):
         logger.info(
             "themis_action_review repo=%s pr=%s auto=%s",
