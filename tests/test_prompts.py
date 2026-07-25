@@ -35,6 +35,10 @@ def test_build_review_prompt__summary_format__verdict_severities_no_empty_sectio
     assert "| 🧪 Test coverage | n/5 |" in prompt
     assert "| 📐 Code quality | n/5 |" in prompt
     assert "| 🚀 Product impact | n/5 |" in prompt
+    # A blank GFM header (`| | |`) renders as an unused empty row on GitHub;
+    # the header must carry content instead.
+    assert "| | |" not in prompt
+    assert "| Area | Score |" in prompt
     assert "<details><summary><b>📝 Walkthrough</b></summary>" in prompt
     assert "`**Product take:**`" in prompt
     assert "at most 3 lines" in prompt
