@@ -77,10 +77,25 @@ runs:
           *) echo "unknown engine: $ENGINE" >&2; exit 1 ;;
         esac
 
+    - name: Stage the GitHub token
+      # File handoff on purpose: env on the run step would sit in the
+      # exec-time environment of its bash/uv/python ancestry for the whole
+      # engine run, readable via /proc/<pid>/environ by the same-UID engine
+      # child running on attacker-influenced PR content. This step's shell
+      # exits (taking its environment with it) before any engine starts;
+      # the entrypoint reads the file, deletes it, and keeps the token in
+      # process memory only.
+      shell: bash
+      env:
+        THEMIS_STAGED_TOKEN: ${{ inputs.github-token }}
+      run: |
+        umask 077
+        printf '%s' "$THEMIS_STAGED_TOKEN" > "$RUNNER_TEMP/themis-github-token"
+
     - name: Run themis
       shell: bash
       env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
+        THEMIS_GITHUB_TOKEN_FILE: ${{ runner.temp }}/themis-github-token
         THEMIS_ENGINE: ${{ inputs.engine }}
         THEMIS_MENTION: ${{ inputs.mention }}
         THEMIS_BOT_LOGIN: ${{ inputs.bot-login }}

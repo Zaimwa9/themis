@@ -24,6 +24,7 @@ from themis.engines import ENGINE_NAMES, resolve
 from themis.events import DiscussJob, ReviewJob, parse_event
 from themis.github.client import GitHubClient
 from themis.review_service import ReviewService
+from themis.security import register_secret
 from themis.trusted_context import apply_trusted_context
 from themis.workspace import prepare_workspace, remove_workspace
 
@@ -150,6 +151,40 @@ def materialize_codex_auth() -> None:
     os.environ["CODEX_HOME"] = str(home)
 
 
+def resolve_github_token() -> str:
+    """The GitHub-facing token, kept out of every live process environment.
+
+    action.yml hands the token over as a file written by a step whose shell
+    exits before any engine can run, because an exec-time environment is
+    readable through /proc/<pid>/environ by any same-UID process — in
+    action mode that includes the engine child, and the review runs on
+    attacker-influenced PR content. From here the token exists only in
+    this process's heap (cross-process memory reads are blocked by Yama
+    ptrace restrictions on GitHub-hosted runners) and in the redaction
+    registry. The GITHUB_TOKEN env fallback covers direct invocation
+    outside action.yml; it is popped so the engine's ancestor chain below
+    this process is clean either way.
+    """
+    path = os.environ.pop("THEMIS_GITHUB_TOKEN_FILE", None)
+    if path:
+        token_file = Path(path)
+        try:
+            token = token_file.read_text().strip()
+        except OSError as error:
+            raise ActionError(f"cannot read token file: {error}") from error
+        token_file.unlink(missing_ok=True)
+        os.environ.pop("GITHUB_TOKEN", None)
+    else:
+        token = os.environ.pop("GITHUB_TOKEN", None) or ""
+    if not token:
+        raise ActionError(
+            "a GitHub token is required: THEMIS_GITHUB_TOKEN_FILE (action.yml) "
+            "or GITHUB_TOKEN (direct invocation)"
+        )
+    register_secret(token)
+    return token
+
+
 async def run_action() -> str:
     """Route the triggering event to one review/discussion run.
 
@@ -158,11 +193,7 @@ async def run_action() -> str:
     red, after the pipeline's own courtesy comments have posted.
     """
     event, payload = load_event()
-    token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise ActionError(
-            "GITHUB_TOKEN is required (pass the workflow token or a PAT)"
-        )
+    token = resolve_github_token()
     materialize_codex_auth()
     mention = os.environ.get("THEMIS_MENTION") or DEFAULT_MENTION
     bot_login = os.environ.get("THEMIS_BOT_LOGIN") or DEFAULT_BOT_LOGIN

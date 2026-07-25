@@ -86,6 +86,31 @@ permissions:
   statuses: read
 ```
 
+## Security model
+
+Server mode isolates engine credentials and the GitHub-facing token in
+separate containers. Action mode collapses that split onto one runner, so
+the boundary moves to the process level:
+
+- **The GitHub token never enters a live process environment.** An
+  exec-time environment is readable through `/proc/<pid>/environ` by any
+  same-UID process — and the engine child runs as the runner user on
+  attacker-influenced PR content. `action.yml` therefore stages the token
+  in a `0600` file from a step whose shell exits before any engine starts;
+  the entrypoint reads the file, deletes it, and keeps the token in
+  process memory only (cross-process memory reads are blocked by Yama
+  ptrace restrictions on GitHub-hosted Ubuntu runners). Its value is also
+  registered for outbound redaction.
+- **Engine subprocesses get the allowlisted environment only**, exactly as
+  in server mode: the engine credential it needs, never the GitHub token.
+- **Engine credentials remain readable by the engine** — necessarily, as
+  in server mode's agent container. The blast radius of a hostile PR is
+  the engine credential plus whatever the repo makes clonable, not the
+  write-capable GitHub token.
+- On **self-hosted runners**, keep the default Yama setting
+  (`kernel.yama.ptrace_scope=1`) and per-job workdir cleanup; a runner
+  shared across jobs weakens the ephemerality this model leans on.
+
 ## Limits and caveats
 
 - **Fork PRs:** `pull_request` runs triggered from a fork get neither

@@ -5,6 +5,8 @@ import stat
 
 import pytest
 
+from pathlib import Path
+
 from themis.action import (
     DEFAULT_BOT_LOGIN,
     DEFAULT_MENTION,
@@ -13,6 +15,7 @@ from themis.action import (
     build_action_service,
     load_event,
     materialize_codex_auth,
+    resolve_github_token,
     run_action,
 )
 from themis import action as action_module
@@ -216,6 +219,83 @@ def test_materialize_codex_auth__existing_codex_home_wins(tmp_path, monkeypatch)
     materialize_codex_auth()
 
     assert (home / "auth.json").is_file()
+
+
+# --- resolve_github_token -----------------------------------------------------
+
+
+def test_resolve_github_token__file_wins_and_is_consumed(tmp_path, monkeypatch):
+    # The token reaches the entrypoint via a file so it never appears in the
+    # exec-time environment of any live process the engine child could read
+    # through /proc/<pid>/environ.
+    token_file = tmp_path / "token"
+    token_file.write_text("file-token-123456\n")
+    monkeypatch.setenv("THEMIS_GITHUB_TOKEN_FILE", str(token_file))
+
+    token = resolve_github_token()
+
+    import os
+    assert token == "file-token-123456"
+    assert not token_file.exists()
+    assert "THEMIS_GITHUB_TOKEN_FILE" not in os.environ
+    assert "GITHUB_TOKEN" not in os.environ
+
+
+def test_resolve_github_token__file_token_registered_for_redaction(
+    tmp_path, monkeypatch
+):
+    from themis.security import redact_outbound
+    token_file = tmp_path / "token"
+    token_file.write_text("registered-token-9876")
+    monkeypatch.setenv("THEMIS_GITHUB_TOKEN_FILE", str(token_file))
+
+    resolve_github_token()
+
+    assert "registered-token-9876" not in redact_outbound(
+        "leak: registered-token-9876"
+    )
+
+
+def test_resolve_github_token__env_fallback_popped(monkeypatch):
+    # Direct (non-action.yml) invocation: accept GITHUB_TOKEN but strip it
+    # from this process's env before any engine can be spawned.
+    import os
+    monkeypatch.setenv("GITHUB_TOKEN", "env-token-123456")
+
+    token = resolve_github_token()
+
+    assert token == "env-token-123456"
+    assert "GITHUB_TOKEN" not in os.environ
+
+
+def test_resolve_github_token__unreadable_file__raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("THEMIS_GITHUB_TOKEN_FILE", str(tmp_path / "absent"))
+    with pytest.raises(ActionError):
+        resolve_github_token()
+
+
+def test_resolve_github_token__missing__raises():
+    with pytest.raises(ActionError):
+        resolve_github_token()
+
+
+def test_action_yml__run_step_never_receives_the_token_as_env():
+    # Regression for the round-1 review blocker: GITHUB_TOKEN as env on the
+    # run step would sit in the exec-time environment of the step's bash,
+    # uv, and python ancestry for the whole engine run — readable via
+    # /proc/<pid>/environ by the same-UID engine child.
+    import yaml
+    spec = yaml.safe_load(
+        (Path(__file__).parent.parent / "action.yml").read_text()
+    )
+    run_steps = [
+        step for step in spec["runs"]["steps"]
+        if "python -m themis action" in (step.get("run") or "")
+    ]
+    assert len(run_steps) == 1
+    env = run_steps[0].get("env") or {}
+    assert "GITHUB_TOKEN" not in env
+    assert "THEMIS_GITHUB_TOKEN_FILE" in env
 
 
 # --- run_action ---------------------------------------------------------------

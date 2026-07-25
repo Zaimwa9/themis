@@ -51,7 +51,10 @@ otherwise the failure stays a plain retryable engine error.
 
 In [GitHub Action mode](github-action.md) (`python -m themis action`) the
 App, webhook, agent-service, and queue variables above do not apply. The
-action reads: `GITHUB_TOKEN` (posting + clone token), `THEMIS_ENGINE`
+action reads: `THEMIS_GITHUB_TOKEN_FILE` (path to the posting + clone
+token, staged as a file by `action.yml` so the value never sits in a live
+process environment; a `GITHUB_TOKEN` env fallback exists for direct
+invocation and is popped immediately), `THEMIS_ENGINE`
 (default `claude` here — the env-credential engines fit workflows best),
 `THEMIS_MENTION` (trigger keyword, default `@themis`), `THEMIS_BOT_LOGIN`
 (default `github-actions[bot]`), `THEMIS_CODEX_AUTH_JSON` (codex
