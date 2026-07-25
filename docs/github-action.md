@@ -51,10 +51,11 @@ Differences, all inherent to the platform:
 - **No learnings.** Per-repo memory needs storage that outlives a runner
   and a digest branch; the action skips it entirely.
 - **`.themis/config.yaml` still applies** — read from the repository's
-  default branch (never the PR head), exactly like server mode. `engine:`
-  in the repo config only works if the matching credential env is present
-  in the workflow. The `default-config` input plays the role of
-  `THEMIS_DEFAULT_REPO_CONFIG`.
+  default branch (never the PR head), exactly like server mode. Both CLI
+  families are preinstalled, so an `engine:` override in the repo config
+  works whenever the matching credential env is present in the workflow
+  (without it, the run posts the standard "no credentials" comment). The
+  `default-config` input plays the role of `THEMIS_DEFAULT_REPO_CONFIG`.
 
 ## Inputs
 
@@ -67,7 +68,7 @@ Differences, all inherent to the platform:
 | `default-config` | unset | fallback `.themis/config.yaml` text (raw or base64) |
 | `codex-auth-json` | unset | codex `auth.json` content (store as a secret) |
 | `codex-sandbox` | `workspace-write` | codex sandbox mode |
-| `engine-cli-version` | `latest` | npm version of the engine CLI |
+| `engine-cli-version` | `latest` | npm version applied to both engine CLIs |
 
 Engine credentials are passed as env vars on the action step (see the
 example workflow), not as inputs — the engine adapters read them from the

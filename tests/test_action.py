@@ -279,6 +279,27 @@ def test_resolve_github_token__missing__raises():
         resolve_github_token()
 
 
+def test_action_yml__installs_both_engine_cli_families():
+    # Regression for the round-3 review major: `.themis/config.yaml` may
+    # override `engine:` per repo at runtime, so installing only the input
+    # engine's CLI would leave a valid cross-family override without its
+    # executable. Both families ship; credentials gate which engines are
+    # actually available, exactly like server mode.
+    import yaml
+    spec = yaml.safe_load(
+        (Path(__file__).parent.parent / "action.yml").read_text()
+    )
+    install_steps = [
+        step for step in spec["runs"]["steps"]
+        if "npm install" in (step.get("run") or "")
+    ]
+    assert len(install_steps) == 1
+    run = install_steps[0]["run"]
+    assert "@openai/codex" in run
+    assert "@anthropic-ai/claude-code" in run
+    assert "case" not in run  # no per-engine branching: both always install
+
+
 def test_action_yml__run_step_never_receives_the_token_as_env():
     # Regression for the round-1 review blocker: GITHUB_TOKEN as env on the
     # run step would sit in the exec-time environment of the step's bash,

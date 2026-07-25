@@ -49,7 +49,10 @@ inputs:
       danger-full-access). Default workspace-write.
     default: ''
   engine-cli-version:
-    description: npm version/tag of the engine CLI to install.
+    description: >-
+      npm version/tag applied to both engine CLIs (@openai/codex and
+      @anthropic-ai/claude-code; both install so repo-config engine
+      overrides always have their executable).
     default: 'latest'
 
 runs:
@@ -62,20 +65,18 @@ runs:
       shell: bash
       run: uv sync --locked --no-dev --project "$GITHUB_ACTION_PATH"
 
-    - name: Install engine CLI
+    - name: Install engine CLIs
+      # Both families, unconditionally: `.themis/config.yaml` may override
+      # `engine:` per repo at runtime, so installing only the input engine's
+      # CLI would strand a valid cross-family override without its
+      # executable. Credentials gate which engines actually run, exactly
+      # like server mode. (codex has its own CLI; claude/glm/kimi/openrouter
+      # all drive the claude CLI against Anthropic-compatible endpoints.)
       shell: bash
       env:
-        ENGINE: ${{ inputs.engine }}
         CLI_VERSION: ${{ inputs.engine-cli-version }}
       run: |
-        case "$ENGINE" in
-          codex) npm install -g "@openai/codex@${CLI_VERSION}" ;;
-          claude|glm|kimi|openrouter)
-            # These engines drive the claude CLI (glm/kimi/openrouter point
-            # it at Anthropic-compatible endpoints).
-            npm install -g "@anthropic-ai/claude-code@${CLI_VERSION}" ;;
-          *) echo "unknown engine: $ENGINE" >&2; exit 1 ;;
-        esac
+        npm install -g "@openai/codex@${CLI_VERSION}" "@anthropic-ai/claude-code@${CLI_VERSION}"
 
     - name: Stage the GitHub token
       # File handoff on purpose: env on the run step would sit in the
