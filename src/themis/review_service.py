@@ -20,6 +20,7 @@ from themis.config import (
     Settings,
     parse_repo_config,
     resolve_modules,
+    skip_title_match,
 )
 from themis.engines import (
     Engine,
@@ -78,6 +79,12 @@ CANCELLED_COMMENT = (
     "Review was cancelled before completing (worker timeout or shutdown). "
     "Mention {mention} with `review` to retry."
 )
+TITLE_SKIP_MARKER = "<!-- themis:title-skip -->"
+TITLE_SKIPPED_COMMENT = (
+    "Automatic review skipped: the PR title matches the `triggers.skip_titles` "
+    "rule `{pattern}` in `.themis/config.yaml`. Mention {mention} with `review` "
+    "to request one anyway."
+)
 ENGINE_UNAVAILABLE_COMMENT = (
     "This Themis instance has no {engine} credentials configured ({hint}), "
     "so the {noun} was skipped. Configure it or set a different `engine` in "
@@ -90,6 +97,15 @@ _ENGINE_AUTH_HINTS = {
     "kimi": "KIMI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
 }
+
+
+def _code_span_safe(text: str) -> str:
+    """Neutralize config text for a Markdown code span: a backtick or
+    newline would break out of the span and render as live Markdown (team
+    @-mentions would ping as the bot)."""
+    return text.replace("`", "'").replace("\r", " ").replace("\n", " ")
+
+
 # Engine-run gate, sized to THEMIS_CONCURRENCY at startup (default one) so
 # the queue's parallel consumers get matching engine slots instead of
 # serializing here. Note: this bounds agent runs per worker process only;
@@ -278,6 +294,19 @@ class ReviewService:
             repo_config = await self._fetch_repo_config(gh, repo)
             if auto and not repo_config.triggers.auto_review:
                 logger.info("themis_auto_review_disabled repo=%s pr=%s", repo, pr_number)
+                return
+            if auto and (
+                pattern := skip_title_match(repo_config, pr.get("title") or "")
+            ):
+                # %r: patterns may hold spaces; repr keeps the key=value
+                # line un-forgeable.
+                logger.info(
+                    "themis_auto_review_title_skipped repo=%s pr=%s pattern=%r",
+                    repo, pr_number, pattern,
+                )
+                await self._post_title_skip_comment(
+                    gh, installation_id, repo, pr_number, pattern
+                )
                 return
             engine = self._engine_for(repo_config)
             if not await self._ensure_engine_available(
@@ -586,6 +615,39 @@ class ReviewService:
             ),
         )
         raise last_error
+
+    async def _post_title_skip_comment(
+        self, gh: Any, installation_id: int, repo: str, pr_number: int, pattern: str
+    ) -> None:
+        """One explanatory comment per PR, found again by its marker.
+
+        Unlike the repo-wide auto_review opt-out, a title skip is per-PR:
+        without a trace on the PR itself it is indistinguishable from a
+        crashed bot. But draft/ready toggles re-fire ready_for_review, so
+        the comment must not accumulate duplicates."""
+        try:
+            comments = await gh.list_issue_comments(repo, pr_number)
+            already_explained = any(
+                TITLE_SKIP_MARKER in (comment.get("body") or "")
+                for comment in comments
+            )
+        except (httpx.HTTPError, ValueError, AttributeError, TypeError) as error:
+            # Best effort, shape included (a non-JSON 200 or a non-list body
+            # must not kill the job): a failed dedup check may duplicate the
+            # comment, never suppress the explanation entirely.
+            logger.warning(
+                "themis_title_skip_check_failed repo=%s pr=%s error=%s",
+                repo, pr_number, error,
+            )
+            already_explained = False
+        if already_explained:
+            return
+        await self._post_courtesy_comment(
+            installation_id, repo, pr_number,
+            TITLE_SKIP_MARKER + "\n" + TITLE_SKIPPED_COMMENT.format(
+                pattern=_code_span_safe(pattern), mention=self.mention
+            ),
+        )
 
     async def _post_courtesy_comment(
         self, installation_id: int, repo: str, pr_number: int, body: str

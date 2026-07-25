@@ -12,6 +12,9 @@ limits:
   clone_depth: 50
 triggers:
   auto_review: true        # false = review only when mentioned
+  # skip_titles:           # wildcards (*, ?); a matching PR title skips the auto-review
+  #   - 'ci: *'
+  #   - 'chore: *'
 learnings:
   enabled: true            # false = no capture, injection, or digest PRs
   digest_threshold: 10     # pending learnings that open/update the digest PR
