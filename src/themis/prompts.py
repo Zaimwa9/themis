@@ -134,11 +134,11 @@ def _scorecard_paragraph(modules: dict[str, str]) -> str | None:
     if modules["scorecard"] == "off":
         return None
     return """\
-   Whenever the scorecard is included, render exactly this four-row table,
-   replacing each `n` with an integer from 1 to 5. Keep the score cells numeric;
-   put supporting explanation in the TL;DR, findings, or product take instead.
+   Whenever the scorecard is included, render exactly this table, replacing
+   each `n` with an integer from 1 to 5. Keep the score cells numeric; put
+   supporting explanation in the TL;DR, findings, or product take instead.
 
-   | | |
+   | Area | Score |
    |---|---|
    | 🎯 Correctness | n/5 |
    | 🧪 Test coverage | n/5 |
