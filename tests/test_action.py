@@ -329,3 +329,12 @@ async def test_run_action__missing_token__raises(tmp_path, monkeypatch, fake_ser
     with pytest.raises(ActionError):
         await run_action()
     assert fake_service.calls == []
+
+
+def test_main__config_error__clean_nonzero_exit(monkeypatch):
+    # A missing env or bad setting is an operator mistake: the workflow log
+    # should show one message, not a traceback, and the run must still fail.
+    with pytest.raises(SystemExit) as excinfo:
+        action_module.main()
+    assert excinfo.value.code not in (0, None)
+    assert "GITHUB_EVENT_NAME" in str(excinfo.value.code)

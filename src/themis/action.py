@@ -202,4 +202,10 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
-    asyncio.run(run_action())
+    try:
+        asyncio.run(run_action())
+    except (ActionError, SettingsError) as error:
+        # Operator mistakes read as one message in the workflow log, not a
+        # traceback; the run still fails. Engine/pipeline errors keep their
+        # tracebacks — those are diagnostics, not configuration.
+        raise SystemExit(f"themis action: {error}") from error
