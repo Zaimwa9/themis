@@ -140,17 +140,27 @@ class GitHubClient:
         response.raise_for_status()
         return dict(response.json())
 
-    async def get_repo_private(self, repo: str) -> bool | None:
-        """Whether the repository is private, or None when the token cannot
-        see it at all. A payload without the field reads as private: callers
-        gate confidentiality-sensitive fetches on an explicit False."""
+    async def get_repo_visibility(self, repo: str) -> str | None:
+        """The repository's visibility (`public`, `private`, or `internal`
+        on GitHub Enterprise), or None when the token cannot see it at all.
+
+        `private` alone is not the boundary: an Enterprise internal repo
+        can report `private: false` while its content is only visible to
+        the enterprise. Callers gating confidentiality-sensitive fetches
+        must require an explicit `public`; a payload without a usable
+        `visibility` field falls back to the `private` flag, failing
+        toward `private`."""
         response = await self._client.get(f"{self._api_url}/repos/{repo}")
         if response.status_code == 404:
             return None
         response.raise_for_status()
         payload = response.json()
-        private = payload.get("private") if isinstance(payload, dict) else None
-        return private if isinstance(private, bool) else True
+        if not isinstance(payload, dict):
+            return "private"
+        visibility = payload.get("visibility")
+        if isinstance(visibility, str) and visibility:
+            return visibility
+        return "public" if payload.get("private") is False else "private"
 
     async def get_issue(self, repo: str, number: int) -> dict[str, Any] | None:
         """Issue or pull request by number, or None when it does not exist or

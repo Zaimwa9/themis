@@ -34,20 +34,27 @@ async def test_get_pr__ok__returns_payload():
     assert pr["head"]["sha"] == "abc123"
 
 
-async def test_get_repo_private__visibility_and_fail_closed_shapes():
-    async def probe(status: int, payload) -> bool | None:
+async def test_get_repo_visibility__explicit_field_and_fail_closed_shapes():
+    async def probe(status: int, payload) -> str | None:
         def handler(request: httpx.Request) -> httpx.Response:
             assert request.url.path == "/repos/acme/widgets"
             return httpx.Response(status, json=payload)
-        return await _client(handler).get_repo_private("acme/widgets")
+        return await _client(handler).get_repo_visibility("acme/widgets")
 
-    assert await probe(200, {"private": False}) is False
-    assert await probe(200, {"private": True}) is True
+    assert await probe(200, {"private": False, "visibility": "public"}) == "public"
+    assert await probe(200, {"private": True, "visibility": "private"}) == "private"
+    # Enterprise internal repos can report private=false; the explicit
+    # visibility field must win over the boolean.
+    assert await probe(200, {"private": False, "visibility": "internal"}) == "internal"
     assert await probe(404, {"message": "Not Found"}) is None
-    # A payload without a usable flag must read as private, never public.
-    assert await probe(200, {}) is True
-    assert await probe(200, {"private": "nope"}) is True
-    assert await probe(200, ["not a mapping"]) is True
+    # Without a usable visibility field the private flag decides, failing
+    # toward private, never public.
+    assert await probe(200, {"private": False}) == "public"
+    assert await probe(200, {"private": True}) == "private"
+    assert await probe(200, {"visibility": ""}) == "private"
+    assert await probe(200, {"private": "nope"}) == "private"
+    assert await probe(200, {}) == "private"
+    assert await probe(200, ["not a mapping"]) == "private"
 
 
 async def test_get_issue__ok__returns_payload():

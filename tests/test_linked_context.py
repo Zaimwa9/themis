@@ -178,7 +178,7 @@ async def test_fetch__private_sibling_reference__never_fetched():
     # description must not pull a private same-owner repository's issue
     # into a review the reviewed repo's readers could not already see.
     gh = AsyncMock()
-    gh.get_repo_private.return_value = True
+    gh.get_repo_visibility.return_value = "private"
     gh.get_issue.return_value = _issue(12)
 
     linked = await fetch_linked_context(
@@ -189,22 +189,35 @@ async def test_fetch__private_sibling_reference__never_fetched():
     gh.get_issue.assert_awaited_once_with(REPO, 12)
 
 
+async def test_fetch__internal_sibling_reference__never_fetched():
+    # Enterprise internal repos are not public even though `private` can
+    # read false; only an explicit `public` visibility crosses the gate.
+    gh = AsyncMock()
+    gh.get_repo_visibility.return_value = "internal"
+    gh.get_issue.return_value = _issue(3)
+
+    linked = await fetch_linked_context(gh, REPO, _pr("see acme/intern#3"))
+
+    assert linked == []
+    gh.get_issue.assert_not_awaited()
+
+
 async def test_fetch__public_sibling_reference__fetched():
     gh = AsyncMock()
-    gh.get_repo_private.return_value = False
+    gh.get_repo_visibility.return_value = "public"
     gh.get_issue.return_value = _issue(3)
 
     linked = await fetch_linked_context(gh, REPO, _pr("see acme/gadgets#3"))
 
     assert [item["ref"] for item in linked] == ["acme/gadgets#3"]
-    gh.get_repo_private.assert_awaited_once_with("acme/gadgets")
+    gh.get_repo_visibility.assert_awaited_once_with("acme/gadgets")
 
 
 async def test_fetch__sibling_visibility_unknown__fails_closed():
     # None (invisible repo) and a failed visibility read both mean "not
     # provably public": the reference is dropped, the rest still resolve.
     gh = AsyncMock()
-    gh.get_repo_private.side_effect = [None, httpx.ConnectError("boom")]
+    gh.get_repo_visibility.side_effect = [None, httpx.ConnectError("boom")]
     gh.get_issue.return_value = _issue(12)
 
     linked = await fetch_linked_context(
@@ -217,7 +230,7 @@ async def test_fetch__sibling_visibility_unknown__fails_closed():
 
 async def test_fetch__sibling_visibility__checked_once_per_repo():
     gh = AsyncMock()
-    gh.get_repo_private.return_value = False
+    gh.get_repo_visibility.return_value = "public"
     gh.get_issue.side_effect = [_issue(1), _issue(2)]
 
     linked = await fetch_linked_context(
@@ -225,7 +238,7 @@ async def test_fetch__sibling_visibility__checked_once_per_repo():
     )
 
     assert len(linked) == 2
-    gh.get_repo_private.assert_awaited_once()
+    gh.get_repo_visibility.assert_awaited_once()
 
 
 async def test_fetch__own_repo_reference__no_visibility_check():
@@ -234,7 +247,7 @@ async def test_fetch__own_repo_reference__no_visibility_check():
 
     await fetch_linked_context(gh, REPO, _pr("#12"))
 
-    gh.get_repo_private.assert_not_awaited()
+    gh.get_repo_visibility.assert_not_awaited()
 
 
 async def test_fetch__slow_reference__one_overall_deadline_partial_result(

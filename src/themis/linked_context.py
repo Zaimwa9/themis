@@ -89,9 +89,10 @@ async def fetch_linked_context(
     description can cause.
 
     Cross-repository references additionally require the referenced
-    repository to be **public**, fail closed. The installation token can
-    reach private siblings, but the fetched content ends up in a review
-    the reviewed repo's readers can see — a PR description must never move
+    repository's visibility to be exactly `public`, fail closed — private
+    and Enterprise `internal` siblings never cross. The installation token
+    can reach them, but the fetched content ends up in a review the
+    reviewed repo's readers can see — a PR description must never move
     content across that confidentiality boundary."""
     text = f"{pr.get('title') or ''}\n{pr.get('body') or ''}"
     refs = extract_refs(repo, pr.get("number") or 0, text)
@@ -114,7 +115,7 @@ async def fetch_linked_context(
                     if key != repo.casefold():
                         if key not in cross_repo_public:
                             cross_repo_public[key] = (
-                                await gh.get_repo_private(ref_repo) is False
+                                await gh.get_repo_visibility(ref_repo) == "public"
                             )
                         if not cross_repo_public[key]:
                             logger.info(
