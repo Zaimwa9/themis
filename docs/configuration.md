@@ -266,7 +266,10 @@ When the PR title or description references other issues or pull requests —
 `.../pull/N` URL — Themis resolves them with its installation token before
 the review and writes them to `.review-input/linked_issues.json` (title,
 state, author, body), so the agent can judge the change against what it
-claims to address. This is automatic and needs no configuration.
+claims to address. This is automatic and needs no configuration, and it
+requires no new App permissions or installation approval: the lookups are
+covered by the Issues and Pull requests permissions Themis already
+requests, plus the Metadata read access every GitHub App has.
 
 Scope and bounds, in the same spirit as the rest of the trust model:
 
