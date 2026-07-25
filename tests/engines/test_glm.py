@@ -135,3 +135,10 @@ def test_available__key_missing__false(monkeypatch):
     monkeypatch.delenv("GLM_API_KEY", raising=False)
 
     assert GlmEngine().available() is False
+
+
+def test_glm_has_no_auth_markers():
+    # Text markers are agent-echoable (see the module comment); glm keeps
+    # auth failures retryable until provider-structured classification
+    # exists.
+    assert GlmEngine._auth_markers == ()
