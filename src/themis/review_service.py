@@ -87,6 +87,12 @@ CANCELLED_COMMENT = (
     "Mention {mention} with `review` to retry."
 )
 TITLE_SKIP_MARKER = "<!-- themis:title-skip -->"
+# Embedded in every summary comment so a later push can delta-review
+# `<last-reviewed-sha>..HEAD` (issue #11). Read back only from bot-authored
+# comments: anyone can paste the marker text into a PR comment, and a forged
+# sha would silently shrink the delta under review.
+REVIEWED_SHA_MARKER = "<!-- themis:reviewed-sha {sha} -->"
+_REVIEWED_SHA_RE = re.compile(r"<!-- themis:reviewed-sha ([0-9a-f]{7,40}) -->")
 TITLE_SKIPPED_COMMENT = (
     "Automatic review skipped: the PR title matches the `triggers.skip_titles` "
     "rule `{pattern}` in `.themis/config.yaml`. Mention {mention} with `review` "
@@ -149,6 +155,19 @@ async def git_head_sha(workspace: Path) -> str | None:
         logger.warning("themis_head_sha_failed output=%s", output[-200:])
         return None
     return output.strip()
+
+
+async def git_is_ancestor(workspace: Path, sha: str) -> bool:
+    """Whether sha exists in the clone and is an ancestor of HEAD.
+
+    False covers every unusable case alike - unknown object (force-push
+    discarded it, or the shallow clone is too old to contain it), rewritten
+    history, git failure - because the caller's fallback for all of them is
+    the same safe direction: a full review instead of a delta."""
+    returncode, _ = await run_git(
+        "merge-base", "--is-ancestor", sha, "HEAD", cwd=workspace
+    )
+    return returncode == 0
 
 
 _DIFF_HUNK = re.compile(
@@ -232,6 +251,7 @@ class ReviewService:
         git_changed_lines
     )
     head_sha: Callable[[Path], Awaitable[str | None]] = git_head_sha
+    is_ancestor: Callable[[Path, str], Awaitable[bool]] = git_is_ancestor
     trust_context: Callable[..., Awaitable[tuple[bool, bool]]] = apply_trusted_context
     learning_service: LearningService | None = None
 
@@ -280,10 +300,51 @@ class ReviewService:
         )
         return False
 
+    async def _resolve_delta_base(
+        self, gh: Any, repo: str, pr_number: int, head_sha: str
+    ) -> str | None:
+        """Sha the last themis review covered, or None when no delta should run.
+
+        The marker is only trusted in comments the bot itself authored; the
+        newest one wins. A failed read skips the delta rather than degrading
+        to a full review: synchronize fires on every push, and a transient
+        GitHub error must not buy a full-cost review nobody asked for."""
+        try:
+            comments = await gh.list_issue_comments(repo, pr_number)
+        except httpx.HTTPError as error:
+            logger.warning(
+                "themis_delta_comments_failed repo=%s pr=%s error=%s",
+                repo, pr_number, error,
+            )
+            return None
+        logins = _bot_logins(self.bot_login)
+        last_sha: str | None = None
+        for comment in comments:
+            if ((comment.get("user") or {}).get("login") or "") not in logins:
+                continue
+            match = _REVIEWED_SHA_RE.search(comment.get("body") or "")
+            if match:
+                last_sha = match.group(1)
+        if last_sha is None:
+            logger.info(
+                "themis_delta_no_prior_review repo=%s pr=%s", repo, pr_number
+            )
+            return None
+        if head_sha.startswith(last_sha):
+            # The queue collapsed rapid pushes, or the webhook was redelivered:
+            # the head on record is already reviewed.
+            logger.info(
+                "themis_delta_head_unchanged repo=%s pr=%s sha=%s",
+                repo, pr_number, last_sha,
+            )
+            return None
+        return last_sha
+
     async def review(
         self, repo: str, pr_number: int, installation_id: int, auto: bool,
         trigger_comment_id: int | None = None,
         extra_context: str | None = None,
+        delta: bool = False,
     ) -> None:
         token = await self.get_token(installation_id)
         gh = self.make_client(token)
@@ -315,6 +376,18 @@ class ReviewService:
                     gh, installation_id, repo, pr_number, pattern
                 )
                 return
+            delta_base: str | None = None
+            if delta:
+                if not repo_config.triggers.delta_review:
+                    logger.info(
+                        "themis_delta_review_disabled repo=%s pr=%s", repo, pr_number
+                    )
+                    return
+                delta_base = await self._resolve_delta_base(
+                    gh, repo, pr_number, pr["head"]["sha"]
+                )
+                if delta_base is None:
+                    return
             engine = self._engine_for(repo_config)
             if not await self._ensure_engine_available(
                 engine, installation_id, repo, pr_number, "review"
@@ -364,6 +437,17 @@ class ReviewService:
                     skills=repo_config.agent.skills,
                     skills_index=skills_bridge,
                 )
+                if delta_base is not None and not await self.is_ancestor(
+                    workspace, delta_base
+                ):
+                    # Force-push rewrote the reviewed commit away, or the
+                    # shallow clone no longer reaches it: there is no
+                    # trustworthy delta, so review the whole PR again.
+                    logger.info(
+                        "themis_delta_fallback_full repo=%s pr=%s base=%s",
+                        repo, pr_number, delta_base,
+                    )
+                    delta_base = None
                 _write_inputs(
                     workspace, pr, threads, learnings=learnings,
                     linked_issues=linked_issues,
@@ -403,6 +487,7 @@ class ReviewService:
                     has_linked_issues=bool(linked_issues), modules=modules,
                     use_default_doctrine=use_default_doctrine,
                     skills_index=native_skills and skills_bridge,
+                    delta_base=delta_base,
                 )
                 actions = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
@@ -785,6 +870,11 @@ class ReviewService:
         # note and the 422 fold can push past GitHub's 65,536-char limit.
         if len(summary) > MAX_BODY_LEN:
             summary = summary[:64000] + "\n\n[summary truncated: GitHub comment length limit]"
+        # After truncation, so the marker a later delta review reads back can
+        # never be cut. Guarded on shape: the sha reached GitHub as-is, and a
+        # non-hex value would break the marker's un-forgeable format.
+        if re.fullmatch(r"[0-9a-f]{7,40}", commit_sha):
+            summary = REVIEWED_SHA_MARKER.format(sha=commit_sha) + "\n" + summary
         await gh.post_summary_comment(repo, pr_number, summary)
 
 
@@ -1062,7 +1152,7 @@ def build_service(settings: Settings, bot_slug: str) -> ReviewService:
 async def run_review_job(
     settings: Settings, bot_slug: str, repo: str, pr_number: int,
     installation_id: int, auto: bool, trigger_comment_id: int | None = None,
-    extra_context: str | None = None,
+    extra_context: str | None = None, delta: bool = False,
 ) -> None:
     service = build_service(settings, bot_slug)
     await asyncio.to_thread(sweep_stale, settings.workspace_root)
@@ -1071,6 +1161,7 @@ async def run_review_job(
             repo, pr_number, installation_id, auto,
             trigger_comment_id=trigger_comment_id,
             extra_context=extra_context,
+            delta=delta,
         )
     except asyncio.CancelledError:
         # The queue timeout also covers time spent behind the codex semaphore;

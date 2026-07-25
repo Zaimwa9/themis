@@ -21,12 +21,14 @@ from themis.learning_service import (
 from themis.learnings import Learning, PendingStore, to_jsonl
 from themis.review_service import (
     DEFAULT_MODELS,
+    REVIEWED_SHA_MARKER,
     ReviewService,
     TITLE_SKIP_MARKER,
     _ENGINE_AUTH_HINTS,
     api_changed_paths,
     git_changed_lines,
     git_head_sha,
+    git_is_ancestor,
     run_review_job,
 )
 from themis.output import MAX_BODY_LEN, OUTPUT_DIR, OutputError
@@ -1417,6 +1419,223 @@ async def test_git_changed_lines__missing_merge_base__fails_open(tmp_path):
 
 async def test_git_head_sha__git_failure__returns_none(tmp_path):
     assert await git_head_sha(tmp_path) is None
+
+
+async def test_git_is_ancestor__true_for_reviewed_parent(tmp_path):
+    _run_git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "a.py").write_text("base\n")
+    _run_git(tmp_path, "add", "a.py")
+    _run_git(tmp_path, "commit", "-q", "-m", "base")
+    parent = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True,
+        capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"},
+    ).stdout.strip()
+    (tmp_path / "a.py").write_text("fixed\n")
+    _run_git(tmp_path, "add", "a.py")
+    _run_git(tmp_path, "commit", "-q", "-m", "fix")
+
+    assert await git_is_ancestor(tmp_path, parent) is True
+
+
+async def test_git_is_ancestor__unknown_sha__false(tmp_path):
+    # A force-push (or a shallow clone that no longer reaches the reviewed
+    # commit) leaves no usable delta base; the caller falls back to a full
+    # review.
+    _run_git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "a.py").write_text("base\n")
+    _run_git(tmp_path, "add", "a.py")
+    _run_git(tmp_path, "commit", "-q", "-m", "base")
+
+    assert await git_is_ancestor(tmp_path, "c" * 40) is False
+
+
+# --- delta re-review (issue #11) ---------------------------------------------
+
+
+DELTA_PRIOR_SHA = "1234567890abcdef1234567890abcdef12345678"
+
+
+def _summary_comment(sha: str, login: str = "test-reviewer[bot]") -> dict:
+    return {
+        "user": {"login": login},
+        "body": (
+            "<!-- themis:summary -->\n"
+            + REVIEWED_SHA_MARKER.format(sha=sha)
+            + "\n## ⚖️ Themis review: ✅ Ship it"
+        ),
+    }
+
+
+def _prompt_capturing_agent(seen_prompts: list):
+    async def agent(*, prompt, workspace, **kwargs):
+        seen_prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### Themis review\nfine")
+        return "ok"
+    return agent
+
+
+async def _ancestor_true(workspace, sha):
+    return True
+
+
+async def test_review__summary_carries_reviewed_sha_marker(service, gh):
+    async def head_sha(workspace):
+        return "a" * 40
+    service.head_sha = head_sha
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    body = gh.post_summary_comment.await_args.args[2]
+    assert body.startswith(REVIEWED_SHA_MARKER.format(sha="a" * 40) + "\n")
+
+
+async def test_review__non_hex_commit_sha__marker_omitted(service, gh):
+    # The fallback head sha comes from the GitHub payload; anything that is
+    # not a plain hex sha must not be embedded in the marker format.
+    async def head_sha(workspace):
+        return None
+    service.head_sha = head_sha
+    gh.get_pr.return_value["head"]["sha"] = "not a sha"
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    body = gh.post_summary_comment.await_args.args[2]
+    assert "themis:reviewed-sha" not in body
+
+
+async def test_review__delta_with_prior_review__prompt_scoped_to_delta(service, gh):
+    gh.list_issue_comments.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    service.is_ancestor = _ancestor_true
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert f"git diff {DELTA_PRIOR_SHA}..HEAD" in seen_prompts[0]
+    gh.post_summary_comment.assert_awaited_once()
+
+
+async def test_review__delta_newest_bot_marker_wins(service, gh):
+    newer = "feedfacefeedfacefeedfacefeedfacefeedface"
+    gh.list_issue_comments.return_value = [
+        _summary_comment(DELTA_PRIOR_SHA),
+        _summary_comment(newer),
+    ]
+    service.is_ancestor = _ancestor_true
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert f"git diff {newer}..HEAD" in seen_prompts[0]
+
+
+async def test_review__delta_without_prior_review__skipped(service, gh):
+    gh.list_issue_comments.return_value = []
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+    gh.add_reaction.assert_not_awaited()
+
+
+async def test_review__delta_marker_from_non_bot_author__ignored(service, gh):
+    # Anyone can paste the marker into a PR comment; a forged sha would
+    # shrink the delta under review. Only bot-authored comments count.
+    gh.list_issue_comments.return_value = [
+        _summary_comment(DELTA_PRIOR_SHA, login="attacker")
+    ]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__delta_head_already_reviewed__skipped(service, gh):
+    head = "abc1234" + "0" * 33
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "head": {"sha": head}}
+    gh.list_issue_comments.return_value = [_summary_comment(head)]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__delta_base_not_ancestor__full_review_fallback(service, gh):
+    # Force-push rewrote the reviewed commit away: the delta base is unusable,
+    # so the push still gets reviewed - as a full review.
+    gh.list_issue_comments.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+
+    async def not_ancestor(workspace, sha):
+        return False
+    service.is_ancestor = not_ancestor
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert "delta re-review" not in seen_prompts[0]
+    gh.post_summary_comment.assert_awaited_once()
+
+
+async def test_review__delta_disabled_by_repo_config__skipped(service, gh):
+    gh.get_file_text.return_value = "triggers:\n  delta_review: false\n"
+    gh.list_issue_comments.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__delta_respects_auto_review_opt_out(service, gh):
+    gh.get_file_text.return_value = "triggers:\n  auto_review: false\n"
+    gh.list_issue_comments.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__delta_comments_read_fails__skipped_not_full(service, gh):
+    # A transient GitHub error on the marker scan must not buy a full-cost
+    # review nobody asked for, and must not raise out of the job.
+    gh.list_issue_comments.side_effect = _http_error(500)
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__non_delta_ignores_prior_markers(service, gh):
+    # A mention-triggered or opened-PR review stays a full review even when
+    # markers exist.
+    gh.list_issue_comments.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert "delta re-review" not in seen_prompts[0]
 
 
 def _cancelling_service(tmp_path: Path, gh: AsyncMock) -> ReviewService:

@@ -71,8 +71,27 @@ def test_parse_event__review_command_on_draft_pr__explicit_review_job():
     assert job.auto is False
 
 
-def test_parse_event__pr_synchronize__none():
-    assert parse_event("pull_request", _pr_payload("synchronize"), MENTION) is None
+def test_parse_event__pr_synchronize__delta_review_job():
+    job = parse_event("pull_request", _pr_payload("synchronize"), MENTION)
+    assert isinstance(job, ReviewJob)
+    assert job.auto is True
+    assert job.delta is True
+
+
+def test_parse_event__pr_synchronize_draft__none():
+    payload = _pr_payload("synchronize", draft=True)
+    assert parse_event("pull_request", payload, MENTION) is None
+
+
+def test_parse_event__pr_synchronize_bot_sender__none():
+    payload = _pr_payload("synchronize")
+    payload["sender"] = {"type": "Bot"}
+    assert parse_event("pull_request", payload, MENTION) is None
+
+
+def test_parse_event__pr_opened__not_delta():
+    job = parse_event("pull_request", _pr_payload(), MENTION)
+    assert job.delta is False
 
 
 def test_parse_event__review_command__review_job():

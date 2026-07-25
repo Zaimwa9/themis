@@ -7,7 +7,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, TypeAdapter, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    TypeAdapter,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 
 from themis.engines import ENGINE_NAMES
 
@@ -69,14 +75,18 @@ def _section_or_default(value: object, model_cls: type, event: str) -> object:
 
 class TriggersConfig(BaseModel):
     auto_review: bool = True
+    # Scoped re-review of the commits pushed since the last themis review
+    # (issue #11). Only fires when a prior review exists on the PR, and only
+    # while auto_review is enabled: a push is an automatic trigger.
+    delta_review: bool = True
     # Case-insensitive wildcard patterns covering the whole PR title:
     # `*` = any run of characters, `?` = one character, everything else
     # literal. A match skips the auto review; mention/API reviews still run.
     skip_titles: tuple[str, ...] = ()
 
-    @field_validator("auto_review", mode="before")
+    @field_validator("auto_review", "delta_review", mode="before")
     @classmethod
-    def _auto_review_bool_or_default(cls, value: object) -> object:
+    def _trigger_bool_or_default(cls, value: object, info: ValidationInfo) -> object:
         """An invalid flag must not void the rest of the repo config. Lax
         coercion first, so yaml spellings like "false"/"no"/0 keep opting
         out; only true garbage degrades to the default (enabled)."""
@@ -85,7 +95,9 @@ class TriggersConfig(BaseModel):
         try:
             return _LAX_BOOL.validate_python(value)
         except ValidationError:
-            logger.warning("themis_invalid_auto_review value=%r", str(value)[:50])
+            logger.warning(
+                "themis_invalid_%s value=%r", info.field_name, str(value)[:50]
+            )
             return True
 
     @field_validator("skip_titles", mode="before")

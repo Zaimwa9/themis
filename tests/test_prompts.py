@@ -59,6 +59,27 @@ def test_build_review_prompt__tiny_reviews__retain_enabled_categories():
     assert "do not repeat the" in prompt
 
 
+def test_build_review_prompt__delta_base__scoped_re_review_section():
+    prompt = build_review_prompt("acme/widgets", 7, "main", delta_base="0d1e2f3a4b5c")
+    flat = " ".join(prompt.split())
+
+    assert "git diff 0d1e2f3a4b5c..HEAD" in prompt
+    assert "scoped delta re-review" in flat
+    assert "Review only the delta" in flat
+    assert "gets exactly one of those two outcomes" in flat
+    # Residual gaps promote into tracked findings, never replies alone.
+    assert "never only as a thread reply" in flat
+    # Base-branch merges are not the PR author's delta.
+    assert "skip changes whose content already exists on `origin/main`" in flat
+
+
+def test_build_review_prompt__no_delta_base__no_delta_section():
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+
+    assert "delta re-review" not in prompt
+    assert "A previous themis review" not in prompt
+
+
 def test_build_review_prompt__resolve_thread_ids__is_an_obligation():
     prompt = build_review_prompt("acme/widgets", 7, "main")
     flat = " ".join(prompt.split())

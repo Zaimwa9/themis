@@ -61,6 +61,7 @@ def _enqueue(
                 settings, slug, job.repo, job.pr_number, job.installation_id, job.auto,
                 trigger_comment_id=job.trigger_comment_id,
                 extra_context=job.extra_context,
+                delta=job.delta,
             )
     else:
         async def run() -> None:
@@ -79,8 +80,12 @@ def _skip_ack(job: ReviewJob | DiscussJob) -> bool:
     # Unmentioned thread replies are relevance-checked by the worker (it may
     # not be a bot thread at all); acking here would falsely acknowledge
     # replies the bot ends up ignoring. The worker reacts once it confirms
-    # relevance.
-    return isinstance(job, DiscussJob) and job.kind == "thread" and not job.mentions_bot
+    # relevance. Same doctrine for delta candidates: most pushes produce no
+    # re-review (no prior themis review, delta disabled), so the worker's
+    # rocket reaction is the first visible signal.
+    if isinstance(job, ReviewJob):
+        return job.delta
+    return job.kind == "thread" and not job.mentions_bot
 
 
 def _repo_allowed(repo: str, allowlist: frozenset[str] | None) -> bool:

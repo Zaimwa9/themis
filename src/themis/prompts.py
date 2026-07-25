@@ -486,6 +486,7 @@ def build_review_prompt(
     modules: dict[str, str] | None = None,
     use_default_doctrine: bool = False,
     skills_index: bool = False,
+    delta_base: str | None = None,
 ) -> str:
     resolved_modules = {**dict.fromkeys(MODULE_NAMES, "auto"), **(modules or {})}
     safe_extra_context = (extra_context or "").replace(
@@ -503,6 +504,37 @@ def build_review_prompt(
     )
     learnings_section = _LEARNINGS_SECTION if has_learnings else ""
     linked_issues_section = _LINKED_ISSUES_SECTION if has_linked_issues else ""
+    delta_section = (
+        f"""\
+A previous themis review of this PR covered the code as of commit
+`{delta_base}`. This run is a scoped delta re-review of what was pushed since;
+that delta is `git diff {delta_base}..HEAD`. Fix commits are statistically the
+buggiest code in a PR: review the delta with full rigor.
+
+- Review only the delta for new issues, including issues the new commits
+  introduced while fixing earlier findings. Do not re-review unchanged code
+  the earlier review already covered.
+- Commits that arrived by merging or rebasing onto the base branch are not
+  part of this PR's work; skip changes whose content already exists on
+  `origin/{base_ref}`.
+- For every open thread you authored in `.review-input/threads.json`, verify
+  against the checked-out code whether it is now fixed: verified fixed means
+  you observed the fix in the code - resolve the thread via
+  `resolve_thread_ids`. Not fixed - reply in that thread (via `replies`)
+  stating concretely what is still missing. Every open thread you authored
+  gets exactly one of those two outcomes; never leave one unaddressed.
+- A residual gap you notice while verifying a fix (a missing test, an edge
+  the fix does not cover) is a finding: report it in `findings` (or in the
+  summary when it cannot be anchored to the diff), never only as a thread
+  reply.
+- The verdict and severity sections describe the PR as it now stands: new
+  findings from the delta plus still-open earlier findings, under the same
+  acknowledgment rules as any review.
+
+"""
+        if delta_base
+        else ""
+    )
     skills_index_section = (
         "The repository provides reviewer skills, indexed in "
         "`.review-input/skills-index.md` if present: when an entry's "
@@ -536,7 +568,7 @@ PR metadata is in `.review-input/pr.json`; existing review threads (with thread 
 and comment databaseIds) are in `.review-input/threads.json`. A point-in-time CI
 snapshot for the PR head is in `.review-input/checks.json`.
 
-{extra_context_section}{learnings_section}{linked_issues_section}{skills_index_section}{doctrine_section}
+{delta_section}{extra_context_section}{learnings_section}{linked_issues_section}{skills_index_section}{doctrine_section}
 
 When the diff passes dynamic or generated values to an external API, cross-check
 the provider's documented constraints (field limits, enums, formats, byte vs char
