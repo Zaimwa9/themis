@@ -376,6 +376,71 @@ def test_run_bootstrap_prints_bot_mention_and_info_path(monkeypatch, tmp_path, c
     assert str(tmp_path / "themis-info.json") in output
 
 
+def _fake_serve(monkeypatch, session_factory):
+    fake_server = type(
+        "FakeServer",
+        (),
+        {
+            "serve_forever": lambda self: None,
+            "shutdown": lambda self: None,
+            "server_close": lambda self: None,
+        },
+    )()
+    monkeypatch.setattr(bootstrap, "BootstrapSession", session_factory)
+    monkeypatch.setattr(bootstrap, "ThreadingHTTPServer", lambda address, handler: fake_server)
+    monkeypatch.setattr(bootstrap.threading, "Thread", lambda **kwargs: type(
+        "Thread", (), {"start": lambda self: None, "join": lambda self, timeout: None}
+    )())
+
+
+def test_run_bootstrap_timeout_before_deployment_says_login_discarded(
+    monkeypatch, tmp_path,
+):
+    seed = tmp_path / "seed-auth.json"
+    seed.write_text("{}")
+
+    def session_factory(options):
+        session = type("FakeSession", (), {})()
+        session.done = type("Done", (), {"wait": lambda self, timeout: False})()
+        session.error = None
+        session.credentials = None
+        session.deployment_written = False
+        session.handler = lambda: object
+        return session
+
+    _fake_serve(monkeypatch, session_factory)
+    with pytest.raises(BootstrapError, match="discarded — rerun the bootstrap"):
+        run_bootstrap(options(tmp_path, bind_port=9999, codex_auth=seed))
+
+
+def test_run_bootstrap_timeout_after_deployment_points_at_saved_output(
+    monkeypatch, tmp_path,
+):
+    # The manifest callback already wrote .env and the minted seed; telling
+    # the operator the login was discarded (and to rerun into the same
+    # directory, which refuses to overwrite) would strand them.
+    seed = tmp_path / "seed-auth.json"
+    seed.write_text("{}")
+
+    def session_factory(options):
+        session = type("FakeSession", (), {})()
+        session.done = type("Done", (), {"wait": lambda self, timeout: False})()
+        session.error = None
+        session.credentials = credentials()
+        session.deployment_written = True
+        session.handler = lambda: object
+        return session
+
+    _fake_serve(monkeypatch, session_factory)
+    with pytest.raises(BootstrapError) as excinfo:
+        run_bootstrap(options(tmp_path, bind_port=9999, codex_auth=seed))
+    message = str(excinfo.value)
+    assert str(tmp_path) in message
+    assert "themis-acme-123/installations/new" in message
+    assert "do not rerun" in message
+    assert "discarded" not in message
+
+
 def test_options_from_args__codex__does_not_default_to_host_auth(tmp_path, monkeypatch):
     # A copied live chain is the collision footgun: single-use rotating
     # refresh tokens mean host and container would kill each other.

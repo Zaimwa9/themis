@@ -39,7 +39,13 @@ Two planes:
 When an engine's credentials die (expired setup-token, invalidated codex
 refresh chain), Themis classifies the failure as `EngineAuthError`: the
 review is not retried, a courtesy comment on the PR names the engine and the
-credential to fix, and the worker logs `themis_engine_auth_failed`.
+credential to fix, and the worker logs `themis_engine_auth_failed`. Because
+the diagnostics are matched against agent-visible output — which a hostile
+PR could steer the agent into echoing — the agent service first confirms
+the death out of band: it re-runs the engine with a fixed trusted prompt in
+an empty scratch workspace (logged as `themis_auth_probe`). Only a probe
+that also fails with an auth diagnostic triggers the terminal path;
+otherwise the failure stays a plain retryable engine error.
 
 Names and defaults come straight from `../src/themis/config.py`, except
 `PORT` and `THEMIS_ROLE` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and

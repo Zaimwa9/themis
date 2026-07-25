@@ -524,10 +524,26 @@ def run_bootstrap(options: BootstrapOptions) -> None:
             if not session.done.wait(options.timeout):
                 if session.error:
                     raise BootstrapError(f"setup did not complete: {session.error}")
+                if session.deployment_written:
+                    # The manifest callback already saved credentials and any
+                    # minted engine login into the output directory; a rerun
+                    # would refuse to overwrite it. Only the install step is
+                    # missing.
+                    slug = quote(
+                        str(session.credentials["slug"]), safe=""
+                    ) if session.credentials else ""
+                    raise BootstrapError(
+                        "timed out waiting for the GitHub App installation, "
+                        "but the App and deployment (including any engine "
+                        f"login minted this run) were saved to {options.output}; "
+                        f"finish installing at {GITHUB_URL}/apps/{slug}/installations/new "
+                        "and start the stack — do not rerun the bootstrap "
+                        "into this directory"
+                    )
                 raise BootstrapError(
-                "timed out waiting for GitHub App setup; any engine login "
-                "minted this run was discarded — rerun the bootstrap"
-            )
+                    "timed out waiting for GitHub App setup; any engine login "
+                    "minted this run was discarded — rerun the bootstrap"
+                )
         finally:
             server.shutdown()
             server.server_close()
