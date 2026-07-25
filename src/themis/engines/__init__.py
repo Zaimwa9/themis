@@ -1,7 +1,14 @@
 """Review engines. ENGINE_NAMES is the single source of truth for the valid
 values of THEMIS_ENGINE and the repo config engine: key."""
 
-from themis.engines.base import Engine, EngineError, EngineQuotaError, EngineUnavailableError
+from themis.engines.base import (
+    AUTH_PROBE_BUDGET,
+    Engine,
+    EngineAuthError,
+    EngineError,
+    EngineQuotaError,
+    EngineUnavailableError,
+)
 from themis.engines.claude import ClaudeEngine
 from themis.engines.codex import CodexEngine
 from themis.engines.glm import GlmEngine
@@ -15,8 +22,9 @@ ENGINE_NAMES = ("codex", "claude", "glm", "kimi", "openrouter")
 NATIVE_SKILLS_ENGINES = frozenset({"claude", "glm", "kimi", "openrouter"})
 
 __all__ = [
-    "ENGINE_NAMES", "Engine", "EngineError", "EngineQuotaError",
-    "EngineUnavailableError", "NATIVE_SKILLS_ENGINES", "resolve",
+    "AUTH_PROBE_BUDGET", "ENGINE_NAMES", "Engine", "EngineAuthError", "EngineError",
+    "EngineQuotaError", "EngineUnavailableError", "NATIVE_SKILLS_ENGINES",
+    "resolve",
 ]
 
 

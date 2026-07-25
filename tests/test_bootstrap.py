@@ -1,8 +1,10 @@
 """GitHub App manifest bootstrap."""
 
+import argparse
 import base64
 import json
 import stat
+import subprocess
 import threading
 from pathlib import Path
 
@@ -22,6 +24,17 @@ from themis.bootstrap import (
     verify_repo_installation,
     write_deployment,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cli(monkeypatch):
+    # Bootstrap can shell out to `codex login` / `claude setup-token`; a test
+    # reaching a real CLI would pop OAuth prompts on the developer's machine.
+    def _blocked(*args, **kwargs):
+        raise AssertionError(
+            "test attempted to run a real CLI; monkeypatch bootstrap.subprocess.run"
+        )
+    monkeypatch.setattr(bootstrap.subprocess, "run", _blocked)
 
 
 def options(tmp_path: Path, **overrides) -> BootstrapOptions:
@@ -328,7 +341,9 @@ def test_run_bootstrap_validates_before_listening(tmp_path, overrides, message):
 
 
 def test_run_bootstrap_prints_bot_mention_and_info_path(monkeypatch, tmp_path, capsys):
-    opts = options(tmp_path, bind_port=9999)
+    seed = tmp_path / "seed-auth.json"
+    seed.write_text("{}")
+    opts = options(tmp_path, bind_port=9999, codex_auth=seed)
     fake_server = type(
         "FakeServer",
         (),
@@ -359,3 +374,257 @@ def test_run_bootstrap_prints_bot_mention_and_info_path(monkeypatch, tmp_path, c
     assert "GitHub bot: @themis-acme-123" in output
     assert "@themis-acme-123 review" in output
     assert str(tmp_path / "themis-info.json") in output
+
+
+def _fake_serve(monkeypatch, session_factory):
+    fake_server = type(
+        "FakeServer",
+        (),
+        {
+            "serve_forever": lambda self: None,
+            "shutdown": lambda self: None,
+            "server_close": lambda self: None,
+        },
+    )()
+    monkeypatch.setattr(bootstrap, "BootstrapSession", session_factory)
+    monkeypatch.setattr(bootstrap, "ThreadingHTTPServer", lambda address, handler: fake_server)
+    monkeypatch.setattr(bootstrap.threading, "Thread", lambda **kwargs: type(
+        "Thread", (), {"start": lambda self: None, "join": lambda self, timeout: None}
+    )())
+
+
+def test_run_bootstrap_timeout_before_deployment_says_login_discarded(
+    monkeypatch, tmp_path,
+):
+    seed = tmp_path / "seed-auth.json"
+    seed.write_text("{}")
+
+    def session_factory(options):
+        session = type("FakeSession", (), {})()
+        session.done = type("Done", (), {"wait": lambda self, timeout: False})()
+        session.error = None
+        session.credentials = None
+        session.deployment_written = False
+        session.handler = lambda: object
+        return session
+
+    _fake_serve(monkeypatch, session_factory)
+    with pytest.raises(BootstrapError, match="discarded — rerun the bootstrap"):
+        run_bootstrap(options(tmp_path, bind_port=9999, codex_auth=seed))
+
+
+def test_run_bootstrap_timeout_after_deployment_points_at_saved_output(
+    monkeypatch, tmp_path,
+):
+    # The manifest callback already wrote .env and the minted seed; telling
+    # the operator the login was discarded (and to rerun into the same
+    # directory, which refuses to overwrite) would strand them.
+    seed = tmp_path / "seed-auth.json"
+    seed.write_text("{}")
+
+    def session_factory(options):
+        session = type("FakeSession", (), {})()
+        session.done = type("Done", (), {"wait": lambda self, timeout: False})()
+        session.error = None
+        session.credentials = credentials()
+        session.deployment_written = True
+        session.handler = lambda: object
+        return session
+
+    _fake_serve(monkeypatch, session_factory)
+    with pytest.raises(BootstrapError) as excinfo:
+        run_bootstrap(options(tmp_path, bind_port=9999, codex_auth=seed))
+    message = str(excinfo.value)
+    assert str(tmp_path) in message
+    assert "themis-acme-123/installations/new" in message
+    assert "do not rerun" in message
+    assert "discarded" not in message
+
+
+def test_options_from_args__codex__does_not_default_to_host_auth(tmp_path, monkeypatch):
+    # A copied live chain is the collision footgun: single-use rotating
+    # refresh tokens mean host and container would kill each other.
+    fake_home = tmp_path / "home"
+    (fake_home / ".codex").mkdir(parents=True)
+    (fake_home / ".codex" / "auth.json").write_text("{}")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: fake_home))
+    args = argparse.Namespace(
+        repo="acme/widgets", organization=None, output=tmp_path,
+        public_url="https://x.example.com", tunnel=False, engine="codex",
+        codex_auth=None, image="ghcr.io/example/themis:1.2.3",
+        callback_port=8976, bind_host="127.0.0.1", callback_host="127.0.0.1",
+        timeout=1, no_browser=True,
+    )
+    assert bootstrap.options_from_args(args).codex_auth is None
+
+
+def test_mint_codex_auth__runs_codex_login_in_private_home(tmp_path, monkeypatch):
+    calls = {}
+
+    def fake_run(command, **kwargs):
+        calls["command"] = command
+        calls["codex_home"] = kwargs["env"]["CODEX_HOME"]
+        Path(kwargs["env"]["CODEX_HOME"], "auth.json").write_text("{}")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake_run)
+    auth = bootstrap.mint_codex_auth(tmp_path / "chain")
+    assert calls["command"] == ["codex", "login"]
+    assert calls["codex_home"] == str(tmp_path / "chain")
+    assert auth == tmp_path / "chain" / "auth.json"
+
+
+def test_mint_codex_auth__missing_cli__raises_with_escape_hatch_hint(
+    tmp_path, monkeypatch
+):
+    def fake_run(command, **kwargs):
+        raise FileNotFoundError("codex")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake_run)
+    with pytest.raises(BootstrapError, match="--codex-auth"):
+        bootstrap.mint_codex_auth(tmp_path / "chain")
+
+
+def test_mint_codex_auth__login_without_auth_json__raises_headless_hint(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        bootstrap.subprocess, "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
+    with pytest.raises(BootstrapError, match="headless"):
+        bootstrap.mint_codex_auth(tmp_path / "chain")
+
+
+def test_run_bootstrap__codex_without_auth__mints_dedicated_chain(
+    monkeypatch, tmp_path
+):
+    minted = {}
+
+    def fake_mint(home: Path) -> Path:
+        minted["home"] = home
+        auth = home / "auth.json"
+        auth.parent.mkdir(parents=True, exist_ok=True)
+        auth.write_text("{}")
+        return auth
+
+    seen_options = {}
+
+    def session_factory(options):
+        seen_options["options"] = options
+        session = type("FakeSession", (), {})()
+        session.done = type("Done", (), {"wait": lambda self, timeout: True})()
+        session.error = None
+        session.credentials = credentials()
+        session.handler = lambda: object
+        return session
+
+    fake_server = type(
+        "FakeServer",
+        (),
+        {
+            "serve_forever": lambda self: None,
+            "shutdown": lambda self: None,
+            "server_close": lambda self: None,
+        },
+    )()
+    monkeypatch.setattr(bootstrap, "mint_codex_auth", fake_mint)
+    monkeypatch.setattr(bootstrap, "BootstrapSession", session_factory)
+    monkeypatch.setattr(bootstrap, "ThreadingHTTPServer", lambda address, handler: fake_server)
+    monkeypatch.setattr(bootstrap.threading, "Thread", lambda **kwargs: type(
+        "Thread", (), {"start": lambda self: None, "join": lambda self, timeout: None}
+    )())
+
+    run_bootstrap(options(tmp_path, engine="codex", codex_auth=None))
+
+    assert seen_options["options"].codex_auth == minted["home"] / "auth.json"
+
+
+def test_write_deployment__claude_token__lands_in_env(tmp_path):
+    output = tmp_path / "deployment"
+    opts = options(output, engine="claude", claude_token="sk-ant-oat01-abc123")
+    write_deployment(opts, credentials())
+    env_text = (output / ".env").read_text()
+    assert "CLAUDE_CODE_OAUTH_TOKEN='sk-ant-oat01-abc123'" in env_text
+
+
+def test_mint_claude_token__runs_setup_token_then_prompts_for_paste(monkeypatch):
+    # setup-token is interactive (browser + code paste-back), so it runs
+    # with inherited stdio and the token is collected via input().
+    calls = []
+    monkeypatch.setattr(
+        bootstrap.subprocess, "run",
+        lambda command, **kwargs: calls.append(command)
+        or subprocess.CompletedProcess(command, 0),
+    )
+    monkeypatch.setattr(bootstrap.getpass, "getpass", lambda _prompt: "  sk-ant-oat01-tok  ")
+    assert bootstrap.mint_claude_token() == "sk-ant-oat01-tok"
+    assert calls == [["claude", "setup-token"]]
+
+
+def test_mint_claude_token__missing_cli__raises(monkeypatch):
+    def boom(command, **kwargs):
+        raise FileNotFoundError("claude")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", boom)
+    with pytest.raises(BootstrapError, match="claude"):
+        bootstrap.mint_claude_token()
+
+
+def test_mint_claude_token__empty_paste__raises(monkeypatch):
+    monkeypatch.setattr(
+        bootstrap.subprocess, "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
+    monkeypatch.setattr(bootstrap.getpass, "getpass", lambda _prompt: "")
+    with pytest.raises(BootstrapError, match="token"):
+        bootstrap.mint_claude_token()
+
+
+def test_run_bootstrap__claude_without_token__mints_setup_token(
+    monkeypatch, tmp_path
+):
+    seen_options = {}
+
+    def session_factory(options):
+        seen_options["options"] = options
+        session = type("FakeSession", (), {})()
+        session.done = type("Done", (), {"wait": lambda self, timeout: True})()
+        session.error = None
+        session.credentials = credentials()
+        session.handler = lambda: object
+        return session
+
+    fake_server = type(
+        "FakeServer",
+        (),
+        {
+            "serve_forever": lambda self: None,
+            "shutdown": lambda self: None,
+            "server_close": lambda self: None,
+        },
+    )()
+    monkeypatch.setattr(bootstrap, "mint_claude_token", lambda: "sk-ant-oat01-minted")
+    monkeypatch.setattr(bootstrap, "BootstrapSession", session_factory)
+    monkeypatch.setattr(bootstrap, "ThreadingHTTPServer", lambda address, handler: fake_server)
+    monkeypatch.setattr(bootstrap.threading, "Thread", lambda **kwargs: type(
+        "Thread", (), {"start": lambda self: None, "join": lambda self, timeout: None}
+    )())
+
+    run_bootstrap(options(tmp_path, engine="claude", claude_token=None))
+
+    assert seen_options["options"].claude_token == "sk-ant-oat01-minted"
+
+
+def test_options_from_args__claude_env_token__gated_on_engine(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-env")
+    args = argparse.Namespace(
+        repo="acme/widgets", organization=None, output=tmp_path,
+        public_url="https://x.example.com", tunnel=False, engine="codex",
+        codex_auth=None, image="ghcr.io/example/themis:1.2.3",
+        callback_port=8976, bind_host="127.0.0.1", callback_host="127.0.0.1",
+        timeout=1, no_browser=True,
+    )
+    assert bootstrap.options_from_args(args).claude_token is None
+    args.engine = "claude"
+    assert bootstrap.options_from_args(args).claude_token == "sk-ant-oat01-env"

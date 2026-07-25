@@ -81,9 +81,10 @@ Set up Themis for this repository using the automated GitHub App Manifest bootst
 
 ### 1. Log in to Codex
 
-Using the Claude engine instead? Run `claude setup-token`, pass
-`--engine claude` to the bootstrap, and put the resulting token in
-`CLAUDE_CODE_OAUTH_TOKEN` in the generated `.env`. Using glm, kimi, or
+Using the Claude engine instead? Pass `--engine claude` to the bootstrap:
+it runs `claude setup-token` for you and writes the resulting long-lived
+token into `CLAUDE_CODE_OAUTH_TOKEN` in the generated `.env` (set that
+variable beforehand to skip the interactive flow). Using glm, kimi, or
 openrouter? No CLI login needed: pass `--engine <name>` to the bootstrap
 and put the provider key (`GLM_API_KEY`, `KIMI_API_KEY`, or
 `OPENROUTER_API_KEY`) in the generated `.env`. Details in
@@ -95,12 +96,21 @@ Install the CLI if you haven't already (Node 22+):
 npm install -g @openai/codex
 ```
 
+Mint a login chain **dedicated to this deployment** (a browser window opens):
+
 ```bash
-codex login
+CODEX_HOME="$PWD/themis-codex" codex login
 ```
 
-This writes credentials to `~/.codex/auth.json`. The bootstrap copies it into
-the generated deployment with mode `0600`.
+This writes `$PWD/themis-codex/auth.json`, which the bootstrap seeds into the
+generated deployment with mode `0600`. Do not reuse or mount your personal
+`~/.codex/auth.json`: ChatGPT refresh tokens are single-use rotating, so two
+installs sharing one chain invalidate each other — whichever refreshes first
+kills the other, and reviews start failing with expired-credential errors.
+Once the container owns its own chain, codex refreshes it indefinitely with
+no further logins. (Running the bootstrap from a source checkout instead of
+Docker? Omit `--codex-auth` entirely — it runs `codex login` against a
+private scratch home for you.)
 
 ### 2. Bootstrap
 
@@ -112,7 +122,7 @@ docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   -p 127.0.0.1:8976:8976 \
   -v "$PWD/themis-deploy:/output" \
-  -v "$HOME/.codex:/host-codex:ro" \
+  -v "$PWD/themis-codex:/host-codex:ro" \
   ghcr.io/zaimwa9/themis:latest \
   python -m themis init \
   --repo OWNER/REPO \
@@ -231,14 +241,18 @@ OPENROUTER_API_KEY=<key>               # openrouter engine only
 docker compose up -d
 ```
 
-For the codex engine, seed the auth volume once the agent is up. The pipe
-runs as the container's unprivileged `themis` user, so ownership and `0600`
-mode come out right (`docker compose cp` would leave the file root-owned and
-unreadable to the agent):
+For the codex engine, mint a dedicated chain and seed the auth volume once
+the agent is up — never your personal `~/.codex/auth.json` (see the chain
+warning above). The pipe runs as the container's unprivileged `themis`
+user, so ownership and `0600` mode come out right (`docker compose cp`
+would leave the file root-owned and unreadable to the agent):
 
 ```bash
+scratch=$(mktemp -d)
+CODEX_HOME="$scratch" codex login
 docker compose exec -T agent sh -c 'umask 077; cat > /data/codex/auth.json' \
-  < ~/.codex/auth.json
+  < "$scratch/auth.json"
+rm -rf "$scratch"
 ```
 
 PaaS deployment, upgrades, and the full env reference:
@@ -337,8 +351,8 @@ Themis runs reviews through an agent CLI, using your Codex, Claude Max, or GLM C
 
 | Engine | Auth | Setup |
 |---|---|---|
-| `codex` (default) | `auth.json` volume (`CODEX_HOME`) | `codex login` locally; bootstrap copies `auth.json` into the generated volume |
-| `claude` | one env var | run `claude setup-token` locally, set `CLAUDE_CODE_OAUTH_TOKEN` in `.env` |
+| `codex` (default) | `auth.json` volume (`CODEX_HOME`) | bootstrap mints a dedicated login chain (or seeds one you pass via `--codex-auth`); never share a chain between installs |
+| `claude` | one env var | bootstrap runs `claude setup-token` and writes `CLAUDE_CODE_OAUTH_TOKEN` into `.env` |
 | `glm` | one env var | set `GLM_API_KEY` in `.env` (Z.ai GLM Coding Plan key); reviews run through the claude CLI against Z.ai's Anthropic-compatible endpoint |
 | `kimi` | one env var | set `KIMI_API_KEY` in `.env` (Moonshot pay-as-you-go platform key — not a Kimi Code subscription, whose terms exclude non-interactive use); reviews run through the claude CLI against Moonshot's Anthropic-compatible endpoint |
 | `openrouter` | one env var | set `OPENROUTER_API_KEY` in `.env` (prepaid credits); reviews run through the claude CLI against OpenRouter's Anthropic-protocol gateway — `model.name` accepts any OpenRouter slug, though OpenRouter only guarantees Anthropic first-party models with Claude Code |

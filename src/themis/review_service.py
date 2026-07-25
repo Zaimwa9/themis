@@ -24,6 +24,7 @@ from themis.config import (
 )
 from themis.engines import (
     Engine,
+    EngineAuthError,
     EngineError,
     EngineQuotaError,
     EngineUnavailableError,
@@ -68,6 +69,11 @@ DEFAULT_MODELS = {
     "openrouter": "openrouter/auto",
 }
 
+AUTH_EXPIRED_COMMENT = (
+    "{engine_title} credentials have expired and must be re-authenticated "
+    "by the operator ({hint}); the {noun} was skipped. Reviews stay paused "
+    "until then."
+)
 QUOTA_COMMENT = (
     "{engine_title} subscription usage limit reached, {noun} skipped. "
     "Mention me with `review` later to retry."
@@ -585,6 +591,21 @@ class ReviewService:
                     # OutputError can embed malformed agent-controlled JSON.
                     # Replace it so the final queue traceback is safe too.
                     raise OutputError(redact_outbound(str(error))) from None
+            except EngineAuthError as error:
+                logger.warning(
+                    "themis_engine_auth_failed repo=%s pr=%s engine=%s error=%s",
+                    repo, pr_number, engine.name,
+                    redact_outbound(str(error))[:200],
+                )
+                await self._post_courtesy_comment(
+                    installation_id, repo, pr_number,
+                    AUTH_EXPIRED_COMMENT.format(
+                        engine_title=engine.name.capitalize(),
+                        hint=_ENGINE_AUTH_HINTS[engine.name],
+                        noun=noun,
+                    ),
+                )
+                return None
             except EngineQuotaError:
                 logger.warning("themis_quota_reached repo=%s pr=%s", repo, pr_number)
                 await self._post_courtesy_comment(

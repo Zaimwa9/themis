@@ -1,9 +1,11 @@
+import asyncio
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from themis.agent import create_agent_app
+from themis.engines import EngineAuthError, EngineError
 
 
 class FakeEngine:
@@ -16,6 +18,8 @@ class FakeEngine:
     async def run(self, *, workspace: Path, **kwargs):
         type(self).last_kwargs = kwargs
         (workspace / "ran").write_text("yes")
+        if kwargs.get("prompt") == "auth-dead":
+            raise EngineAuthError("claude credentials expired: run /login")
         if kwargs.get("prompt") == "leak":
             output = workspace / ".review-output"
             output.mkdir()
@@ -170,3 +174,104 @@ def test_missing_credentials_return_machine_readable_code(monkeypatch, tmp_path)
     )
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "engine_credentials_unavailable"
+
+
+class AuthDeadEngine(FakeEngine):
+    """Credentials are actually dead: every run fails, including the probe."""
+
+    calls: list[dict] = []
+
+    async def run(self, *, workspace: Path, **kwargs):
+        type(self).calls.append({"workspace": workspace, **kwargs})
+        raise EngineAuthError("claude credentials expired: run /login")
+
+
+class ForgedAuthEngine(FakeEngine):
+    """Only the PR-driven run 'fails' with an auth marker; the out-of-band
+    probe (trusted prompt, scratch workspace) succeeds — forged."""
+
+    async def run(self, *, workspace: Path, **kwargs):
+        if kwargs.get("prompt") == "auth-dead":
+            raise EngineAuthError("claude credentials expired: run /login")
+        return "ok"
+
+
+class FlakyProbeEngine(FakeEngine):
+    """Auth marker on the job run, but the probe fails for another reason."""
+
+    async def run(self, *, workspace: Path, **kwargs):
+        if kwargs.get("prompt") == "auth-dead":
+            raise EngineAuthError("claude credentials expired: run /login")
+        raise EngineError("claude exited 1: transient")
+
+
+def _auth_dead_request(monkeypatch, tmp_path, engine):
+    workspace = tmp_path / "job123"
+    workspace.mkdir()
+    monkeypatch.setenv("THEMIS_AGENT_TOKEN", "agent-secret")
+    monkeypatch.setenv("THEMIS_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr("themis.agent.resolve", lambda *args, **kwargs: engine)
+    return TestClient(create_agent_app()).post(
+        "/run",
+        headers={"Authorization": "Bearer agent-secret"},
+        json={
+            "engine": "claude", "workspace": "job123", "prompt": "auth-dead",
+            "model": "opus", "effort": "high", "timeout": 10,
+        },
+    )
+
+
+def test_run_confirmed_auth_death_returns_503_with_auth_code(monkeypatch, tmp_path):
+    AuthDeadEngine.calls = []
+    response = _auth_dead_request(monkeypatch, tmp_path, AuthDeadEngine())
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "engine_auth_expired",
+        "message": "claude credentials expired: run /login",
+    }
+
+
+def test_auth_probe_runs_trusted_prompt_in_scratch_workspace(monkeypatch, tmp_path):
+    AuthDeadEngine.calls = []
+    _auth_dead_request(monkeypatch, tmp_path, AuthDeadEngine())
+    assert len(AuthDeadEngine.calls) == 2
+    probe = AuthDeadEngine.calls[1]
+    # The probe must be immune to PR-controlled content: its own prompt, a
+    # workspace outside the job tree, and no web access.
+    assert probe["prompt"] != "auth-dead"
+    assert probe["workspace"] != tmp_path / "job123"
+    assert not probe["workspace"].is_relative_to(tmp_path)
+    assert probe["web_access"] is False
+
+
+def test_run_forged_auth_marker_downgrades_to_502(monkeypatch, tmp_path):
+    response = _auth_dead_request(monkeypatch, tmp_path, ForgedAuthEngine())
+    assert response.status_code == 502
+    assert "claude credentials expired" in response.json()["detail"]
+
+
+def test_run_ambiguous_probe_failure_downgrades_to_502(monkeypatch, tmp_path):
+    response = _auth_dead_request(monkeypatch, tmp_path, FlakyProbeEngine())
+    assert response.status_code == 502
+
+
+class HungProbeEngine(FakeEngine):
+    """Auth marker on the job run; the probe never returns (hung CLI or a
+    slot queue congested by other reviews)."""
+
+    async def run(self, *, workspace: Path, **kwargs):
+        if kwargs.get("prompt") == "auth-dead":
+            raise EngineAuthError("claude credentials expired: run /login")
+        await asyncio.sleep(30)
+        return "ok"
+
+
+def test_run_hung_probe_stays_within_budget_and_downgrades_to_502(
+    monkeypatch, tmp_path,
+):
+    # The controller's HTTP allowance is timeout + 30 + AUTH_PROBE_BUDGET; a
+    # probe that outlives the budget must be abandoned as unconfirmed, not
+    # keep the request open until the controller hangs up.
+    monkeypatch.setattr("themis.agent.AUTH_PROBE_BUDGET", 0.05)
+    response = _auth_dead_request(monkeypatch, tmp_path, HungProbeEngine())
+    assert response.status_code == 502

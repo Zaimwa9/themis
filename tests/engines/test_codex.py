@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from themis.engines.base import EngineError, EngineQuotaError
+from themis.engines.base import EngineAuthError, EngineError, EngineQuotaError
 from themis.engines.codex import CodexEngine
 
 
@@ -278,3 +278,30 @@ async def test_run_codex__error_tail__redacts_env_secrets(tmp_path, monkeypatch,
 
     assert "api-token-value" not in str(excinfo.value)
     assert "[redacted]" in str(excinfo.value)
+
+
+async def test_run_codex__dead_refresh_token__raises_engine_auth_error(
+    tmp_path, monkeypatch, workspace
+):
+    # Regression: observed live 2026-07-25 — a sibling install rotated the
+    # shared ChatGPT chain; codex printed this and themis retried, then
+    # posted a generic failure comment.
+    _fake_cli(
+        tmp_path, monkeypatch,
+        "echo 'ERROR codex_login::auth::manager: Failed to refresh token: "
+        "Your access token could not be refreshed because your refresh "
+        "token was already used. Please log out and sign in again.'; exit 1",
+    )
+
+    with pytest.raises(EngineAuthError):
+        await _run(workspace)
+
+
+async def test_run_codex__ordinary_failure__stays_engine_error(
+    tmp_path, monkeypatch, workspace
+):
+    _fake_cli(tmp_path, monkeypatch, "echo 'model exploded'; exit 1")
+
+    with pytest.raises(EngineError) as excinfo:
+        await _run(workspace)
+    assert not isinstance(excinfo.value, EngineAuthError)

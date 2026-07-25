@@ -14,6 +14,14 @@ _QUOTA_MARKERS = (
     "you've hit your opus limit",
     "you've hit your limit · resets",
 )
+# Claude CLI diagnostics for a dead setup-token. Deliberately narrow: agent
+# output can echo prompt text, and a false match skips retries — so only
+# oauth-token-specific diagnostics qualify; generic instructions like
+# "please run /login" or "invalid api key" do not.
+_AUTH_MARKERS = (
+    "oauth token has expired",
+    "oauth token is invalid",
+)
 # No self-updates or third-party telemetry from inside a review job.
 _HYGIENE_ENV = {
     "DISABLE_AUTOUPDATER": "1",
@@ -57,6 +65,7 @@ class ClaudeEngine:
     name = "claude"
     _token_env = "CLAUDE_CODE_OAUTH_TOKEN"
     _quota_markers = _QUOTA_MARKERS
+    _auth_markers = _AUTH_MARKERS
 
     def available(self) -> bool:
         return bool(os.environ.get(self._token_env))
@@ -89,4 +98,5 @@ class ClaudeEngine:
                 env=env,
                 timeout=timeout,
                 quota_markers=self._quota_markers,
+                auth_markers=self._auth_markers,
             )

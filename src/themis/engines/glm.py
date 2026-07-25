@@ -9,7 +9,9 @@ from themis.engines.anthropic_api import AnthropicApiEngine
 # from provider-structured output (#28), ambiguous glm failures stay
 # retryable: true plan exhaustion (Z.ai codes 1308-1310, 1316-1321) surfaces
 # as a plain EngineError and a generic failure comment after retries.
-# Validated markers may return with #20's live-validation round.
+# Validated markers may return with #20's live-validation round. The same
+# echo risk applies to auth markers, so glm ships none and auth death stays
+# a retryable EngineError.
 
 
 class GlmEngine(AnthropicApiEngine):
@@ -17,3 +19,4 @@ class GlmEngine(AnthropicApiEngine):
     _token_env = "GLM_API_KEY"
     _base_url = "https://api.z.ai/api/anthropic"
     _quota_markers = ()
+    _auth_markers = ()

@@ -110,3 +110,10 @@ def test_available__key_missing__false(monkeypatch):
     monkeypatch.delenv("KIMI_API_KEY", raising=False)
 
     assert KimiEngine().available() is False
+
+
+def test_kimi_has_no_auth_markers():
+    # Text markers are agent-echoable (see the module comment); kimi keeps
+    # auth failures retryable until provider-structured classification
+    # exists, and must not inherit claude's markers.
+    assert KimiEngine._auth_markers == ()

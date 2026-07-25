@@ -20,7 +20,7 @@ Two planes:
 | `THEMIS_ENGINE` | no | `codex` | instance default review engine; `codex`, `claude`, `glm`, `kimi`, or `openrouter` |
 | `THEMIS_CONCURRENCY` | no | `1` | parallel jobs, `1`–`8`; out-of-range or non-integer values warn and fall back to `1`. Sizes the queue consumers and the engine-run slots, and must be set on both the controller and agent containers (the compose templates pass it to both). The practical limit is the operator's engine subscription quota, so keep it small |
 | `THEMIS_DEFAULT_REPO_CONFIG` | no | unset | `.themis/config.yaml` content (raw yaml or base64 of it) used for repos that have no `.themis/config.yaml`; see below |
-| `CODEX_HOME` | no | `/data/codex` | codex auth/state directory |
+| `CODEX_HOME` | no | `/data/codex` | codex auth/state directory; its `auth.json` must be a login chain no other install uses (single-use rotating refresh tokens) |
 | `THEMIS_CODEX_SANDBOX` | no | `workspace-write` | codex sandbox mode; `danger-full-access` for runtimes without Landlock |
 | `CLAUDE_CODE_OAUTH_TOKEN` | agent only | unset | Claude Max token from `claude setup-token`; never set it on the controller |
 | `GLM_API_KEY` | agent only | unset | Z.ai GLM Coding Plan key for the glm engine; never set it on the controller |
@@ -35,6 +35,17 @@ Two planes:
 | `PORT` | no | role default | listen port (`8000` controller, `8001` agent) |
 | `THEMIS_DATA_ROOT` | no | `~/.themis` | durable store for pending learnings (compose mounts a volume at `/data/themis`) |
 | `NGROK_AUTHTOKEN` | only with the `tunnel` compose profile | none | used only by the compose tunnel profile's ngrok sidecar |
+
+When an engine's credentials die (expired setup-token, invalidated codex
+refresh chain), Themis classifies the failure as `EngineAuthError`: the
+review is not retried, a courtesy comment on the PR names the engine and the
+credential to fix, and the worker logs `themis_engine_auth_failed`. Because
+the diagnostics are matched against agent-visible output — which a hostile
+PR could steer the agent into echoing — the agent service first confirms
+the death out of band: it re-runs the engine with a fixed trusted prompt in
+an empty scratch workspace (logged as `themis_auth_probe`). Only a probe
+that also fails with an auth diagnostic triggers the terminal path;
+otherwise the failure stays a plain retryable engine error.
 
 Names and defaults come straight from `../src/themis/config.py`, except
 `PORT` and `THEMIS_ROLE` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and

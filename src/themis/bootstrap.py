@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 import html
 import json
 import os
 import re
 import secrets
+import subprocess
+import tempfile
 import threading
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
@@ -46,6 +49,7 @@ class BootstrapOptions:
     image: str
     timeout: int
     open_browser: bool
+    claude_token: str | None = None
 
 
 def _validate_repo(repo: str) -> str:
@@ -305,7 +309,7 @@ def write_deployment(options: BootstrapOptions, credentials: dict[str, object]) 
         f"THEMIS_PUBLIC_URL={_dotenv(options.public_url or '')}",
         f"THEMIS_TUNNEL_API={_dotenv('http://ngrok:4040' if options.tunnel else '')}",
         f"NGROK_AUTHTOKEN={_dotenv(options.ngrok_authtoken or '')}",
-        "CLAUDE_CODE_OAUTH_TOKEN=''",
+        f"CLAUDE_CODE_OAUTH_TOKEN={_dotenv(options.claude_token or '')}",
         "GLM_API_KEY=''",
         "KIMI_API_KEY=''",
         "OPENROUTER_API_KEY=''",
@@ -327,6 +331,51 @@ def write_deployment(options: BootstrapOptions, credentials: dict[str, object]) 
     if options.codex_auth:
         destination = codex_seed / "auth.json"
         _write_exclusive(destination, options.codex_auth.read_bytes(), 0o600)
+
+
+def mint_codex_auth(home: Path) -> Path:
+    """Run `codex login` against a private CODEX_HOME, minting a refresh
+    chain owned solely by this deployment. ChatGPT refresh tokens are
+    single-use rotating: sharing the host's ~/.codex chain lets whichever
+    install refreshes first kill the others."""
+    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        completed = subprocess.run(
+            ["codex", "login"], env=os.environ | {"CODEX_HOME": str(home)}
+        )
+    except FileNotFoundError as error:
+        raise BootstrapError(
+            "codex CLI not found (npm install -g @openai/codex), or pass "
+            "--codex-auth with an auth.json minted for this deployment only"
+        ) from error
+    auth = home / "auth.json"
+    if completed.returncode != 0 or not auth.is_file():
+        raise BootstrapError(
+            "codex login did not produce an auth.json; on a headless host, "
+            "run `CODEX_HOME=$(mktemp -d) codex login` on a workstation and "
+            "pass the resulting auth.json via --codex-auth"
+        )
+    return auth
+
+
+def mint_claude_token() -> str:
+    """Run `claude setup-token` interactively (it opens a browser and takes
+    a paste-back code on the terminal), then collect the printed token.
+    The token is static and long-lived; no rotation, no chain sharing."""
+    try:
+        completed = subprocess.run(["claude", "setup-token"])
+    except FileNotFoundError as error:
+        raise BootstrapError(
+            "claude CLI not found (npm install -g @anthropic-ai/claude-code); "
+            "or run `claude setup-token` elsewhere and put the value in .env "
+            "as CLAUDE_CODE_OAUTH_TOKEN"
+        ) from error
+    if completed.returncode != 0:
+        raise BootstrapError("claude setup-token failed; rerun the bootstrap")
+    token = getpass.getpass("Paste the token printed above: ").strip()
+    if not token:
+        raise BootstrapError("no token pasted; rerun the bootstrap")
+    return token
 
 
 def _page(title: str, body: str) -> bytes:
@@ -449,23 +498,56 @@ def run_bootstrap(options: BootstrapOptions) -> None:
     if (options.output / ".env").exists() or (options.output / "compose.yaml").exists():
         raise BootstrapError("output already contains .env or compose.yaml")
 
-    session = BootstrapSession(options)
-    server = ThreadingHTTPServer((options.bind_host, options.bind_port), session.handler())
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    start_url = f"{options.callback_url}/"
-    print(f"Open this URL to authorize the GitHub App:\n\n  {start_url}\n", flush=True)
-    if options.open_browser:
-        webbrowser.open(start_url)
-    try:
-        if not session.done.wait(options.timeout):
-            if session.error:
-                raise BootstrapError(f"setup did not complete: {session.error}")
-            raise BootstrapError("timed out waiting for GitHub App setup")
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+    # The scratch dir must outlive write_deployment (run by the callback
+    # handler during the wait below), which copies the minted seed.
+    with tempfile.TemporaryDirectory(prefix="themis-codex-login-") as scratch:
+        if options.engine == "codex" and options.codex_auth is None:
+            print(
+                "Minting a dedicated Codex login for this deployment "
+                "(your browser will open; approve the login)...",
+                flush=True,
+            )
+            options = replace(
+                options, codex_auth=mint_codex_auth(Path(scratch) / "codex")
+            )
+        if options.engine == "claude" and options.claude_token is None:
+            options = replace(options, claude_token=mint_claude_token())
+        session = BootstrapSession(options)
+        server = ThreadingHTTPServer((options.bind_host, options.bind_port), session.handler())
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        start_url = f"{options.callback_url}/"
+        print(f"Open this URL to authorize the GitHub App:\n\n  {start_url}\n", flush=True)
+        if options.open_browser:
+            webbrowser.open(start_url)
+        try:
+            if not session.done.wait(options.timeout):
+                if session.error:
+                    raise BootstrapError(f"setup did not complete: {session.error}")
+                if session.deployment_written:
+                    # The manifest callback already saved credentials and any
+                    # minted engine login into the output directory; a rerun
+                    # would refuse to overwrite it. Only the install step is
+                    # missing.
+                    slug = quote(
+                        str(session.credentials["slug"]), safe=""
+                    ) if session.credentials else ""
+                    raise BootstrapError(
+                        "timed out waiting for the GitHub App installation, "
+                        "but the App and deployment (including any engine "
+                        f"login minted this run) were saved to {options.output}; "
+                        f"finish installing at {GITHUB_URL}/apps/{slug}/installations/new "
+                        "and start the stack — do not rerun the bootstrap "
+                        "into this directory"
+                    )
+                raise BootstrapError(
+                    "timed out waiting for GitHub App setup; any engine login "
+                    "minted this run was discarded — rerun the bootstrap"
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
     if session.credentials is None:  # guarded by session.done, narrows the type
         raise BootstrapError("GitHub App credentials were not received")
@@ -489,7 +571,10 @@ def add_init_parser(subparsers: argparse._SubParsersAction) -> None:
     reachability.add_argument("--public-url", type=_public_url_argument)
     reachability.add_argument("--tunnel", action="store_true", help="use the bundled ngrok tunnel")
     parser.add_argument("--engine", choices=ENGINE_NAMES, default="codex")
-    parser.add_argument("--codex-auth", type=Path, help="auth.json to seed into the agent")
+    parser.add_argument(
+        "--codex-auth", type=Path,
+        help="auth.json to seed into the agent (must be a chain no other install uses)",
+    )
     parser.add_argument("--image", type=_image_argument, default=DEFAULT_IMAGE)
     parser.add_argument("--callback-port", type=_positive_int, default=8976)
     parser.add_argument("--bind-host", default="127.0.0.1")
@@ -500,10 +585,11 @@ def add_init_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def options_from_args(args: argparse.Namespace) -> BootstrapOptions:
     callback_url = f"http://{args.callback_host}:{args.callback_port}"
+    # Never default to ~/.codex/auth.json: copying the host's live chain is
+    # the collision footgun (single-use rotating refresh tokens — whichever
+    # install refreshes first invalidates the others). run_bootstrap mints a
+    # dedicated chain instead when no --codex-auth is given.
     codex_auth = args.codex_auth
-    default_auth = Path.home() / ".codex" / "auth.json"
-    if codex_auth is None and args.engine == "codex" and default_auth.is_file():
-        codex_auth = default_auth
     return BootstrapOptions(
         repo=args.repo,
         output=args.output.resolve(),
@@ -519,4 +605,11 @@ def options_from_args(args: argparse.Namespace) -> BootstrapOptions:
         image=args.image,
         timeout=args.timeout,
         open_browser=not args.no_browser,
+        # Headless escape hatch: a pre-minted token in the environment skips
+        # the interactive setup-token flow. Engine-gated so an exported token
+        # never lands in a deployment that does not use it.
+        claude_token=(
+            os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or None
+            if args.engine == "claude" else None
+        ),
     )

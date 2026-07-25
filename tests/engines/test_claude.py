@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from themis.engines.base import EngineError, EngineQuotaError
+from themis.engines.base import EngineAuthError, EngineError, EngineQuotaError
 from themis.engines.claude import ClaudeEngine
 
 pytestmark = pytest.mark.asyncio
@@ -171,3 +171,25 @@ def test_available__token_missing__false(monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
 
     assert ClaudeEngine().available() is False
+
+
+async def test_run__expired_oauth_token__raises_engine_auth_error(
+    tmp_path, monkeypatch, workspace
+):
+    _fake_cli(
+        tmp_path, monkeypatch,
+        'echo "OAuth token has expired · Please run /login"; exit 1',
+    )
+
+    with pytest.raises(EngineAuthError):
+        await _run(workspace)
+
+
+async def test_run__ordinary_failure__stays_engine_error(
+    tmp_path, monkeypatch, workspace
+):
+    _fake_cli(tmp_path, monkeypatch, 'echo "something broke"; exit 1')
+
+    with pytest.raises(EngineError) as exc_info:
+        await _run(workspace)
+    assert not isinstance(exc_info.value, EngineAuthError)

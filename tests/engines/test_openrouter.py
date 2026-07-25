@@ -111,3 +111,10 @@ def test_available__key_missing__false(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     assert OpenRouterEngine().available() is False
+
+
+def test_openrouter_has_no_auth_markers():
+    # Text markers are agent-echoable (see the module comment); openrouter
+    # keeps auth failures retryable until provider-structured classification
+    # exists, and must not inherit claude's markers.
+    assert OpenRouterEngine._auth_markers == ()

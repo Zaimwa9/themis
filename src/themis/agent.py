@@ -1,17 +1,57 @@
 """Credential-isolated engine execution service."""
 
 import asyncio
+import logging
 import os
 import secrets
+import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from themis.config import VALID_SANDBOXES, _env_concurrency
-from themis.engines import ENGINE_NAMES, EngineError, EngineQuotaError, resolve
+from themis.engines import (
+    AUTH_PROBE_BUDGET,
+    ENGINE_NAMES,
+    EngineAuthError,
+    EngineError,
+    EngineQuotaError,
+    resolve,
+)
 from themis.output import OUTPUT_DIR, OUTPUT_FILES
 from themis.security import redact_outbound
+
+logger = logging.getLogger(__name__)
+
+# Auth markers match the agent-visible output tail, so a prompt-steered agent
+# inside a hostile PR can echo one and forge a terminal auth failure (which
+# skips retries and posts an operator alarm). The probe re-runs the engine
+# with this fixed trusted prompt in an empty scratch workspace — no PR
+# content, nothing to steer — and only a probe that itself raises
+# EngineAuthError confirms the credentials are really dead.
+_PROBE_PROMPT = "Reply with the single word: ok"
+_PROBE_TIMEOUT = 120.0
+
+
+async def _confirm_auth_dead(engine, model: str, effort: str) -> bool:
+    with tempfile.TemporaryDirectory(prefix="themis-auth-probe-") as scratch:
+        try:
+            await engine.run(
+                prompt=_PROBE_PROMPT,
+                workspace=Path(scratch),
+                model=model,
+                effort=effort,
+                timeout=_PROBE_TIMEOUT,
+                web_access=False,
+            )
+        except EngineAuthError:
+            return True
+        except EngineError:
+            # Ambiguous (quota, transient): stay retryable rather than
+            # falsely telling the operator to re-authenticate.
+            return False
+    return False
 
 
 def _redact_agent_outputs(workspace: Path) -> None:
@@ -101,6 +141,31 @@ def create_agent_app() -> FastAPI:
                 )
             _redact_agent_outputs(workspace)
             return {"output": redact_outbound(output)}
+        except EngineAuthError as error:
+            try:
+                # The budget bounds slot wait + probe run: the controller's
+                # HTTP allowance is timeout + 30 + AUTH_PROBE_BUDGET, so an
+                # unbounded wait here would make it hang up mid-probe and
+                # misread a genuine auth death as a transient agent error.
+                async with asyncio.timeout(AUTH_PROBE_BUDGET):
+                    # Probe holds the slot: it is a real engine run and must
+                    # respect the same parallelism budget as the job.
+                    async with slot:
+                        confirmed = await _confirm_auth_dead(
+                            engine, request.model, request.effort
+                        )
+            except TimeoutError:
+                confirmed = False
+            logger.warning(
+                "themis_auth_probe engine=%s confirmed=%s",
+                request.engine, confirmed,
+            )
+            if confirmed:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"code": "engine_auth_expired", "message": str(error)},
+                ) from error
+            raise HTTPException(status_code=502, detail=str(error)) from error
         except EngineQuotaError as error:
             raise HTTPException(status_code=429, detail=str(error)) from error
         except EngineError as error:

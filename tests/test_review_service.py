@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from themis.config import Settings
-from themis.engines import ENGINE_NAMES, EngineError, EngineQuotaError
+from themis.engines import ENGINE_NAMES, EngineAuthError, EngineError, EngineQuotaError
 from themis.github.client import GitHubGraphQLError
 from themis.learning_service import (
     DIGEST_BRANCH,
@@ -498,6 +498,27 @@ async def test_review__quota_error__posts_quota_comment_and_stops(service, gh):
     assert "review skipped" in body.lower()
     gh.post_review.assert_not_awaited()
     gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__engine_auth_error__no_retry_and_operator_comment(
+    service, gh, caplog
+):
+    calls = {"n": 0}
+
+    async def auth_dead_agent(**kwargs):
+        calls["n"] += 1
+        raise EngineAuthError("codex credentials expired: log out and sign in again")
+    service.resolve_engine = _resolver(auth_dead_agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    assert calls["n"] == 1  # dead credentials must not be retried
+    gh.post_issue_comment.assert_awaited_once()
+    body = gh.post_issue_comment.await_args.args[2]
+    assert "credentials have expired" in body.lower()
+    assert "auth.json in CODEX_HOME" in body
+    gh.post_review.assert_not_awaited()
+    assert "themis_engine_auth_failed" in caplog.text
 
 
 async def test_review__flaky_agent__retries_then_succeeds(service, gh):

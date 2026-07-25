@@ -4,7 +4,13 @@ from pathlib import Path
 
 import httpx
 
-from themis.engines.base import EngineError, EngineQuotaError, EngineUnavailableError
+from themis.engines.base import (
+    AUTH_PROBE_BUDGET,
+    EngineAuthError,
+    EngineError,
+    EngineQuotaError,
+    EngineUnavailableError,
+)
 
 
 class RemoteEngine:
@@ -39,7 +45,11 @@ class RemoteEngine:
         }
         try:
             async with httpx.AsyncClient(
-                timeout=timeout + 30, transport=self._transport
+                # A job that fails with an auth marker at its deadline still
+                # gets a confirmation probe on the agent side; the allowance
+                # must cover it or the classification is lost to a hang-up.
+                timeout=timeout + 30 + AUTH_PROBE_BUDGET,
+                transport=self._transport,
             ) as client:
                 response = await client.post(
                     f"{self._base_url}/run",
@@ -66,6 +76,8 @@ class RemoteEngine:
         )
         if response.status_code == 429:
             raise EngineQuotaError(message)
+        if code == "engine_auth_expired":
+            raise EngineAuthError(message)
         if code == "engine_credentials_unavailable":
             raise EngineUnavailableError(message)
         raise EngineError(message)

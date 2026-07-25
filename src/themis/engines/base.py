@@ -18,8 +18,22 @@ class EngineQuotaError(EngineError):
     """The subscription usage window is exhausted; do not retry."""
 
 
+class EngineAuthError(EngineError):
+    """Engine credentials are dead; retrying cannot help — the operator
+    must re-authenticate."""
+
+
 class EngineUnavailableError(EngineError):
     """The isolated agent does not have credentials for this engine."""
+
+
+# Worst case extra time the agent may spend after a job fails with an auth
+# marker: waiting for an engine slot plus one confirmation probe run. The
+# agent abandons the probe at this budget, and the controller's HTTP client
+# allows for it on top of the job timeout — both sides must share the value
+# or a slow genuine auth death gets cut off mid-probe and misread as a
+# transient agent error.
+AUTH_PROBE_BUDGET = 150.0
 
 
 class Engine(Protocol):
@@ -70,10 +84,12 @@ async def run_cli(
     env: dict[str, str],
     timeout: float,
     quota_markers: tuple[str, ...],
+    auth_markers: tuple[str, ...] = (),
 ) -> str:
     """Run an agent CLI in the workspace with hardened subprocess semantics:
-    own process group, timeout and cancellation kill the whole group, quota
-    markers in the output tail map to EngineQuotaError."""
+    own process group, timeout and cancellation kill the whole group, auth
+    and quota markers in the output tail map to EngineAuthError and
+    EngineQuotaError."""
     process = await asyncio.create_subprocess_exec(
         *command,
         cwd=workspace,
@@ -98,6 +114,12 @@ async def run_cli(
         # Redact at source: these messages end up in logs and tracebacks, and
         # a hostile prompt can steer the agent into echoing its own secrets.
         lowered = output[-2000:].lower()
+        # Auth before quota: an auth-dead CLI can emit misleading secondary
+        # errors that pattern-match quota strings.
+        if any(marker in lowered for marker in auth_markers):
+            raise EngineAuthError(
+                f"{name} credentials expired: {redact_outbound(output[-500:])}"
+            )
         if any(marker in lowered for marker in quota_markers):
             raise EngineQuotaError(
                 f"{name} usage limit reached: {redact_outbound(output[-500:])}"
