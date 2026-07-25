@@ -83,6 +83,17 @@ def _skip_ack(job: ReviewJob | DiscussJob) -> bool:
     return isinstance(job, DiscussJob) and job.kind == "thread" and not job.mentions_bot
 
 
+def _repo_allowed(repo: str, allowlist: frozenset[str] | None) -> bool:
+    """None allows everything. Entries match exactly, or as an ``owner/*``
+    wildcard covering every repo under that owner."""
+    if allowlist is None:
+        return True
+    if repo in allowlist:
+        return True
+    owner = repo.split("/", 1)[0]
+    return f"{owner}/*" in allowlist
+
+
 async def _ack(settings: Settings, job: ReviewJob | DiscussJob, **target: int) -> None:
     """Best-effort eyes reaction on the trigger; never blocks enqueueing."""
     try:
@@ -129,6 +140,9 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
                 return {"status": "ignored"}
             if job is None:
                 logger.debug("themis_event_ignored event=%s action=%s", event, payload.get("action"))
+                return {"status": "ignored"}
+            if not _repo_allowed(job.repo, settings.repos):
+                logger.info("themis_repo_not_allowlisted repo=%s", job.repo)
                 return {"status": "ignored"}
             enqueued = _enqueue(settings, queue, slug, job)
             logger.info(
