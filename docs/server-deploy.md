@@ -36,26 +36,40 @@ Mount a second persistent volume on the **controller** at `/data/themis`
 lost whenever the controller container is recreated. Both compose files
 (the repo's and the bootstrap-generated one) already do this.
 
-Seed it once, after the container is up, from wherever you already ran
-`codex login`. Pipe it through an exec shell rather than `docker cp`: the
+Seed it once, after the container is up, with a chain minted **for this
+deployment only**. ChatGPT refresh tokens are single-use rotating: if the
+source install keeps using the chain you copied, the two invalidate each
+other and reviews fail with expired-credential errors. Log in against a
+scratch `CODEX_HOME` and delete it after seeding — never pipe in your
+personal `~/.codex/auth.json`:
+
+```bash
+scratch=$(mktemp -d)
+CODEX_HOME="$scratch" codex login
+```
+
+Pipe it through an exec shell rather than `docker cp`: the
 exec runs as the container's unprivileged `themis` user, while `docker cp`
 creates the file root-owned and unreadable to the agent:
 
 ```bash
 # docker compose
 docker compose exec -T agent sh -c 'umask 077; cat > /data/codex/auth.json' \
-  < ~/.codex/auth.json
+  < "$scratch/auth.json"
 
 # plain docker
 docker exec -i <container> sh -c 'umask 077; cat > /data/codex/auth.json' \
-  < ~/.codex/auth.json
+  < "$scratch/auth.json"
 
 # PaaS with only a remote shell: same pipe through the platform's shell command
-<platform-shell-command> sh -c 'umask 077; cat > /data/codex/auth.json' < ~/.codex/auth.json
+<platform-shell-command> sh -c 'umask 077; cat > /data/codex/auth.json' < "$scratch/auth.json"
 ```
 
 Any of the three gets the same file onto the volume; use whichever your
-platform supports.
+platform supports, then `rm -rf "$scratch"`. Once seeded, the container owns
+the chain and codex refreshes it in place indefinitely. If credentials die
+anyway, reviews stop with a PR comment naming the engine and the worker logs
+`themis_engine_auth_failed`; reseed the same way.
 
 ## Self-registration
 
