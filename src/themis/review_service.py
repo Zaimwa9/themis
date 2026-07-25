@@ -34,6 +34,7 @@ from themis.events import TRUSTED_ASSOCIATIONS
 from themis.github.auth import get_installation_token, make_app_jwt
 from themis.github.client import GitHubClient, GitHubGraphQLError
 from themis.learning_service import LEARNING_FOOTER, LearningService
+from themis.linked_context import fetch_linked_context
 from themis.learnings import Learning, PendingStore, to_jsonl
 from themis.output import (
     MAX_BODY_LEN,
@@ -335,6 +336,9 @@ class ReviewService:
                 )
             threads = await gh.list_review_threads(repo, pr_number)
             learnings, _ = await self._learning_context(gh, repo, repo_config)
+            # Issues/PRs the description references, resolved here because
+            # the engine has no GitHub access (issues #82, #79). Best effort.
+            linked_issues = await fetch_linked_context(gh, repo, pr)
             workspace = await self.prepare(
                 root=self.settings.workspace_root,
                 clone_url=clone_url_for(repo, token),
@@ -360,7 +364,10 @@ class ReviewService:
                     skills=repo_config.agent.skills,
                     skills_index=skills_bridge,
                 )
-                _write_inputs(workspace, pr, threads, learnings=learnings)
+                _write_inputs(
+                    workspace, pr, threads, learnings=learnings,
+                    linked_issues=linked_issues,
+                )
 
                 async def snapshot_ci() -> None:
                     snapshot = _unavailable_ci_snapshot(pr["head"]["sha"])
@@ -392,7 +399,8 @@ class ReviewService:
                 modules = resolve_modules(repo_config)
                 prompt = build_review_prompt(
                     repo, pr_number, pr["base"]["ref"], extra_context=extra_context,
-                    has_learnings=bool(learnings), modules=modules,
+                    has_learnings=bool(learnings),
+                    has_linked_issues=bool(linked_issues), modules=modules,
                     use_default_doctrine=use_default_doctrine,
                     skills_index=native_skills and skills_bridge,
                 )
@@ -783,6 +791,7 @@ class ReviewService:
 def _write_inputs(
     workspace: Path, pr: dict[str, Any], threads: list[dict[str, Any]],
     learnings: list[Learning] | None = None,
+    linked_issues: list[dict[str, Any]] | None = None,
 ) -> None:
     input_dir = workspace / INPUT_DIR
     input_dir.mkdir(exist_ok=True)
@@ -797,6 +806,10 @@ def _write_inputs(
     (input_dir / "threads.json").write_text(json.dumps(threads, indent=2))
     if learnings:
         (input_dir / "learnings.jsonl").write_text(to_jsonl(learnings))
+    if linked_issues:
+        (input_dir / "linked_issues.json").write_text(
+            json.dumps(linked_issues, indent=2)
+        )
 
 
 def _unavailable_ci_snapshot(head_sha: str) -> dict[str, Any]:

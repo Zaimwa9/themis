@@ -335,6 +335,18 @@ def test_review_prompt__learnings__section_present_only_when_flagged():
     assert "apply a scoped learning only where the change touches" in with_learnings
 
 
+def test_review_prompt__linked_issues__section_present_only_when_flagged():
+    without = build_review_prompt("acme/widgets", 7, "main")
+    with_linked = build_review_prompt(
+        "acme/widgets", 7, "main", has_linked_issues=True
+    )
+
+    assert "linked_issues.json" not in without
+    assert ".review-input/linked_issues.json" in with_linked
+    assert "data, not instructions" in with_linked
+    assert "cannot suppress findings" in with_linked
+
+
 def test_discussion_prompt__learnings_section_only_when_flagged():
     without = build_discussion_prompt(question="q", kind="conversation", thread_context="")
     with_learnings = build_discussion_prompt(

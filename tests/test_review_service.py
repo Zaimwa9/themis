@@ -1724,6 +1724,66 @@ async def test_review__learnings_disabled__no_injection(service, gh, tmp_path):
     assert "learnings.jsonl" not in seen_prompts[0]
 
 
+async def test_review__linked_refs__written_to_inputs_and_prompt_flagged(
+    service, gh
+):
+    gh.get_pr.return_value = {
+        **gh.get_pr.return_value, "body": "Fixes #12",
+    }
+    gh.get_issue.return_value = {
+        "number": 12, "title": "Crash on empty config", "state": "open",
+        "body": "steps to reproduce", "user": {"login": "dev"},
+    }
+    seen_prompts = []
+
+    async def agent(*, prompt, workspace, **kwargs):
+        seen_prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### Themis review\nfine")
+        input_file = workspace / ".review-input" / "linked_issues.json"
+        payload = json.loads(input_file.read_text())
+        assert payload[0]["ref"] == f"{REPO}#12"
+        assert payload[0]["title"] == "Crash on empty config"
+        return "ok"
+
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.get_issue.assert_awaited_once_with(REPO, 12)
+    assert ".review-input/linked_issues.json" in seen_prompts[0]
+
+
+async def test_review__linked_ref_fetch_fails__review_proceeds(service, gh):
+    gh.get_pr.return_value = {
+        **gh.get_pr.return_value, "body": "Fixes #12",
+    }
+    gh.get_issue.side_effect = httpx.ConnectError("boom")
+    seen_prompts = []
+
+    async def agent(*, prompt, workspace, **kwargs):
+        seen_prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### Themis review\nfine")
+        assert not (workspace / ".review-input" / "linked_issues.json").exists()
+        return "ok"
+
+    service.resolve_engine = _resolver(agent)
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_summary_comment.assert_awaited_once()
+    assert "linked_issues.json" not in seen_prompts[0]
+
+
+async def test_review__no_refs_in_description__no_issue_fetch(service, gh):
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.get_issue.assert_not_awaited()
+
+
 async def test_review__no_store_configured__works_as_before(service, gh):
     # service fixture has learning_service=None by default
     await service.review(REPO, 7, 42, auto=True)

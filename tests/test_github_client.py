@@ -34,6 +34,55 @@ async def test_get_pr__ok__returns_payload():
     assert pr["head"]["sha"] == "abc123"
 
 
+async def test_get_repo_visibility__explicit_field_and_fail_closed_shapes():
+    async def probe(status: int, payload) -> str | None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/repos/acme/widgets"
+            return httpx.Response(status, json=payload)
+        return await _client(handler).get_repo_visibility("acme/widgets")
+
+    assert await probe(200, {"private": False, "visibility": "public"}) == "public"
+    assert await probe(200, {"private": True, "visibility": "private"}) == "private"
+    # Enterprise internal repos can report private=false; the explicit
+    # visibility field must win over the boolean.
+    assert await probe(200, {"private": False, "visibility": "internal"}) == "internal"
+    assert await probe(404, {"message": "Not Found"}) is None
+    # Without a usable visibility field the private flag decides, failing
+    # toward private, never public.
+    assert await probe(200, {"private": False}) == "public"
+    assert await probe(200, {"private": True}) == "private"
+    assert await probe(200, {"visibility": ""}) == "private"
+    assert await probe(200, {"private": "nope"}) == "private"
+    assert await probe(200, {}) == "private"
+    assert await probe(200, ["not a mapping"]) == "private"
+
+
+async def test_get_issue__ok__returns_payload():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/acme/widgets/issues/12"
+        return httpx.Response(200, json={"number": 12, "title": "bug"})
+
+    issue = await _client(handler).get_issue("acme/widgets", 12)
+
+    assert issue == {"number": 12, "title": "bug"}
+
+
+async def test_get_issue__missing_or_gone__returns_none():
+    for status in (404, 410):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(status, json={"message": "Not Found"})
+
+        assert await _client(handler).get_issue("acme/widgets", 12) is None
+
+
+async def test_get_issue__server_error__raises():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await _client(handler).get_issue("acme/widgets", 12)
+
+
 async def test_post_review__findings__posts_batched_comment_review():
     captured = {}
 

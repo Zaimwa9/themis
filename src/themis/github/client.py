@@ -140,6 +140,41 @@ class GitHubClient:
         response.raise_for_status()
         return dict(response.json())
 
+    async def get_repo_visibility(self, repo: str) -> str | None:
+        """The repository's visibility (`public`, `private`, or `internal`
+        on GitHub Enterprise), or None when the token cannot see it at all.
+
+        `private` alone is not the boundary: an Enterprise internal repo
+        can report `private: false` while its content is only visible to
+        the enterprise. Callers gating confidentiality-sensitive fetches
+        must require an explicit `public`; a payload without a usable
+        `visibility` field falls back to the `private` flag, failing
+        toward `private`."""
+        response = await self._client.get(f"{self._api_url}/repos/{repo}")
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return "private"
+        visibility = payload.get("visibility")
+        if isinstance(visibility, str) and visibility:
+            return visibility
+        return "public" if payload.get("private") is False else "private"
+
+    async def get_issue(self, repo: str, number: int) -> dict[str, Any] | None:
+        """Issue or pull request by number, or None when it does not exist or
+        the token cannot see it (GitHub answers 404 for both). The REST
+        issues endpoint covers PRs too; a PR payload carries a
+        `pull_request` key."""
+        response = await self._client.get(
+            f"{self._api_url}/repos/{repo}/issues/{number}"
+        )
+        if response.status_code in (404, 410):
+            return None
+        response.raise_for_status()
+        return dict(response.json())
+
     async def get_ci_snapshot(self, repo: str, commit_sha: str) -> dict[str, Any]:
         """Return one non-blocking snapshot of checks and legacy statuses.
 
