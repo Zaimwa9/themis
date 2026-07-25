@@ -473,3 +473,44 @@ def test_run_bootstrap__codex_without_auth__mints_dedicated_chain(
     run_bootstrap(options(tmp_path, engine="codex", codex_auth=None))
 
     assert seen_options["options"].codex_auth == minted["home"] / "auth.json"
+
+
+def test_write_deployment__claude_token__lands_in_env(tmp_path):
+    output = tmp_path / "deployment"
+    opts = options(output, engine="claude", claude_token="sk-ant-oat01-abc123")
+    write_deployment(opts, credentials())
+    env_text = (output / ".env").read_text()
+    assert "CLAUDE_CODE_OAUTH_TOKEN='sk-ant-oat01-abc123'" in env_text
+
+
+def test_mint_claude_token__runs_setup_token_then_prompts_for_paste(monkeypatch):
+    # setup-token is interactive (browser + code paste-back), so it runs
+    # with inherited stdio and the token is collected via input().
+    calls = []
+    monkeypatch.setattr(
+        bootstrap.subprocess, "run",
+        lambda command, **kwargs: calls.append(command)
+        or subprocess.CompletedProcess(command, 0),
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "  sk-ant-oat01-tok  ")
+    assert bootstrap.mint_claude_token() == "sk-ant-oat01-tok"
+    assert calls == [["claude", "setup-token"]]
+
+
+def test_mint_claude_token__missing_cli__raises(monkeypatch):
+    def boom(command, **kwargs):
+        raise FileNotFoundError("claude")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", boom)
+    with pytest.raises(BootstrapError, match="claude"):
+        bootstrap.mint_claude_token()
+
+
+def test_mint_claude_token__empty_paste__raises(monkeypatch):
+    monkeypatch.setattr(
+        bootstrap.subprocess, "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    with pytest.raises(BootstrapError, match="token"):
+        bootstrap.mint_claude_token()

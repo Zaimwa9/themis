@@ -48,6 +48,7 @@ class BootstrapOptions:
     image: str
     timeout: int
     open_browser: bool
+    claude_token: str | None = None
 
 
 def _validate_repo(repo: str) -> str:
@@ -307,7 +308,7 @@ def write_deployment(options: BootstrapOptions, credentials: dict[str, object]) 
         f"THEMIS_PUBLIC_URL={_dotenv(options.public_url or '')}",
         f"THEMIS_TUNNEL_API={_dotenv('http://ngrok:4040' if options.tunnel else '')}",
         f"NGROK_AUTHTOKEN={_dotenv(options.ngrok_authtoken or '')}",
-        "CLAUDE_CODE_OAUTH_TOKEN=''",
+        f"CLAUDE_CODE_OAUTH_TOKEN={_dotenv(options.claude_token or '')}",
         "GLM_API_KEY=''",
         "KIMI_API_KEY=''",
         "OPENROUTER_API_KEY=''",
@@ -354,6 +355,26 @@ def mint_codex_auth(home: Path) -> Path:
             "pass the resulting auth.json via --codex-auth"
         )
     return auth
+
+
+def mint_claude_token() -> str:
+    """Run `claude setup-token` interactively (it opens a browser and takes
+    a paste-back code on the terminal), then collect the printed token.
+    The token is static and long-lived; no rotation, no chain sharing."""
+    try:
+        completed = subprocess.run(["claude", "setup-token"])
+    except FileNotFoundError as error:
+        raise BootstrapError(
+            "claude CLI not found (npm install -g @anthropic-ai/claude-code); "
+            "or run `claude setup-token` elsewhere and put the value in .env "
+            "as CLAUDE_CODE_OAUTH_TOKEN"
+        ) from error
+    if completed.returncode != 0:
+        raise BootstrapError("claude setup-token failed; rerun the bootstrap")
+    token = input("Paste the token printed above: ").strip()
+    if not token:
+        raise BootstrapError("no token pasted; rerun the bootstrap")
+    return token
 
 
 def _page(title: str, body: str) -> bytes:
@@ -488,6 +509,8 @@ def run_bootstrap(options: BootstrapOptions) -> None:
             options = replace(
                 options, codex_auth=mint_codex_auth(Path(scratch) / "codex")
             )
+        if options.engine == "claude" and options.claude_token is None:
+            options = replace(options, claude_token=mint_claude_token())
         session = BootstrapSession(options)
         server = ThreadingHTTPServer((options.bind_host, options.bind_port), session.handler())
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -562,4 +585,7 @@ def options_from_args(args: argparse.Namespace) -> BootstrapOptions:
         image=args.image,
         timeout=args.timeout,
         open_browser=not args.no_browser,
+        # Headless escape hatch: a pre-minted token in the environment skips
+        # the interactive setup-token flow.
+        claude_token=os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or None,
     )
