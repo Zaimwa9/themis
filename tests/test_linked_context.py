@@ -56,6 +56,15 @@ def test_extract__word_adjacent_hash__not_a_reference():
     assert extract_refs(REPO, 7, "deadbeef#1 and path/to#2") == []
 
 
+def test_extract__number_without_terminator__not_a_reference():
+    # `/issues/12draft` is not issue 12; the same holds for every spelling.
+    text = (
+        "https://github.com/acme/widgets/issues/12draft and "
+        "acme/gadgets#3x and #14-fix"
+    )
+    assert extract_refs(REPO, 7, text) == []
+
+
 def test_extract__zero_and_absurd_numbers__ignored():
     assert extract_refs(REPO, 7, "#0 and #999999999999") == []
 
@@ -148,6 +157,70 @@ async def test_fetch__ref_flood__capped_fetches():
 
     assert len(linked) == MAX_LINKED_REFS
     assert gh.get_issue.await_count == MAX_LINKED_REFS
+
+
+async def test_fetch__private_sibling_reference__never_fetched():
+    # Regression for the repository confidentiality boundary: a PR
+    # description must not pull a private same-owner repository's issue
+    # into a review the reviewed repo's readers could not already see.
+    gh = AsyncMock()
+    gh.get_repo_private.return_value = True
+    gh.get_issue.return_value = _issue(12)
+
+    linked = await fetch_linked_context(
+        gh, REPO, _pr("see acme/secrets#3 and #12")
+    )
+
+    assert [item["ref"] for item in linked] == ["acme/widgets#12"]
+    gh.get_issue.assert_awaited_once_with(REPO, 12)
+
+
+async def test_fetch__public_sibling_reference__fetched():
+    gh = AsyncMock()
+    gh.get_repo_private.return_value = False
+    gh.get_issue.return_value = _issue(3)
+
+    linked = await fetch_linked_context(gh, REPO, _pr("see acme/gadgets#3"))
+
+    assert [item["ref"] for item in linked] == ["acme/gadgets#3"]
+    gh.get_repo_private.assert_awaited_once_with("acme/gadgets")
+
+
+async def test_fetch__sibling_visibility_unknown__fails_closed():
+    # None (invisible repo) and a failed visibility read both mean "not
+    # provably public": the reference is dropped, the rest still resolve.
+    gh = AsyncMock()
+    gh.get_repo_private.side_effect = [None, httpx.ConnectError("boom")]
+    gh.get_issue.return_value = _issue(12)
+
+    linked = await fetch_linked_context(
+        gh, REPO, _pr("acme/a#1 acme/b#2 #12")
+    )
+
+    assert [item["ref"] for item in linked] == ["acme/widgets#12"]
+    gh.get_issue.assert_awaited_once_with(REPO, 12)
+
+
+async def test_fetch__sibling_visibility__checked_once_per_repo():
+    gh = AsyncMock()
+    gh.get_repo_private.return_value = False
+    gh.get_issue.side_effect = [_issue(1), _issue(2)]
+
+    linked = await fetch_linked_context(
+        gh, REPO, _pr("acme/gadgets#1 acme/gadgets#2")
+    )
+
+    assert len(linked) == 2
+    gh.get_repo_private.assert_awaited_once()
+
+
+async def test_fetch__own_repo_reference__no_visibility_check():
+    gh = AsyncMock()
+    gh.get_issue.return_value = _issue(12)
+
+    await fetch_linked_context(gh, REPO, _pr("#12"))
+
+    gh.get_repo_private.assert_not_awaited()
 
 
 async def test_fetch__no_refs__no_api_calls():

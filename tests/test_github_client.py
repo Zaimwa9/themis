@@ -34,6 +34,22 @@ async def test_get_pr__ok__returns_payload():
     assert pr["head"]["sha"] == "abc123"
 
 
+async def test_get_repo_private__visibility_and_fail_closed_shapes():
+    async def probe(status: int, payload) -> bool | None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/repos/acme/widgets"
+            return httpx.Response(status, json=payload)
+        return await _client(handler).get_repo_private("acme/widgets")
+
+    assert await probe(200, {"private": False}) is False
+    assert await probe(200, {"private": True}) is True
+    assert await probe(404, {"message": "Not Found"}) is None
+    # A payload without a usable flag must read as private, never public.
+    assert await probe(200, {}) is True
+    assert await probe(200, {"private": "nope"}) is True
+    assert await probe(200, ["not a mapping"]) is True
+
+
 async def test_get_issue__ok__returns_payload():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/repos/acme/widgets/issues/12"

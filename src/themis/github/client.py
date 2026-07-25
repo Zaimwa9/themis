@@ -140,6 +140,18 @@ class GitHubClient:
         response.raise_for_status()
         return dict(response.json())
 
+    async def get_repo_private(self, repo: str) -> bool | None:
+        """Whether the repository is private, or None when the token cannot
+        see it at all. A payload without the field reads as private: callers
+        gate confidentiality-sensitive fetches on an explicit False."""
+        response = await self._client.get(f"{self._api_url}/repos/{repo}")
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json()
+        private = payload.get("private") if isinstance(payload, dict) else None
+        return private if isinstance(private, bool) else True
+
     async def get_issue(self, repo: str, number: int) -> dict[str, Any] | None:
         """Issue or pull request by number, or None when it does not exist or
         the token cannot see it (GitHub answers 404 for both). The REST

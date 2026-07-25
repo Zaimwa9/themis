@@ -273,6 +273,10 @@ Scope and bounds, in the same spirit as the rest of the trust model:
 - Same-owner references only. A reference to a repository under another
   owner is ignored; Themis never fetches third-party content on behalf of
   a PR description.
+- A cross-repository reference resolves only when the referenced
+  repository is **public**, fail closed: the installation token may reach
+  private siblings, but a PR description must never move private content
+  into a review the reviewed repo's readers could not already see.
 - At most 5 references per review, bodies clamped to 4000 characters
   (`body_truncated: true` marks a clipped body).
 - Best effort: a reference the token cannot see (deleted, private,

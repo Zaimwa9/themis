@@ -17,8 +17,8 @@ engine subscription quota). The worker
 shallow-clones the PR head, runs the configured engine (`codex exec`, or
 `claude -p` — natively or in API mode for GLM, Kimi, and OpenRouter) against your repo's review doctrine, and posts findings and a
 summary back to GitHub as the App. Issues and PRs the description references
-(`Fixes #12`, same-owner repos only) are fetched and handed to the reviewer
-as context. One image runs as an isolated controller
+(`Fixes #12`; same owner only, and only public sibling repos) are fetched
+and handed to the reviewer as context. One image runs as an isolated controller
 and agent; there is still no database, Redis, or message broker.
 
 ## Prerequisites

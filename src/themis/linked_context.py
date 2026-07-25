@@ -27,12 +27,14 @@ _MAX_REF_NUMBER = 10**8
 # The three spellings GitHub itself autolinks: a full issue/PR URL, a
 # cross-repo `owner/repo#N` shorthand, and a bare `#N`. Alternation order
 # makes the URL branch win over the bare-`#N` branch at the same position.
+# Every number requires a terminator (`/issues/12draft` is not issue 12);
+# a skipped ambiguous spelling only costs context, a misfire costs a fetch.
 _REF_PATTERN = re.compile(
     r"https://github\.com/(?P<url_owner>[A-Za-z0-9-]+)/(?P<url_repo>[\w.-]+)"
-    r"/(?:issues|pull)/(?P<url_number>\d+)"
+    r"/(?:issues|pull)/(?P<url_number>\d+)(?![\w-])"
     r"|(?<![\w.-])(?P<slug_owner>[A-Za-z0-9-]+)/(?P<slug_repo>[\w.-]+)"
-    r"#(?P<slug_number>\d+)"
-    r"|(?<![\w/])#(?P<bare_number>\d+)\b"
+    r"#(?P<slug_number>\d+)(?![\w-])"
+    r"|(?<![\w/])#(?P<bare_number>\d+)(?![\w-])"
 )
 
 
@@ -76,7 +78,13 @@ async def fetch_linked_context(
     Context improves a review but must never delay or prevent one: an
     unresolvable reference (deleted, private, malformed payload) is skipped
     with a log line, and the caps bound the extra API calls a hostile
-    description can cause."""
+    description can cause.
+
+    Cross-repository references additionally require the referenced
+    repository to be **public**, fail closed. The installation token can
+    reach private siblings, but the fetched content ends up in a review
+    the reviewed repo's readers can see — a PR description must never move
+    content across that confidentiality boundary."""
     text = f"{pr.get('title') or ''}\n{pr.get('body') or ''}"
     refs = extract_refs(repo, pr.get("number") or 0, text)
     if len(refs) > MAX_LINKED_REFS:
@@ -86,8 +94,21 @@ async def fetch_linked_context(
         )
         refs = refs[:MAX_LINKED_REFS]
     linked: list[dict[str, Any]] = []
+    cross_repo_public: dict[str, bool] = {}
     for ref_repo, number in refs:
         try:
+            key = ref_repo.casefold()
+            if key != repo.casefold():
+                if key not in cross_repo_public:
+                    cross_repo_public[key] = (
+                        await gh.get_repo_private(ref_repo) is False
+                    )
+                if not cross_repo_public[key]:
+                    logger.info(
+                        "themis_linked_ref_skipped repo=%s ref=%s#%d reason=not_public",
+                        repo, ref_repo, number,
+                    )
+                    continue
             issue = await gh.get_issue(ref_repo, number)
             if issue is None:
                 logger.info(
