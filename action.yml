@@ -1,0 +1,90 @@
+# Themis as a GitHub Action: zero-infrastructure alternative to the
+# self-hosted webhook service. One workflow run = one review or discussion
+# reply, posted with the workflow's GITHUB_TOKEN. See docs/github-action.md.
+name: 'Themis PR Review'
+description: >-
+  AI pull-request review with the Themis engine + prompt pipeline: summary,
+  inline findings, and discussion replies — no server, tunnel, or GitHub App.
+branding:
+  icon: 'eye'
+  color: 'purple'
+
+inputs:
+  engine:
+    description: >-
+      Review engine: claude, codex, glm, kimi, or openrouter. Provide the
+      matching credential as an env var on the workflow job
+      (CLAUDE_CODE_OAUTH_TOKEN, GLM_API_KEY, KIMI_API_KEY,
+      OPENROUTER_API_KEY) or via codex-auth-json for codex.
+    default: 'claude'
+  github-token:
+    description: >-
+      Token used to clone the PR and post the review. The default workflow
+      token posts as github-actions[bot]; pass a PAT (and set bot-login)
+      to post under a dedicated account.
+    default: ${{ github.token }}
+  mention:
+    description: >-
+      Mention keyword that triggers commands in PR comments, e.g.
+      "@themis review". Plain text, not a real GitHub login.
+    default: '@themis'
+  bot-login:
+    description: >-
+      Login the review comments appear under; used to recognize the bot's
+      own threads. Only change this together with a non-default token.
+    default: 'github-actions[bot]'
+  default-config:
+    description: >-
+      Instance-default .themis/config.yaml text (raw or base64) applied
+      when the repository has no config file of its own.
+    default: ''
+  codex-auth-json:
+    description: >-
+      Content of a codex auth.json (secret) for engine: codex. Written to
+      a private CODEX_HOME on the ephemeral runner before the review runs.
+    default: ''
+  codex-sandbox:
+    description: >-
+      Codex --sandbox mode (read-only, workspace-write,
+      danger-full-access). Default workspace-write.
+    default: ''
+  engine-cli-version:
+    description: npm version/tag of the engine CLI to install.
+    default: 'latest'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Install themis
+      shell: bash
+      run: uv sync --locked --no-dev --project "$GITHUB_ACTION_PATH"
+
+    - name: Install engine CLI
+      shell: bash
+      env:
+        ENGINE: ${{ inputs.engine }}
+        CLI_VERSION: ${{ inputs.engine-cli-version }}
+      run: |
+        case "$ENGINE" in
+          codex) npm install -g "@openai/codex@${CLI_VERSION}" ;;
+          claude|glm|kimi|openrouter)
+            # These engines drive the claude CLI (glm/kimi/openrouter point
+            # it at Anthropic-compatible endpoints).
+            npm install -g "@anthropic-ai/claude-code@${CLI_VERSION}" ;;
+          *) echo "unknown engine: $ENGINE" >&2; exit 1 ;;
+        esac
+
+    - name: Run themis
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        THEMIS_ENGINE: ${{ inputs.engine }}
+        THEMIS_MENTION: ${{ inputs.mention }}
+        THEMIS_BOT_LOGIN: ${{ inputs.bot-login }}
+        THEMIS_DEFAULT_REPO_CONFIG: ${{ inputs.default-config }}
+        THEMIS_CODEX_AUTH_JSON: ${{ inputs.codex-auth-json }}
+        THEMIS_CODEX_SANDBOX: ${{ inputs.codex-sandbox }}
+      run: uv run --project "$GITHUB_ACTION_PATH" python -m themis action

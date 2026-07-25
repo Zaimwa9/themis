@@ -47,6 +47,21 @@ an empty scratch workspace (logged as `themis_auth_probe`). Only a probe
 that also fails with an auth diagnostic triggers the terminal path;
 otherwise the failure stays a plain retryable engine error.
 
+### GitHub Action mode
+
+In [GitHub Action mode](github-action.md) (`python -m themis action`) the
+App, webhook, agent-service, and queue variables above do not apply. The
+action reads: `GITHUB_TOKEN` (posting + clone token), `THEMIS_ENGINE`
+(default `claude` here — the env-credential engines fit workflows best),
+`THEMIS_MENTION` (trigger keyword, default `@themis`), `THEMIS_BOT_LOGIN`
+(default `github-actions[bot]`), `THEMIS_CODEX_AUTH_JSON` (codex
+`auth.json` content, written to a private `CODEX_HOME` on the runner),
+plus `THEMIS_CODEX_SANDBOX`, `THEMIS_DEFAULT_REPO_CONFIG`,
+`THEMIS_WORKSPACE_ROOT` (default `$RUNNER_TEMP/themis`), and the engine
+credential vars, all with server-mode semantics. The `action.yml` inputs
+map onto these one-for-one, and `.themis/config.yaml` in the target repo
+applies unchanged.
+
 Names and defaults come straight from `../src/themis/config.py`, except
 `PORT` and `THEMIS_ROLE` (read in `__main__.py`), `CODEX_HOME` (set in the Dockerfile), and
 `CLAUDE_CODE_OAUTH_TOKEN`, `GLM_API_KEY`, `KIMI_API_KEY`, and
