@@ -59,7 +59,7 @@ repo with no `.themis/` directory at all gets full defaults.
 model:
   # name: gpt-5.4          # unset = engine default (codex: gpt-5.4, claude: claude-opus-4-6[1m], glm: glm-5.2, kimi: kimi-k3, openrouter: openrouter/auto)
   reasoning_effort: high   # low | medium | high (codex only; claude-harness engines ignore it)
-  # max_thinking_tokens: 31999  # claude only: pin the extended-thinking budget; unset = model's adaptive default
+  # max_thinking_tokens: 31999  # claude-harness engines only: pin the extended-thinking budget; unset = adaptive
 limits:
   timeout_seconds: 1200
   max_attempts: 2

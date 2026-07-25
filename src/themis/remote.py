@@ -25,6 +25,7 @@ class RemoteEngine:
         self, *, prompt: str, workspace: Path, model: str, effort: str,
         timeout: float, web_access: bool = False,
         native_context: bool = False, native_skills: bool = False,
+        max_thinking_tokens: int | None = None,
     ) -> str:
         payload = {
             "engine": self.name,
@@ -36,6 +37,7 @@ class RemoteEngine:
             "web_access": web_access,
             "native_context": native_context,
             "native_skills": native_skills,
+            "max_thinking_tokens": max_thinking_tokens,
         }
         try:
             async with httpx.AsyncClient(

@@ -13,13 +13,14 @@ from themis.engines.codex import CodexEngine
 async def run_codex(
     *, prompt, workspace, model, effort, timeout,
     sandbox="workspace-write", web_access=False,
-    native_context=False, native_skills=False,
+    native_context=False, native_skills=False, max_thinking_tokens=None,
 ):
     # Local adapter so the ported test bodies below stay unchanged.
     return await CodexEngine(sandbox=sandbox).run(
         prompt=prompt, workspace=workspace, model=model, effort=effort,
         timeout=timeout, web_access=web_access,
         native_context=native_context, native_skills=native_skills,
+        max_thinking_tokens=max_thinking_tokens,
     )
 
 
@@ -77,6 +78,19 @@ async def test_run_codex__argv__contains_exec_model_effort_and_prompt(
     assert "--ignore-user-config" in args
     assert "--ignore-rules" in args
     assert "review this" in args
+
+
+async def test_run_codex__max_thinking_tokens__accepted_and_ignored(
+    tmp_path, monkeypatch, workspace
+):
+    # Protocol parity only: codex thinking is driven by reasoning_effort, so
+    # the budget must neither reach argv nor the subprocess env.
+    _fake_cli(tmp_path, monkeypatch, 'echo "$@" > args.txt; env > env.txt')
+
+    await _run(workspace, max_thinking_tokens=31999)
+
+    assert "31999" not in (workspace / "args.txt").read_text()
+    assert "MAX_THINKING_TOKENS" not in (workspace / "env.txt").read_text()
 
 
 async def test_run_codex__native_context__rules_still_ignored(

@@ -37,6 +37,7 @@ class RunRequest(BaseModel):
     web_access: bool = False
     native_context: bool = False
     native_skills: bool = False
+    max_thinking_tokens: int | None = None
 
 
 def create_agent_app() -> FastAPI:
@@ -98,6 +99,7 @@ def create_agent_app() -> FastAPI:
                     web_access=request.web_access,
                     native_context=request.native_context,
                     native_skills=request.native_skills,
+                    max_thinking_tokens=request.max_thinking_tokens,
                 )
             _redact_agent_outputs(workspace)
             return {"output": redact_outbound(output)}
