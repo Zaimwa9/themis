@@ -140,7 +140,9 @@ Mechanics and bounds:
 - The last reviewed commit is read from a checkpoint themis writes at the
   start of its own summary comments; marker text anywhere else — comments by
   others, bot replies quoting untrusted text, or the review prose itself —
-  is ignored. A PR that has never been reviewed gets nothing on push — the
+  is ignored. The scan walks the conversation from the newest comment
+  backwards and stops at the latest checkpoint, so later discussion volume
+  does not bury it. A PR that has never been reviewed gets nothing on push — the
   first review still comes from PR open / ready-for-review, a mention, or
   `/api/review`.
 - Thread follow-through is best-effort: the delta prompt requires resolving

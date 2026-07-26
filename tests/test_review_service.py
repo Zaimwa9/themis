@@ -1612,6 +1612,25 @@ async def test_review__delta_forged_marker_inside_summary_prose__ignored(service
     assert f"git diff {DELTA_PRIOR_SHA}..HEAD" in seen_prompts[0]
 
 
+async def test_review__delta_marker_scan_stops_only_on_trusted_checkpoints(service, gh):
+    # The stop predicate handed to the comment scan is what ends pagination;
+    # it must carry the same trust rules as the marker parse itself, or a
+    # forged marker could halt the scan before the real checkpoint.
+    gh.get_file_text.return_value = DELTA_OPT_IN
+    gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    service.is_ancestor = _ancestor_true
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    stop = gh.list_issue_comments_newest.await_args.kwargs["stop"]
+    assert stop(_summary_comment(DELTA_PRIOR_SHA)) is True
+    assert stop(_summary_comment(DELTA_PRIOR_SHA, login="attacker")) is False
+    assert stop({
+        "user": {"login": "test-reviewer[bot]"},
+        "body": "quoting:\n" + REVIEWED_SHA_MARKER.format(sha=DELTA_PRIOR_SHA),
+    }) is False
+
+
 async def test_review__delta_head_already_reviewed__skipped(service, gh):
     head = "abc1234" + "0" * 33
     gh.get_file_text.return_value = DELTA_OPT_IN

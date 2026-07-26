@@ -2,6 +2,7 @@
 
 import base64
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -22,6 +23,12 @@ MAX_COMMENT_PAGES_TOTAL = 50
 # Same doctrine for PR conversation comments (the title-skip marker scan):
 # the bot's marker lands in the earliest pages, so a deep scan buys nothing.
 MAX_ISSUE_COMMENT_PAGES = 5
+# Backward marker scans stop at the first hit (the newest checkpoint sits at
+# the conversation tail), so they normally fetch a single page regardless of
+# this cap. It only bounds the no-checkpoint case, where conversation volume
+# alone must not be able to blind the scan — 40 pages covers 4000 comments of
+# later traffic and stays a runaway backstop, not the expected read size.
+MAX_MARKER_SCAN_PAGES = 40
 _FAILED_CHECK_CONCLUSIONS = {
     "action_required",
     "cancelled",
@@ -301,7 +308,11 @@ class GitHubClient:
         )
 
     async def list_issue_comments_newest(
-        self, repo: str, number: int, max_pages: int = MAX_ISSUE_COMMENT_PAGES
+        self,
+        repo: str,
+        number: int,
+        max_pages: int = MAX_MARKER_SCAN_PAGES,
+        stop: Callable[[dict[str, Any]], bool] | None = None,
     ) -> list[dict[str, Any]]:
         """Newest-first PR conversation comments, bounded.
 
@@ -309,7 +320,9 @@ class GitHubClient:
         from that end can never see the latest comments of a busy PR;
         GraphQL's `last`/`before` reads the tail directly. Callers scanning
         for the most recent bot marker (the delta-review base) need exactly
-        that end. Nodes are normalised to the REST comment shape
+        that end; they pass `stop` so pagination ends at the first match
+        (included in the result) instead of paying every page of a long
+        conversation. Nodes are normalised to the REST comment shape
         (`user.login`, `body`) so both listings read alike; GraphQL App
         logins lack the `[bot]` suffix, which `_bot_logins` callers accept."""
         owner, name = repo.split("/", 1)
@@ -328,10 +341,19 @@ class GitHubClient:
                     "user": {"login": (node.get("author") or {}).get("login") or ""},
                     "body": node.get("body") or "",
                 })
+                if stop is not None and stop(comments[-1]):
+                    return comments
             page_info = page["pageInfo"]
             if not page_info.get("hasPreviousPage"):
-                break
+                return comments
             cursor = page_info.get("startCursor")
+        # Exiting by cap means the conversation kept going past what we read;
+        # a caller's marker may exist deeper. Loud, so a blinded scan is
+        # diagnosable instead of looking like "no prior review".
+        logger.warning(
+            "themis_issue_comments_scan_capped repo=%s pr=%s pages=%s",
+            repo, number, max_pages,
+        )
         return comments
 
     async def list_pr_files(self, repo: str, number: int) -> list[str]:

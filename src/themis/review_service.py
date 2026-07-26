@@ -314,26 +314,36 @@ class ReviewService:
         The marker is only trusted in comments the bot itself authored; the
         newest one wins, so the scan walks the conversation newest-first -
         a bounded oldest-first read would go blind on a busy PR and silently
-        stop delta reviews there. A failed read skips the delta rather than
-        degrading to a full review: synchronize fires on every push, and a
-        transient GitHub error must not buy a full-cost review nobody asked
-        for."""
+        stop delta reviews there. The checkpoint predicate doubles as the
+        pagination stop, so the fetch ends at the latest checkpoint however
+        deep later conversation traffic buried it. A failed read skips the
+        delta rather than degrading to a full review: synchronize fires on
+        every push, and a transient GitHub error must not buy a full-cost
+        review nobody asked for."""
+        logins = _bot_logins(self.bot_login)
+
+        def is_checkpoint(comment: dict[str, Any]) -> bool:
+            if ((comment.get("user") or {}).get("login") or "") not in logins:
+                return False
+            # Anchored at the start of the body: only the controller writes
+            # there, so a marker echoed inside a bot reply (or forged inside
+            # engine-written summary prose) never counts as a checkpoint.
+            return _SUMMARY_CHECKPOINT_RE.match(comment.get("body") or "") is not None
+
         try:
-            comments = await gh.list_issue_comments_newest(repo, pr_number)
+            comments = await gh.list_issue_comments_newest(
+                repo, pr_number, stop=is_checkpoint
+            )
         except (httpx.HTTPError, GitHubGraphQLError) as error:
             logger.warning(
                 "themis_delta_comments_failed repo=%s pr=%s error=%s",
                 repo, pr_number, error,
             )
             return None
-        logins = _bot_logins(self.bot_login)
         last_sha: str | None = None
         for comment in comments:  # newest first: the first checkpoint is the latest
             if ((comment.get("user") or {}).get("login") or "") not in logins:
                 continue
-            # Anchored at the start of the body: only the controller writes
-            # there, so a marker echoed inside a bot reply (or forged inside
-            # engine-written summary prose) never counts as a checkpoint.
             match = _SUMMARY_CHECKPOINT_RE.match(comment.get("body") or "")
             if match:
                 last_sha = match.group(1)
