@@ -9,10 +9,10 @@ the workflow's own `GITHUB_TOKEN`.
 
 1. Copy [`examples/github-actions/themis-review.yml`](../examples/github-actions/themis-review.yml)
    to `.github/workflows/themis-review.yml` in the repository you want
-   reviewed. Pin the `uses: Zaimwa9/themis@…` reference in your copy to a
+   reviewed. The `uses: Zaimwa9/themis@…` reference ships pinned to a
    release commit SHA — tags and branches are mutable, and this workflow
-   hands the action your secrets. (The actions nested inside the composite
-   are already SHA-pinned.)
+   hands the action your secrets — so keep it a SHA when upgrading (the
+   actions nested inside the composite are SHA-pinned the same way).
 2. Add the engine credential as a repository (or organization) secret:
 
    | Engine | Secret | Where it comes from |
