@@ -330,9 +330,6 @@ def test_action_yml__nested_actions_pinned_to_commit_shas():
     # token and an engine credential in reach, so every third-party action
     # it pulls in must be pinned to an immutable commit SHA — a mutable tag
     # would let an upstream compromise ship straight into adopters' runs.
-    # (The example workflow's own Zaimwa9/themis reference is pinned by a
-    # follow-up once a released commit containing action.yml exists; no SHA
-    # that predates the action can be used.)
     import re
     import yaml
     spec = yaml.safe_load(
@@ -342,6 +339,30 @@ def test_action_yml__nested_actions_pinned_to_commit_shas():
     assert uses  # contract is vacuous if the steps stop using actions
     for ref in uses:
         assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", ref), (
+            f"{ref} is not pinned to a full commit SHA"
+        )
+
+
+def test_example_workflow__action_reference_pinned_to_commit_sha():
+    # Same supply-chain contract as the nested actions, closed by the
+    # post-release follow-up: the copy-paste sample hands the action the
+    # posting token and an engine credential, so it must reference an
+    # immutable release commit — never a branch or tag.
+    import re
+    import yaml
+    spec = yaml.safe_load(
+        (Path(__file__).parent.parent
+         / "examples" / "github-actions" / "themis-review.yml").read_text()
+    )
+    refs = [
+        step["uses"]
+        for job in spec["jobs"].values()
+        for step in job["steps"]
+        if step.get("uses")
+    ]
+    assert refs
+    for ref in refs:
+        assert re.fullmatch(r"Zaimwa9/themis@[0-9a-f]{40}", ref), (
             f"{ref} is not pinned to a full commit SHA"
         )
 
