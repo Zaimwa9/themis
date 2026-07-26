@@ -1563,6 +1563,46 @@ async def test_review__delta_marker_from_non_bot_author__ignored(service, gh):
     gh.post_summary_comment.assert_not_awaited()
 
 
+async def test_review__delta_marker_not_at_summary_prefix__ignored(service, gh):
+    # Bot discussion replies can echo untrusted text (a quoted marker, a
+    # future head sha); only the controller-written summary prefix counts.
+    gh.list_issue_comments_newest.return_value = [
+        {
+            "user": {"login": "test-reviewer[bot]"},
+            "body": "Answering your question:\n"
+            + REVIEWED_SHA_MARKER.format(sha=DELTA_PRIOR_SHA),
+        },
+    ]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__delta_forged_marker_inside_summary_prose__ignored(service, gh):
+    # Engine-written summary prose is agent output; a marker inside it sits
+    # after the controller-prepended checkpoint and must never override it.
+    body = (
+        "<!-- themis:summary -->\n"
+        + REVIEWED_SHA_MARKER.format(sha=DELTA_PRIOR_SHA)
+        + "\nreview text\n"
+        + REVIEWED_SHA_MARKER.format(sha="f" * 40)
+    )
+    gh.list_issue_comments_newest.return_value = [
+        {"user": {"login": "test-reviewer[bot]"}, "body": body}
+    ]
+    service.is_ancestor = _ancestor_true
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert f"git diff {DELTA_PRIOR_SHA}..HEAD" in seen_prompts[0]
+
+
 async def test_review__delta_head_already_reviewed__skipped(service, gh):
     head = "abc1234" + "0" * 33
     gh.get_pr.return_value = {**gh.get_pr.return_value, "head": {"sha": head}}
@@ -1628,6 +1668,48 @@ async def test_review__delta_comments_read_fails__skipped_not_full(service, gh):
 
     assert seen_prompts == []
     gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__delta_unaddressed_bot_thread__surfaced_in_summary(service, gh):
+    # The engine skipped a thread disposition entirely: the omission must be
+    # visible in the summary, never silently recorded as a completed review.
+    gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.is_ancestor = _ancestor_true
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    body = gh.post_summary_comment.await_args.args[2]
+    assert "were not re-checked" in body
+    assert "`a.py:3`" in body
+
+
+async def test_review__delta_thread_resolved_or_replied__no_omission_note(service, gh):
+    # The default agent resolves T_1 and replies to databaseId 11: both
+    # dispositions count, so no omission note is added.
+    gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.is_ancestor = _ancestor_true
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    body = gh.post_summary_comment.await_args.args[2]
+    assert "were not re-checked" not in body
+
+
+async def test_review__full_review_has_no_delta_omission_note(service, gh):
+    # Full reviews keep the acknowledged-section contract; the omission
+    # backstop is a delta-only surface.
+    gh.list_review_threads.return_value = [_bot_thread()]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    body = gh.post_summary_comment.await_args.args[2]
+    assert "were not re-checked" not in body
 
 
 async def test_review__non_delta_ignores_prior_markers(service, gh):

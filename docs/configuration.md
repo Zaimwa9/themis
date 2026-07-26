@@ -133,10 +133,16 @@ introduced as regular tracked findings.
 
 Mechanics and bounds:
 
-- The last reviewed commit is read from a marker themis embeds in its own
-  summary comments; markers in comments not authored by the bot are ignored.
-  A PR that has never been reviewed gets nothing on push — the first review
-  still comes from PR open / ready-for-review, a mention, or `/api/review`.
+- The last reviewed commit is read from a checkpoint themis writes at the
+  start of its own summary comments; marker text anywhere else — comments by
+  others, bot replies quoting untrusted text, or the review prose itself —
+  is ignored. A PR that has never been reviewed gets nothing on push — the
+  first review still comes from PR open / ready-for-review, a mention, or
+  `/api/review`.
+- Thread follow-through is best-effort: the delta prompt requires resolving
+  each verified-fixed finding thread and replying to each still-open one,
+  and any open finding thread the run failed to re-check is listed in the
+  summary and stays open for the next review.
 - Rapid pushes collapse: while a review for the PR is queued or running,
   further push events coalesce into a single follow-up check that runs once
   the active review finishes — it re-reads the PR head and either covers

@@ -32,7 +32,7 @@ from themis.engines import (
 )
 from themis.events import TRUSTED_ASSOCIATIONS
 from themis.github.auth import get_installation_token, make_app_jwt
-from themis.github.client import GitHubClient, GitHubGraphQLError
+from themis.github.client import SUMMARY_MARKER, GitHubClient, GitHubGraphQLError
 from themis.learning_service import LEARNING_FOOTER, LearningService
 from themis.linked_context import fetch_linked_context
 from themis.learnings import Learning, PendingStore, to_jsonl
@@ -89,10 +89,16 @@ CANCELLED_COMMENT = (
 TITLE_SKIP_MARKER = "<!-- themis:title-skip -->"
 # Embedded in every summary comment so a later push can delta-review
 # `<last-reviewed-sha>..HEAD` (issue #11). Read back only from bot-authored
-# comments: anyone can paste the marker text into a PR comment, and a forged
-# sha would silently shrink the delta under review.
+# comments whose body starts with the controller-written summary prefix:
+# anyone can paste marker text into a PR comment, bot discussion replies can
+# echo untrusted text, and even the engine-written summary prose could carry
+# a forged marker - but none of those can put one at the fixed prefix the
+# controller prepends, and a forged sha would silently shrink (or skip) the
+# delta under review.
 REVIEWED_SHA_MARKER = "<!-- themis:reviewed-sha {sha} -->"
-_REVIEWED_SHA_RE = re.compile(r"<!-- themis:reviewed-sha ([0-9a-f]{7,40}) -->")
+_SUMMARY_CHECKPOINT_RE = re.compile(
+    re.escape(SUMMARY_MARKER) + r"\n<!-- themis:reviewed-sha ([0-9a-f]{7,40}) -->\n"
+)
 TITLE_SKIPPED_COMMENT = (
     "Automatic review skipped: the PR title matches the `triggers.skip_titles` "
     "rule `{pattern}` in `.themis/config.yaml`. Mention {mention} with `review` "
@@ -322,10 +328,13 @@ class ReviewService:
             return None
         logins = _bot_logins(self.bot_login)
         last_sha: str | None = None
-        for comment in comments:  # newest first: the first marker is the latest
+        for comment in comments:  # newest first: the first checkpoint is the latest
             if ((comment.get("user") or {}).get("login") or "") not in logins:
                 continue
-            match = _REVIEWED_SHA_RE.search(comment.get("body") or "")
+            # Anchored at the start of the body: only the controller writes
+            # there, so a marker echoed inside a bot reply (or forged inside
+            # engine-written summary prose) never counts as a checkpoint.
+            match = _SUMMARY_CHECKPOINT_RE.match(comment.get("body") or "")
             if match:
                 last_sha = match.group(1)
                 break
@@ -520,6 +529,10 @@ class ReviewService:
                     _keep_bot_authored_resolutions(
                         actions, threads, self.bot_login, repo, pr_number
                     )
+                    if delta_base is not None:
+                        _note_unaddressed_threads(
+                            actions, threads, self.bot_login, repo, pr_number
+                        )
                     # Anchor to the tree codex actually reviewed: the author may
                     # have pushed between the webhook and the clone.
                     commit_sha = await self.head_sha(workspace) or pr["head"]["sha"]
@@ -1081,6 +1094,48 @@ def _enforce_delivery_modules(
             lines.append(pointer + body)
         actions.summary += heading + "\n".join(lines)
         actions.findings = []
+
+
+def _note_unaddressed_threads(
+    actions: ReviewActions, threads: list[dict[str, Any]], bot_login: str,
+    repo: str, pr_number: int,
+) -> None:
+    """Delta backstop: the prompt requires a disposition (resolve or reply)
+    for every open bot thread, but the engine is free-form and can omit one.
+    Dispositions stay best-effort - a rerun for a missed thread would double
+    engine cost and re-reply threads already answered - so an omission is
+    surfaced in the summary instead of vanishing: the thread stays open and
+    the reader sees that it was not re-checked."""
+    logins = _bot_logins(bot_login)
+    resolved = set(actions.resolve_thread_ids)
+    replied = {reply["in_reply_to"] for reply in actions.replies}
+    missed = []
+    for thread in threads:
+        if thread.get("isResolved"):
+            continue
+        nodes = thread.get("comments", {}).get("nodes", [])
+        author = (nodes[0].get("author") or {}).get("login", "") if nodes else ""
+        if author not in logins:
+            continue
+        if thread.get("id") in resolved:
+            continue
+        if any(node.get("databaseId") in replied for node in nodes):
+            continue
+        missed.append(thread)
+    if not missed:
+        return
+    logger.warning(
+        "themis_delta_threads_unaddressed repo=%s pr=%s count=%d ids=%s",
+        repo, pr_number, len(missed), [t.get("id") for t in missed],
+    )
+    lines = "\n".join(
+        f"- `{thread.get('path')}:{thread.get('line')}`" for thread in missed
+    )
+    actions.summary += (
+        f"\n\n##### {len(missed)} earlier finding(s) were not re-checked in"
+        f" this delta review\n{lines}\n\nThese threads stay open; the next"
+        " review checks them again."
+    )
 
 
 def _keep_bot_authored_resolutions(
