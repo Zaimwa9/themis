@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/Zaimwa9/themis/compare/v0.11.0...v0.11.1) (2026-07-26)
+
+
+### Bug Fixes
+
+* **action:** pin the sample workflow to the v0.11.0 release commit SHA ([#97](https://github.com/Zaimwa9/themis/issues/97)) ([7dcdd72](https://github.com/Zaimwa9/themis/commit/7dcdd72b0fd2ac64ce1e0e9f1ed21e28ebdb818d))
+
 ## [0.11.0](https://github.com/Zaimwa9/themis/compare/v0.10.0...v0.11.0) (2026-07-26)
 
 
