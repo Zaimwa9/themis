@@ -550,11 +550,15 @@ def test_example_workflow__serializes_runs_per_pr():
 
 
 def test_example_workflow__timeout_covers_default_retry_budget():
-    # Default limits: max_attempts(2) x timeout_seconds(1200s) = 40 min of
-    # engine time, plus setup/clone/posting. The sample cap must not kill
-    # the job mid-retry — that would skip the pipeline's failure comment.
+    # Derived from LimitsConfig so the sample (and the docs guidance that
+    # quotes it) can never drift from the real defaults: the full retry
+    # ladder plus setup/clone/posting headroom. An undersized cap kills the
+    # job mid-retry and the pipeline's failure comment never posts.
+    from themis.config import LimitsConfig
+    limits = LimitsConfig()
+    engine_budget_minutes = limits.max_attempts * limits.timeout_seconds / 60
     spec = _example_workflow()
-    assert spec["jobs"]["themis"]["timeout-minutes"] >= 55
+    assert spec["jobs"]["themis"]["timeout-minutes"] >= engine_budget_minutes + 15
 
 
 async def test_run_action__missing_token__raises(tmp_path, monkeypatch, fake_service):

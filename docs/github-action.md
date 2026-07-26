@@ -134,7 +134,9 @@ the boundary moves to the process level:
   entirely.
 - **Self-hosted runners** need Node 22+, `uv`-installable Python ≥ 3.12,
   and `git` on the PATH.
-- **Timeouts:** the engine timeout stays `.themis/config.yaml`'s
-  `limits.timeout_seconds` (default 20 min); set the job's
-  `timeout-minutes` above it, or the run dies without the courtesy
-  comment the pipeline posts on engine failure.
+- **Timeouts:** budget the job for the whole retry ladder, not one
+  attempt: `.themis/config.yaml` allows `limits.max_attempts` engine runs
+  of `limits.timeout_seconds` each (default 2 × 20 min), plus setup,
+  clone, and posting. The example workflow's `timeout-minutes: 60` covers
+  the defaults; raise it if you raise the limits, or the runner kills the
+  job mid-retry and the pipeline's failure comment never posts.
