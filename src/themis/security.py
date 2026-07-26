@@ -17,6 +17,7 @@ REDACTED = "[redacted]"
 # hostile PR can instruct the agent to echo secrets it legitimately holds.
 _SECRET_ENV_VARS = (
     "CLAUDE_CODE_OAUTH_TOKEN",
+    "GITHUB_TOKEN",
     "GLM_API_KEY",
     "KIMI_API_KEY",
     "OPENROUTER_API_KEY",
@@ -36,6 +37,20 @@ _TOKEN_PATTERNS = (
 
 _MIN_SECRET_LEN = 8  # a short placeholder value must never redact real prose
 
+# Secrets that live in process memory only (deliberately kept out of the
+# environment, e.g. the action-mode GitHub token handed over via file).
+_REGISTERED_SECRETS: list[str] = []
+
+
+def register_secret(value: str) -> None:
+    """Mark a value for outbound redaction without putting it in the env.
+
+    For credentials that must never appear in the process environment —
+    the env is readable through /proc/<pid>/environ by any same-UID
+    process, which in action mode includes the engine child."""
+    if len(value) >= _MIN_SECRET_LEN and value not in _REGISTERED_SECRETS:
+        _REGISTERED_SECRETS.append(value)
+
 
 def verify_signature(payload: bytes, secret: str, signature_header: str | None) -> bool:
     if not secret:
@@ -47,7 +62,7 @@ def verify_signature(payload: bytes, secret: str, signature_header: str | None) 
 
 
 def _secret_values() -> list[str]:
-    raw_values = []
+    raw_values = list(_REGISTERED_SECRETS)
     for var in _SECRET_ENV_VARS:
         value = os.environ.get(var) or ""
         if len(value) < _MIN_SECRET_LEN:

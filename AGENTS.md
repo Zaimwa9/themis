@@ -19,6 +19,8 @@ CI runs exactly pytest and ruff; both must pass.
 
 - `src/themis/app.py` — FastAPI app factory, startup (webhook self-registration)
 - `src/themis/router.py` — webhook + API routes; events become queue jobs
+- `src/themis/action.py` — GitHub Actions entrypoint (`action.yml` at the
+  repo root); one event, one synchronous job, static `GITHUB_TOKEN`
 - `src/themis/events.py` — webhook payload parsing, trigger decisions
 - `src/themis/queue.py` — in-memory queue, one worker, dedup
 - `src/themis/review_service.py` — review pipeline: clone, engine run, parse, post

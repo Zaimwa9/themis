@@ -8,6 +8,7 @@ import sys
 import httpx
 import uvicorn
 
+from themis.action import main as action_main
 from themis.app import create_app
 from themis.agent import create_agent_app
 from themis.bootstrap import BootstrapError, add_init_parser, options_from_args, run_bootstrap
@@ -30,8 +31,14 @@ def cli(argv: list[str] | None = None) -> None:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("controller", help="run the GitHub-facing controller")
     subparsers.add_parser("agent", help="run the isolated model agent")
+    subparsers.add_parser(
+        "action", help="review the triggering event inside GitHub Actions"
+    )
     add_init_parser(subparsers)
     args = parser.parse_args(argv)
+    if args.command == "action":
+        action_main()
+        return
     if args.command == "init":
         try:
             run_bootstrap(options_from_args(args))

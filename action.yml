@@ -1,0 +1,141 @@
+# Themis as a GitHub Action: zero-infrastructure alternative to the
+# self-hosted webhook service. One workflow run = one review or discussion
+# reply, posted with the workflow's GITHUB_TOKEN. See docs/github-action.md.
+name: 'Themis PR Review'
+description: >-
+  AI pull-request review with the Themis engine + prompt pipeline: summary,
+  inline findings, and discussion replies — no server, tunnel, or GitHub App.
+branding:
+  icon: 'eye'
+  color: 'purple'
+
+inputs:
+  engine:
+    description: >-
+      Review engine: claude, codex, glm, kimi, or openrouter. Provide the
+      matching credential as an env var on the workflow job
+      (CLAUDE_CODE_OAUTH_TOKEN, GLM_API_KEY, KIMI_API_KEY,
+      OPENROUTER_API_KEY) or via codex-auth-json for codex.
+    default: 'claude'
+  github-token:
+    description: >-
+      Token used to clone the PR and post the review. The default workflow
+      token posts as github-actions[bot]; pass a PAT (and set bot-login)
+      to post under a dedicated account.
+    default: ${{ github.token }}
+  mention:
+    description: >-
+      Mention keyword that triggers commands in PR comments, e.g.
+      "@themis review". Plain text, not a real GitHub login.
+    default: '@themis'
+  bot-login:
+    description: >-
+      Login the review comments appear under; used to recognize the bot's
+      own threads. Only change this together with a non-default token.
+    default: 'github-actions[bot]'
+  default-config:
+    description: >-
+      Instance-default .themis/config.yaml text (raw or base64) applied
+      when the repository has no config file of its own.
+    default: ''
+  codex-auth-json:
+    description: >-
+      Content of a codex auth.json (secret) for engine: codex. Written to
+      a private CODEX_HOME on the ephemeral runner before the review runs.
+    default: ''
+  codex-sandbox:
+    description: >-
+      Codex --sandbox mode (read-only, workspace-write,
+      danger-full-access). Default workspace-write.
+    default: ''
+  engine-cli-version:
+    description: >-
+      npm version/tag applied to both engine CLIs (@openai/codex and
+      @anthropic-ai/claude-code; both install so repo-config engine
+      overrides always have their executable). Installs are cached across
+      runs keyed on the resolved versions, so even `latest` only pays the
+      install when a new release ships.
+    default: 'latest'
+
+runs:
+  using: 'composite'
+  steps:
+    # Third-party actions are pinned to full commit SHAs: this composite
+    # runs with the posting token and an engine credential in reach, and a
+    # mutable tag would let an upstream compromise ship straight into
+    # adopters' runs. Bump the SHA and the tag comment together.
+    - name: Set up uv
+      uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+
+    - name: Install themis
+      shell: bash
+      run: uv sync --locked --no-dev --project "$GITHUB_ACTION_PATH"
+
+    - name: Resolve engine CLI versions
+      # Concrete versions, not the raw input tag: `latest` as a cache key
+      # would pin the first cached release forever, while a resolved version
+      # misses the cache exactly when a new release ships. The private npm
+      # prefix goes on PATH here so cached binaries are found whether or not
+      # the install step runs (engines receive PATH via the env allowlist).
+      id: engine-clis
+      shell: bash
+      env:
+        CLI_VERSION: ${{ inputs.engine-cli-version }}
+      run: |
+        resolve() { npm view "$1@${CLI_VERSION}" version | tail -n 1 | awk '{print $NF}' | tr -d "'"; }
+        {
+          echo "codex=$(resolve @openai/codex)"
+          echo "claude=$(resolve @anthropic-ai/claude-code)"
+          echo "prefix=${RUNNER_TEMP}/themis-npm"
+        } >> "$GITHUB_OUTPUT"
+        echo "${RUNNER_TEMP}/themis-npm/bin" >> "$GITHUB_PATH"
+
+    - name: Restore engine CLIs from cache
+      id: engine-cli-cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: ${{ steps.engine-clis.outputs.prefix }}
+        key: themis-engine-clis-${{ runner.os }}-${{ runner.arch }}-codex-${{ steps.engine-clis.outputs.codex }}-claude-${{ steps.engine-clis.outputs.claude }}
+
+    - name: Install engine CLIs
+      # Both families, unconditionally: `.themis/config.yaml` may override
+      # `engine:` per repo at runtime, so installing only the input engine's
+      # CLI would strand a valid cross-family override without its
+      # executable. Credentials gate which engines actually run, exactly
+      # like server mode. (codex has its own CLI; claude/glm/kimi/openrouter
+      # all drive the claude CLI against Anthropic-compatible endpoints.)
+      if: steps.engine-cli-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        NPM_CONFIG_PREFIX: ${{ steps.engine-clis.outputs.prefix }}
+        CODEX_VERSION: ${{ steps.engine-clis.outputs.codex }}
+        CLAUDE_VERSION: ${{ steps.engine-clis.outputs.claude }}
+      run: |
+        npm install -g "@openai/codex@${CODEX_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_VERSION}"
+
+    - name: Stage the GitHub token
+      # File handoff on purpose: env on the run step would sit in the
+      # exec-time environment of its bash/uv/python ancestry for the whole
+      # engine run, readable via /proc/<pid>/environ by the same-UID engine
+      # child running on attacker-influenced PR content. This step's shell
+      # exits (taking its environment with it) before any engine starts;
+      # the entrypoint reads the file, deletes it, and keeps the token in
+      # process memory only.
+      shell: bash
+      env:
+        THEMIS_STAGED_TOKEN: ${{ inputs.github-token }}
+      run: |
+        umask 077
+        printf '%s' "$THEMIS_STAGED_TOKEN" > "$RUNNER_TEMP/themis-github-token"
+
+    - name: Run themis
+      shell: bash
+      env:
+        THEMIS_GITHUB_TOKEN_FILE: ${{ runner.temp }}/themis-github-token
+        THEMIS_ENGINE: ${{ inputs.engine }}
+        THEMIS_MENTION: ${{ inputs.mention }}
+        THEMIS_BOT_LOGIN: ${{ inputs.bot-login }}
+        THEMIS_DEFAULT_REPO_CONFIG: ${{ inputs.default-config }}
+        THEMIS_CODEX_AUTH_JSON: ${{ inputs.codex-auth-json }}
+        THEMIS_CODEX_SANDBOX: ${{ inputs.codex-sandbox }}
+      run: uv run --project "$GITHUB_ACTION_PATH" python -m themis action

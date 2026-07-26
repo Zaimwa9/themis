@@ -56,6 +56,15 @@ def parse_event(
     return None
 
 
+def _installation_id(payload: dict[str, Any]) -> int:
+    """The App installation id, or 0 when the payload carries none.
+
+    Webhook deliveries from a GitHub App always include `installation`;
+    GitHub Actions event payloads never do (no App is involved), and action
+    mode's static-token `get_token` ignores the id entirely."""
+    return (payload.get("installation") or {}).get("id", 0)
+
+
 def _parse_pull_request(payload: dict[str, Any]) -> ReviewJob | None:
     if payload.get("action") not in _PR_ACTIONS:
         return None
@@ -67,7 +76,7 @@ def _parse_pull_request(payload: dict[str, Any]) -> ReviewJob | None:
     return ReviewJob(
         repo=payload["repository"]["full_name"],
         pr_number=pr["number"],
-        installation_id=payload["installation"]["id"],
+        installation_id=_installation_id(payload),
         auto=True,
     )
 
@@ -105,7 +114,7 @@ def _parse_issue_comment(
         return None
     repo = payload["repository"]["full_name"]
     pr_number = issue["number"]
-    installation_id = payload["installation"]["id"]
+    installation_id = _installation_id(payload)
     command, *remainder = rest.split(maxsplit=1)
     if command.lower().strip(".!?") == "review":
         extra_context = remainder[0].strip() if remainder else ""
@@ -148,7 +157,7 @@ def _parse_review_comment(payload: dict[str, Any], mention: str) -> DiscussJob |
     return DiscussJob(
         repo=payload["repository"]["full_name"],
         pr_number=payload["pull_request"]["number"],
-        installation_id=payload["installation"]["id"],
+        installation_id=_installation_id(payload),
         comment_id=comment["id"],
         body=body,
         kind="thread",
