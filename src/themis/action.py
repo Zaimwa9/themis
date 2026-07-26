@@ -26,7 +26,7 @@ from themis.engines import ENGINE_NAMES, resolve
 from themis.events import DiscussJob, ReviewJob, parse_event
 from themis.github.client import GitHubClient
 from themis.review_service import ReviewService
-from themis.security import register_secret
+from themis.security import redact_outbound, register_secret
 from themis.trusted_context import apply_trusted_context
 from themis.workspace import prepare_workspace, remove_workspace
 
@@ -215,7 +215,9 @@ async def _refuse_foreign_head(service: ReviewService, token: str, job) -> bool:
             job.repo, job.pr_number, head_repo,
         )
         try:
-            await gh.post_issue_comment(job.repo, job.pr_number, FORK_SKIPPED_COMMENT)
+            await gh.post_issue_comment(
+                job.repo, job.pr_number, redact_outbound(FORK_SKIPPED_COMMENT)
+            )
         except httpx.HTTPError as error:
             # Best effort: fork-triggered `pull_request` runs hold a
             # read-only token and cannot comment.

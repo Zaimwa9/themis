@@ -498,6 +498,61 @@ async def test_run_action__fork_thread_reply__refused_without_engine(
     assert service.calls == []
 
 
+async def test_run_action__fork_refusal_comment_is_redacted(tmp_path, monkeypatch):
+    # Every string that reaches GitHub passes redact_outbound — including
+    # this courtesy comment, should it ever interpolate hostile or secret
+    # content.
+    service = _install_fake_service(
+        monkeypatch, {"full_name": "attacker/widgets"}
+    )
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-fork-secret")
+    monkeypatch.setattr(
+        action_module, "FORK_SKIPPED_COMMENT",
+        "No review. Diagnostics: sk-ant-oat01-fork-secret",
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    _write_event(
+        tmp_path, monkeypatch, "issue_comment",
+        _issue_comment_payload(f"{DEFAULT_MENTION} review"),
+    )
+
+    await run_action()
+
+    [(_, _, body)] = service.client.comments
+    assert "sk-ant-oat01-fork-secret" not in body
+    assert "[redacted]" in body
+
+
+def _example_workflow() -> dict:
+    import yaml
+    return yaml.safe_load(
+        (
+            Path(__file__).parent.parent
+            / "examples" / "github-actions" / "themis-review.yml"
+        ).read_text()
+    )
+
+
+def test_example_workflow__serializes_runs_per_pr():
+    # Round-4 review major: without a per-PR concurrency group, an auto
+    # review and a mention command (or two quick comments) run two engines
+    # against the same PR in parallel.
+    spec = _example_workflow()
+    concurrency = spec.get("concurrency") or spec["jobs"]["themis"].get("concurrency")
+    assert concurrency, "example workflow must declare a concurrency group"
+    group = concurrency["group"]
+    assert "number" in group  # keyed per PR, not per workflow
+    assert concurrency.get("cancel-in-progress") is False  # queue, don't kill
+
+
+def test_example_workflow__timeout_covers_default_retry_budget():
+    # Default limits: max_attempts(2) x timeout_seconds(1200s) = 40 min of
+    # engine time, plus setup/clone/posting. The sample cap must not kill
+    # the job mid-retry — that would skip the pipeline's failure comment.
+    spec = _example_workflow()
+    assert spec["jobs"]["themis"]["timeout-minutes"] >= 55
+
+
 async def test_run_action__missing_token__raises(tmp_path, monkeypatch, fake_service):
     _write_event(tmp_path, monkeypatch, "pull_request", _pr_payload())
 
