@@ -73,7 +73,13 @@ def _enqueue(
                 author_association=job.author_association,
                 author_login=job.author_login,
             )
-    return queue.enqueue(_job_id(job), run)
+    # A push during a running review must not vanish: the review's summary
+    # records the sha it cloned, so commits pushed after that clone would
+    # otherwise stay unreviewed until the next push. Delta jobs re-check the
+    # PR head against the last-reviewed marker and exit cheaply when the
+    # finished review already covered it, so a follow-up is always safe.
+    followup = isinstance(job, ReviewJob) and job.delta
+    return queue.enqueue(_job_id(job), run, followup=followup)
 
 
 def _skip_ack(job: ReviewJob | DiscussJob) -> bool:

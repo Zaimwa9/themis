@@ -340,6 +340,71 @@ async def test_list_review_threads__two_pages__follows_cursor_and_returns_all():
     assert requests[1]["cursor"] == "CUR_1"
 
 
+async def test_list_issue_comments_newest__normalises_to_rest_shape_newest_first():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/graphql"
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "comments": {
+                "pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                # GraphQL page order is oldest -> newest.
+                "nodes": [
+                    {"author": {"login": "dev"}, "body": "old"},
+                    {"author": None, "body": "ghost"},  # deleted account
+                    {"author": {"login": "themis-reviewer"}, "body": "new"},
+                ],
+            }}}}})
+
+    comments = await _client(handler).list_issue_comments_newest("acme/widgets", 7)
+
+    assert [c["user"]["login"] for c in comments] == ["themis-reviewer", "", "dev"]
+    assert [c["body"] for c in comments] == ["new", "ghost", "old"]
+
+
+async def test_list_issue_comments_newest__pages_backwards_from_the_tail():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        variables = json.loads(request.content)["variables"]
+        requests.append(variables)
+        if variables["cursor"] is None:
+            return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+                "comments": {
+                    "pageInfo": {"hasPreviousPage": True, "startCursor": "CUR_0"},
+                    "nodes": [{"author": {"login": "c"}, "body": "3"},
+                              {"author": {"login": "d"}, "body": "4"}],
+                }}}}})
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "comments": {
+                "pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                "nodes": [{"author": {"login": "a"}, "body": "1"},
+                          {"author": {"login": "b"}, "body": "2"}],
+            }}}}})
+
+    comments = await _client(handler).list_issue_comments_newest("acme/widgets", 7)
+
+    assert [c["body"] for c in comments] == ["4", "3", "2", "1"]
+    assert requests[1]["cursor"] == "CUR_0"
+
+
+async def test_list_issue_comments_newest__bounded_page_count():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "comments": {
+                "pageInfo": {"hasPreviousPage": True, "startCursor": f"CUR_{len(calls)}"},
+                "nodes": [{"author": {"login": "x"}, "body": "spam"}] * 100,
+            }}}}})
+
+    comments = await _client(handler).list_issue_comments_newest(
+        "acme/widgets", 7, max_pages=2
+    )
+
+    assert len(calls) == 2
+    assert len(comments) == 200
+
+
 async def test_list_review_threads__graphql_errors__raises():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

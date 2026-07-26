@@ -138,8 +138,10 @@ Mechanics and bounds:
   A PR that has never been reviewed gets nothing on push — the first review
   still comes from PR open / ready-for-review, a mention, or `/api/review`.
 - Rapid pushes collapse: while a review for the PR is queued or running,
-  further push events are dropped, and the next delta covers everything since
-  the last review in one run.
+  further push events coalesce into a single follow-up check that runs once
+  the active review finishes — it re-reads the PR head and either covers
+  everything pushed since the last review in one delta or exits without
+  cost when that review already reached the head.
 - After a force-push (or when the shallow clone no longer reaches the last
   reviewed commit) there is no trustworthy delta, so the push is reviewed as
   a full review instead.

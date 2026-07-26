@@ -41,6 +41,101 @@ async def test_duplicate_id_rejected_while_active():
 
 
 @pytest.mark.asyncio
+async def test_followup_rejected_while_active_runs_after_completion():
+    # A push during a running review must be re-examined once the review
+    # finishes, not silently dropped (issue #11 delta reviews).
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    followup_ran = asyncio.Event()
+
+    async def job():
+        await release.wait()
+
+    async def followup():
+        followup_ran.set()
+
+    queue.start()
+    assert queue.enqueue("review:a/b#1", job) is True
+    await asyncio.sleep(0.05)  # running
+    assert queue.enqueue("review:a/b#1", followup, followup=True) is False
+    assert not followup_ran.is_set()
+    release.set()
+    await asyncio.wait_for(followup_ran.wait(), 2)
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_followup_coalesces_newest_wins():
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    ran: list[str] = []
+
+    async def job():
+        await release.wait()
+
+    def make(tag: str):
+        async def followup():
+            ran.append(tag)
+        return followup
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job)
+    await asyncio.sleep(0.05)
+    queue.enqueue("review:a/b#1", make("first"), followup=True)
+    queue.enqueue("review:a/b#1", make("second"), followup=True)
+    release.set()
+    await asyncio.sleep(0.05)
+    assert ran == ["second"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_followup_id_stays_deduplicated_until_it_runs():
+    # Rejections arriving after the follow-up is requeued but before it runs
+    # must keep coalescing instead of stacking extra jobs.
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    runs: list[str] = []
+
+    async def job():
+        await release.wait()
+
+    async def followup():
+        runs.append("followup")
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job)
+    await asyncio.sleep(0.05)
+    queue.enqueue("review:a/b#1", followup, followup=True)
+    release.set()
+    await asyncio.sleep(0.05)
+    assert runs == ["followup"]
+    assert queue.enqueue("review:a/b#1", followup, followup=True) is True
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_without_followup_never_reruns():
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    runs = 0
+
+    async def job():
+        nonlocal runs
+        runs += 1
+        await release.wait()
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job)
+    await asyncio.sleep(0.05)
+    queue.enqueue("review:a/b#1", job)  # webhook redelivery: plain duplicate
+    release.set()
+    await asyncio.sleep(0.05)
+    assert runs == 1
+    await queue.stop()
+
+
+@pytest.mark.asyncio
 async def test_jobs_run_one_at_a_time():
     queue = InMemoryJobQueue()
     running = 0

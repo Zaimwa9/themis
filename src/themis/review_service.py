@@ -306,12 +306,15 @@ class ReviewService:
         """Sha the last themis review covered, or None when no delta should run.
 
         The marker is only trusted in comments the bot itself authored; the
-        newest one wins. A failed read skips the delta rather than degrading
-        to a full review: synchronize fires on every push, and a transient
-        GitHub error must not buy a full-cost review nobody asked for."""
+        newest one wins, so the scan walks the conversation newest-first -
+        a bounded oldest-first read would go blind on a busy PR and silently
+        stop delta reviews there. A failed read skips the delta rather than
+        degrading to a full review: synchronize fires on every push, and a
+        transient GitHub error must not buy a full-cost review nobody asked
+        for."""
         try:
-            comments = await gh.list_issue_comments(repo, pr_number)
-        except httpx.HTTPError as error:
+            comments = await gh.list_issue_comments_newest(repo, pr_number)
+        except (httpx.HTTPError, GitHubGraphQLError) as error:
             logger.warning(
                 "themis_delta_comments_failed repo=%s pr=%s error=%s",
                 repo, pr_number, error,
@@ -319,12 +322,13 @@ class ReviewService:
             return None
         logins = _bot_logins(self.bot_login)
         last_sha: str | None = None
-        for comment in comments:
+        for comment in comments:  # newest first: the first marker is the latest
             if ((comment.get("user") or {}).get("login") or "") not in logins:
                 continue
             match = _REVIEWED_SHA_RE.search(comment.get("body") or "")
             if match:
                 last_sha = match.group(1)
+                break
         if last_sha is None:
             logger.info(
                 "themis_delta_no_prior_review repo=%s pr=%s", repo, pr_number

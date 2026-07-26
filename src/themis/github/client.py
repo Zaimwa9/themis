@@ -82,6 +82,19 @@ mutation($threadId: ID!) {
 }
 """
 
+_PR_COMMENTS_BACKWARD_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      comments(last: 100, before: $cursor) {
+        pageInfo { hasPreviousPage startCursor }
+        nodes { author { login } body }
+      }
+    }
+  }
+}
+"""
+
 
 class GitHubClient:
     def __init__(
@@ -286,6 +299,40 @@ class GitHubClient:
             f"{self._api_url}/repos/{repo}/issues/{number}/comments",
             max_pages=MAX_ISSUE_COMMENT_PAGES,
         )
+
+    async def list_issue_comments_newest(
+        self, repo: str, number: int, max_pages: int = MAX_ISSUE_COMMENT_PAGES
+    ) -> list[dict[str, Any]]:
+        """Newest-first PR conversation comments, bounded.
+
+        The REST listing pages in ascending order only, so a bounded read
+        from that end can never see the latest comments of a busy PR;
+        GraphQL's `last`/`before` reads the tail directly. Callers scanning
+        for the most recent bot marker (the delta-review base) need exactly
+        that end. Nodes are normalised to the REST comment shape
+        (`user.login`, `body`) so both listings read alike; GraphQL App
+        logins lack the `[bot]` suffix, which `_bot_logins` callers accept."""
+        owner, name = repo.split("/", 1)
+        comments: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _ in range(max_pages):
+            data = await self._graphql(
+                _PR_COMMENTS_BACKWARD_QUERY,
+                {"owner": owner, "name": name, "number": number, "cursor": cursor},
+            )
+            page = data["repository"]["pullRequest"]["comments"]
+            # Each page arrives oldest->newest; reverse it so the whole
+            # result is newest-first across pages.
+            for node in reversed(page["nodes"]):
+                comments.append({
+                    "user": {"login": (node.get("author") or {}).get("login") or ""},
+                    "body": node.get("body") or "",
+                })
+            page_info = page["pageInfo"]
+            if not page_info.get("hasPreviousPage"):
+                break
+            cursor = page_info.get("startCursor")
+        return comments
 
     async def list_pr_files(self, repo: str, number: int) -> list[str]:
         """All changed file paths in the PR (paginated; authoritative merge-base diff)."""

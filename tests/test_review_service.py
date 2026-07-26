@@ -96,6 +96,7 @@ def gh() -> AsyncMock:
     # to exercise per-repo behavior config.
     mock.get_file_text.return_value = None
     mock.list_issue_comments.return_value = []
+    mock.list_issue_comments_newest.return_value = []
     return mock
 
 
@@ -1506,7 +1507,7 @@ async def test_review__non_hex_commit_sha__marker_omitted(service, gh):
 
 
 async def test_review__delta_with_prior_review__prompt_scoped_to_delta(service, gh):
-    gh.list_issue_comments.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
     service.is_ancestor = _ancestor_true
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
@@ -1518,10 +1519,13 @@ async def test_review__delta_with_prior_review__prompt_scoped_to_delta(service, 
 
 
 async def test_review__delta_newest_bot_marker_wins(service, gh):
+    # The listing is newest-first; a bot comment without a marker (courtesy
+    # comment) must not stop the scan before the latest summary.
     newer = "feedfacefeedfacefeedfacefeedfacefeedface"
-    gh.list_issue_comments.return_value = [
-        _summary_comment(DELTA_PRIOR_SHA),
+    gh.list_issue_comments_newest.return_value = [
+        {"user": {"login": "test-reviewer[bot]"}, "body": "quota reached"},
         _summary_comment(newer),
+        _summary_comment(DELTA_PRIOR_SHA),
     ]
     service.is_ancestor = _ancestor_true
     seen_prompts: list = []
@@ -1533,7 +1537,7 @@ async def test_review__delta_newest_bot_marker_wins(service, gh):
 
 
 async def test_review__delta_without_prior_review__skipped(service, gh):
-    gh.list_issue_comments.return_value = []
+    gh.list_issue_comments_newest.return_value = []
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
 
@@ -1547,7 +1551,7 @@ async def test_review__delta_without_prior_review__skipped(service, gh):
 async def test_review__delta_marker_from_non_bot_author__ignored(service, gh):
     # Anyone can paste the marker into a PR comment; a forged sha would
     # shrink the delta under review. Only bot-authored comments count.
-    gh.list_issue_comments.return_value = [
+    gh.list_issue_comments_newest.return_value = [
         _summary_comment(DELTA_PRIOR_SHA, login="attacker")
     ]
     seen_prompts: list = []
@@ -1562,7 +1566,7 @@ async def test_review__delta_marker_from_non_bot_author__ignored(service, gh):
 async def test_review__delta_head_already_reviewed__skipped(service, gh):
     head = "abc1234" + "0" * 33
     gh.get_pr.return_value = {**gh.get_pr.return_value, "head": {"sha": head}}
-    gh.list_issue_comments.return_value = [_summary_comment(head)]
+    gh.list_issue_comments_newest.return_value = [_summary_comment(head)]
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
 
@@ -1575,7 +1579,7 @@ async def test_review__delta_head_already_reviewed__skipped(service, gh):
 async def test_review__delta_base_not_ancestor__full_review_fallback(service, gh):
     # Force-push rewrote the reviewed commit away: the delta base is unusable,
     # so the push still gets reviewed - as a full review.
-    gh.list_issue_comments.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
 
     async def not_ancestor(workspace, sha):
         return False
@@ -1591,7 +1595,7 @@ async def test_review__delta_base_not_ancestor__full_review_fallback(service, gh
 
 async def test_review__delta_disabled_by_repo_config__skipped(service, gh):
     gh.get_file_text.return_value = "triggers:\n  delta_review: false\n"
-    gh.list_issue_comments.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
 
@@ -1603,7 +1607,7 @@ async def test_review__delta_disabled_by_repo_config__skipped(service, gh):
 
 async def test_review__delta_respects_auto_review_opt_out(service, gh):
     gh.get_file_text.return_value = "triggers:\n  auto_review: false\n"
-    gh.list_issue_comments.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
 
@@ -1616,7 +1620,7 @@ async def test_review__delta_respects_auto_review_opt_out(service, gh):
 async def test_review__delta_comments_read_fails__skipped_not_full(service, gh):
     # A transient GitHub error on the marker scan must not buy a full-cost
     # review nobody asked for, and must not raise out of the job.
-    gh.list_issue_comments.side_effect = _http_error(500)
+    gh.list_issue_comments_newest.side_effect = _http_error(500)
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
 
@@ -1629,7 +1633,7 @@ async def test_review__delta_comments_read_fails__skipped_not_full(service, gh):
 async def test_review__non_delta_ignores_prior_markers(service, gh):
     # A mention-triggered or opened-PR review stays a full review even when
     # markers exist.
-    gh.list_issue_comments.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
 
