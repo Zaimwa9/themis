@@ -17,13 +17,14 @@ permissions:
   checks: read          # CI snapshot in the review context
   statuses: read
 
-# One run per PR at a time (the server deployment's queue dedups the same
-# way). cancel-in-progress stays false: a mention command must queue behind
-# a running review, not kill it mid-post. GitHub keeps a single pending run
-# per group, which is exactly the dedup the queue provides.
+# One run per PR at a time. cancel-in-progress stays false: a mention
+# command must queue behind a running review, not kill it mid-post. Without
+# queue: max GitHub keeps a single pending run per group and silently
+# replaces it when a third event arrives; max retains every request, FIFO.
 concurrency:
   group: themis-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   themis:

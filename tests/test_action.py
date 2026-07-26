@@ -543,6 +543,10 @@ def test_example_workflow__serializes_runs_per_pr():
     group = concurrency["group"]
     assert "number" in group  # keyed per PR, not per workflow
     assert concurrency.get("cancel-in-progress") is False  # queue, don't kill
+    # Default queue depth is one pending run: a third event would silently
+    # replace an earlier pending review request. queue: max keeps every
+    # request, FIFO (round-5 review major).
+    assert concurrency.get("queue") == "max"
 
 
 def test_example_workflow__timeout_covers_default_retry_budget():
