@@ -300,6 +300,31 @@ def test_action_yml__installs_both_engine_cli_families():
     assert "case" not in run  # no per-engine branching: both always install
 
 
+def test_action_yml__engine_cli_installs_are_cached_by_resolved_version():
+    # The npm installs are the biggest fixed cost of a run (~40-90s). They
+    # are cached keyed on the *resolved* versions — never the raw input tag:
+    # `latest` as a cache key would pin the first cached release forever,
+    # while a resolved version naturally misses the cache when a new release
+    # ships. The install step must be skipped entirely on a cache hit.
+    import yaml
+    spec = yaml.safe_load(
+        (Path(__file__).parent.parent / "action.yml").read_text()
+    )
+    steps = spec["runs"]["steps"]
+
+    [resolve] = [s for s in steps if "npm view" in (s.get("run") or "")]
+    assert "GITHUB_OUTPUT" in resolve["run"]  # concrete versions as outputs
+    assert "GITHUB_PATH" in resolve["run"]  # cached bin dir reaches engines
+
+    [cache] = [s for s in steps if (s.get("uses") or "").startswith("actions/cache@")]
+    key = cache["with"]["key"]
+    assert "steps." in key and "outputs" in key  # keyed on resolved versions
+    assert "inputs.engine-cli-version" not in key
+
+    [install] = [s for s in steps if "npm install" in (s.get("run") or "")]
+    assert "cache-hit" in install.get("if", "")
+
+
 def test_action_yml__run_step_never_receives_the_token_as_env():
     # Regression for the round-1 review blocker: GITHUB_TOKEN as env on the
     # run step would sit in the exec-time environment of the step's bash,

@@ -68,7 +68,7 @@ Differences, all inherent to the platform:
 | `default-config` | unset | fallback `.themis/config.yaml` text (raw or base64) |
 | `codex-auth-json` | unset | codex `auth.json` content (store as a secret) |
 | `codex-sandbox` | `workspace-write` | codex sandbox mode |
-| `engine-cli-version` | `latest` | npm version applied to both engine CLIs |
+| `engine-cli-version` | `latest` | npm version applied to both engine CLIs; installs are cached keyed on the resolved versions, so even `latest` only pays the ~1 min install when a new release ships |
 
 Engine credentials are passed as env vars on the action step (see the
 example workflow), not as inputs — the engine adapters read them from the

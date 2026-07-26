@@ -52,7 +52,9 @@ inputs:
     description: >-
       npm version/tag applied to both engine CLIs (@openai/codex and
       @anthropic-ai/claude-code; both install so repo-config engine
-      overrides always have their executable).
+      overrides always have their executable). Installs are cached across
+      runs keyed on the resolved versions, so even `latest` only pays the
+      install when a new release ships.
     default: 'latest'
 
 runs:
@@ -65,6 +67,32 @@ runs:
       shell: bash
       run: uv sync --locked --no-dev --project "$GITHUB_ACTION_PATH"
 
+    - name: Resolve engine CLI versions
+      # Concrete versions, not the raw input tag: `latest` as a cache key
+      # would pin the first cached release forever, while a resolved version
+      # misses the cache exactly when a new release ships. The private npm
+      # prefix goes on PATH here so cached binaries are found whether or not
+      # the install step runs (engines receive PATH via the env allowlist).
+      id: engine-clis
+      shell: bash
+      env:
+        CLI_VERSION: ${{ inputs.engine-cli-version }}
+      run: |
+        resolve() { npm view "$1@${CLI_VERSION}" version | tail -n 1 | awk '{print $NF}' | tr -d "'"; }
+        {
+          echo "codex=$(resolve @openai/codex)"
+          echo "claude=$(resolve @anthropic-ai/claude-code)"
+          echo "prefix=${RUNNER_TEMP}/themis-npm"
+        } >> "$GITHUB_OUTPUT"
+        echo "${RUNNER_TEMP}/themis-npm/bin" >> "$GITHUB_PATH"
+
+    - name: Restore engine CLIs from cache
+      id: engine-cli-cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.engine-clis.outputs.prefix }}
+        key: themis-engine-clis-${{ runner.os }}-${{ runner.arch }}-codex-${{ steps.engine-clis.outputs.codex }}-claude-${{ steps.engine-clis.outputs.claude }}
+
     - name: Install engine CLIs
       # Both families, unconditionally: `.themis/config.yaml` may override
       # `engine:` per repo at runtime, so installing only the input engine's
@@ -72,11 +100,14 @@ runs:
       # executable. Credentials gate which engines actually run, exactly
       # like server mode. (codex has its own CLI; claude/glm/kimi/openrouter
       # all drive the claude CLI against Anthropic-compatible endpoints.)
+      if: steps.engine-cli-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
-        CLI_VERSION: ${{ inputs.engine-cli-version }}
+        NPM_CONFIG_PREFIX: ${{ steps.engine-clis.outputs.prefix }}
+        CODEX_VERSION: ${{ steps.engine-clis.outputs.codex }}
+        CLAUDE_VERSION: ${{ steps.engine-clis.outputs.claude }}
       run: |
-        npm install -g "@openai/codex@${CLI_VERSION}" "@anthropic-ai/claude-code@${CLI_VERSION}"
+        npm install -g "@openai/codex@${CODEX_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_VERSION}"
 
     - name: Stage the GitHub token
       # File handoff on purpose: env on the run step would sit in the
