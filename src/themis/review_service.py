@@ -32,7 +32,12 @@ from themis.engines import (
 )
 from themis.events import TRUSTED_ASSOCIATIONS
 from themis.github.auth import get_installation_token, make_app_jwt
-from themis.github.client import SUMMARY_MARKER, GitHubClient, GitHubGraphQLError
+from themis.github.client import (
+    SUMMARY_MARKER,
+    CommentScanCapped,
+    GitHubClient,
+    GitHubGraphQLError,
+)
 from themis.learning_service import LEARNING_FOOTER, LearningService
 from themis.linked_context import fetch_linked_context
 from themis.learnings import Learning, PendingStore, to_jsonl
@@ -319,7 +324,9 @@ class ReviewService:
         deep later conversation traffic buried it. A failed read skips the
         delta rather than degrading to a full review: synchronize fires on
         every push, and a transient GitHub error must not buy a full-cost
-        review nobody asked for."""
+        review nobody asked for. CommentScanCapped is deliberately NOT
+        caught here: an exhausted scan means the checkpoint is unknowable,
+        and the caller falls back to a full review rather than skipping."""
         logins = _bot_logins(self.bot_login)
 
         def is_checkpoint(comment: dict[str, Any]) -> bool:
@@ -406,11 +413,23 @@ class ReviewService:
                         "themis_delta_review_disabled repo=%s pr=%s", repo, pr_number
                     )
                     return
-                delta_base = await self._resolve_delta_base(
-                    gh, repo, pr_number, pr["head"]["sha"]
-                )
-                if delta_base is None:
-                    return
+                try:
+                    delta_base = await self._resolve_delta_base(
+                        gh, repo, pr_number, pr["head"]["sha"]
+                    )
+                except CommentScanCapped:
+                    # The checkpoint may exist beyond the scan's safety bound,
+                    # so "no prior review" is unknowable. Skipping would
+                    # silently drop the promised re-review; a full review is
+                    # the safe recovery and re-seeds a checkpoint at the
+                    # conversation tail, so the next scan is one page again.
+                    logger.warning(
+                        "themis_delta_scan_capped_fallback_full repo=%s pr=%s",
+                        repo, pr_number,
+                    )
+                else:
+                    if delta_base is None:
+                        return
             engine = self._engine_for(repo_config)
             if not await self._ensure_engine_available(
                 engine, installation_id, repo, pr_number, "review"

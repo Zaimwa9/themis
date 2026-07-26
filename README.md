@@ -320,7 +320,7 @@ See [`docs/learnings.md`](docs/learnings.md).
 | `limits.max_attempts` | `2` | attempts before posting a failure comment |
 | `limits.clone_depth` | `50` | shallow clone depth |
 | `triggers.auto_review` | `true` | `false` = mention-only, no auto-review when a PR opens or is marked ready for review |
-| `triggers.delta_review` | `false` | opt-in: `true` makes pushes to an already-reviewed PR trigger a scoped re-review of just the new commits, verifying open findings along the way — each push then costs an engine run; see [`docs/configuration.md`](docs/configuration.md) |
+| `triggers.delta_review` | `false` | opt-in: `true` makes pushes to an already-reviewed PR trigger a scoped re-review of just the new commits, verifying open findings along the way — each non-coalesced push may then cost an engine run; see [`docs/configuration.md`](docs/configuration.md) |
 | `triggers.skip_titles` | `[]` | case-insensitive wildcard patterns matched against the PR title (e.g. `'ci: *'`, `'*[skip review]*'`); a match skips the auto-review with a comment naming the rule, mentions still work — see [`docs/configuration.md`](docs/configuration.md) |
 | `learnings.enabled` | `true` | `false` disables capturing, injecting, and digesting [learnings](docs/learnings.md) for this repo |
 | `learnings.digest_threshold` | `10` | pending learnings that trigger the digest PR (minimum 1) |

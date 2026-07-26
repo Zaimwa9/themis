@@ -10,6 +10,7 @@ from themis.github.client import (
     MAX_COMMENT_PAGES_TOTAL,
     MAX_ISSUE_COMMENT_PAGES,
     SUMMARY_MARKER,
+    CommentScanCapped,
     GitHubClient,
     GitHubGraphQLError,
 )
@@ -454,6 +455,23 @@ async def test_list_issue_comments_newest__capped_scan_warns(caplog):
         )
 
     assert "themis_issue_comments_scan_capped" in caplog.text
+
+
+async def test_list_issue_comments_newest__capped_with_stop__raises():
+    # With a stop predicate armed, hitting the cap means the caller's marker
+    # may sit in the unread pages: "not found" would be a lie, so the scan
+    # raises and the caller picks an explicit recovery.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "comments": {
+                "pageInfo": {"hasPreviousPage": True, "startCursor": "CUR"},
+                "nodes": [{"author": {"login": "x"}, "body": "spam"}],
+            }}}}})
+
+    with pytest.raises(CommentScanCapped):
+        await _client(handler).list_issue_comments_newest(
+            "acme/widgets", 7, max_pages=2, stop=lambda c: False
+        )
 
 
 async def test_list_review_threads__graphql_errors__raises():

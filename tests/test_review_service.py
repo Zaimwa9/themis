@@ -11,7 +11,7 @@ import pytest
 
 from themis.config import Settings
 from themis.engines import ENGINE_NAMES, EngineAuthError, EngineError, EngineQuotaError
-from themis.github.client import GitHubGraphQLError
+from themis.github.client import CommentScanCapped, GitHubGraphQLError
 from themis.learning_service import (
     DIGEST_BRANCH,
     DIGEST_PR_TITLE,
@@ -1703,6 +1703,22 @@ async def test_review__delta_respects_auto_review_opt_out(service, gh):
 
     assert seen_prompts == []
     gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__delta_scan_capped__full_review_fallback(service, gh):
+    # The checkpoint may sit beyond the scan's safety bound: whether a prior
+    # review exists is unknowable, so the push gets a full review (which
+    # re-seeds a checkpoint at the conversation tail) instead of a silent
+    # skip that would drop the promised re-review.
+    gh.get_file_text.return_value = DELTA_OPT_IN
+    gh.list_issue_comments_newest.side_effect = CommentScanCapped("acme/w#7")
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert "delta re-review" not in seen_prompts[0]
+    gh.post_summary_comment.assert_awaited_once()
 
 
 async def test_review__delta_comments_read_fails__skipped_not_full(service, gh):

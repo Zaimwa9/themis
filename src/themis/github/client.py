@@ -25,9 +25,11 @@ MAX_COMMENT_PAGES_TOTAL = 50
 MAX_ISSUE_COMMENT_PAGES = 5
 # Backward marker scans stop at the first hit (the newest checkpoint sits at
 # the conversation tail), so they normally fetch a single page regardless of
-# this cap. It only bounds the no-checkpoint case, where conversation volume
-# alone must not be able to blind the scan — 40 pages covers 4000 comments of
-# later traffic and stays a runaway backstop, not the expected read size.
+# this cap. It only bounds the no-marker case, where conversation volume
+# alone must not decide how many pages a public PR can make us fetch — 40
+# pages covers 4000 comments of later traffic and stays a runaway backstop,
+# not the expected read size. Exhausting it with a stop predicate armed is a
+# distinct outcome (CommentScanCapped), never a silent "not found".
 MAX_MARKER_SCAN_PAGES = 40
 _FAILED_CHECK_CONCLUSIONS = {
     "action_required",
@@ -37,6 +39,13 @@ _FAILED_CHECK_CONCLUSIONS = {
     "startup_failure",
     "timed_out",
 }
+
+
+class CommentScanCapped(Exception):
+    """A stop-predicate comment scan exhausted its page cap with pages still
+    unread: the marker may exist deeper, so "not found" would be a lie.
+    Deliberately not a GitHubGraphQLError — callers treating transient API
+    failures as "skip" need to pick an explicit recovery for this instead."""
 
 
 class GitHubGraphQLError(Exception):
@@ -322,9 +331,12 @@ class GitHubClient:
         for the most recent bot marker (the delta-review base) need exactly
         that end; they pass `stop` so pagination ends at the first match
         (included in the result) instead of paying every page of a long
-        conversation. Nodes are normalised to the REST comment shape
-        (`user.login`, `body`) so both listings read alike; GraphQL App
-        logins lack the `[bot]` suffix, which `_bot_logins` callers accept."""
+        conversation. Exhausting `max_pages` before `stop` fires raises
+        CommentScanCapped — the marker may sit deeper, and only the caller
+        knows what failing to find it must mean. Nodes are normalised to the
+        REST comment shape (`user.login`, `body`) so both listings read
+        alike; GraphQL App logins lack the `[bot]` suffix, which
+        `_bot_logins` callers accept."""
         owner, name = repo.split("/", 1)
         comments: list[dict[str, Any]] = []
         cursor: str | None = None
@@ -354,6 +366,8 @@ class GitHubClient:
             "themis_issue_comments_scan_capped repo=%s pr=%s pages=%s",
             repo, number, max_pages,
         )
+        if stop is not None:
+            raise CommentScanCapped(f"{repo}#{number}: no match in {max_pages} pages")
         return comments
 
     async def list_pr_files(self, repo: str, number: int) -> list[str]:

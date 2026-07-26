@@ -109,7 +109,7 @@ review:
 | `limits.max_attempts` | `2` | attempts before Themis gives up and posts a failure comment |
 | `limits.clone_depth` | `50` | git fetch depth for the shallow PR clone |
 | `triggers.auto_review` | `true` | `false` = mention-only, no automatic review on PR open or ready-for-review |
-| `triggers.delta_review` | `false` | opt-in: on push to an already-reviewed PR, re-review only the commits since the last themis review; off by default because every push costs an engine run; see below |
+| `triggers.delta_review` | `false` | opt-in: on push to an already-reviewed PR, re-review only the commits since the last themis review; off by default because each non-coalesced push may cost an engine run; see below |
 | `triggers.skip_titles` | `[]` | case-insensitive wildcard patterns (`*`, `?`); a PR whose title matches any of them gets no automatic review (mention/API reviews still run); see below |
 | `learnings.enabled` | `true` | per-repo learnings memory; see [docs/learnings.md](learnings.md) |
 | `learnings.digest_threshold` | `10` | pending learnings needed before Themis opens/updates the digest PR (min 1) |
@@ -124,9 +124,11 @@ sibling fields.
 
 ### Delta re-reviews (`triggers.delta_review`)
 
-Opt-in — off by default, because it turns every push to a reviewed PR into
-an automatic engine run. Enable it with `delta_review: true` on repos where
-the iterate-on-findings loop is worth that cost.
+Opt-in — off by default, because it turns pushes to a reviewed PR into
+automatic engine runs (rapid pushes coalesce into one, and a push whose head
+the last review already covered exits before any engine starts). Enable it
+with `delta_review: true` on repos where the iterate-on-findings loop is
+worth that cost.
 
 Once enabled and a themis review exists on a PR, pushing new commits triggers a scoped
 re-review of just what changed since the last reviewed commit — the review
@@ -142,7 +144,10 @@ Mechanics and bounds:
   others, bot replies quoting untrusted text, or the review prose itself —
   is ignored. The scan walks the conversation from the newest comment
   backwards and stops at the latest checkpoint, so later discussion volume
-  does not bury it. A PR that has never been reviewed gets nothing on push — the
+  does not bury it; in the extreme case where the scan's safety bound
+  (thousands of comments) runs out first, the push gets a full review
+  rather than a silent skip — which also posts a fresh checkpoint at the
+  conversation tail. A PR that has never been reviewed gets nothing on push — the
   first review still comes from PR open / ready-for-review, a mention, or
   `/api/review`.
 - Thread follow-through is best-effort: the delta prompt requires resolving
