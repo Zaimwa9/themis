@@ -325,6 +325,27 @@ def test_action_yml__engine_cli_installs_are_cached_by_resolved_version():
     assert "cache-hit" in install.get("if", "")
 
 
+def test_action_yml__nested_actions_pinned_to_commit_shas():
+    # Round-8 review blocker: the composite action runs with the posting
+    # token and an engine credential in reach, so every third-party action
+    # it pulls in must be pinned to an immutable commit SHA — a mutable tag
+    # would let an upstream compromise ship straight into adopters' runs.
+    # (The example workflow's own Zaimwa9/themis reference is pinned by a
+    # follow-up once a released commit containing action.yml exists; no SHA
+    # that predates the action can be used.)
+    import re
+    import yaml
+    spec = yaml.safe_load(
+        (Path(__file__).parent.parent / "action.yml").read_text()
+    )
+    uses = [s["uses"] for s in spec["runs"]["steps"] if s.get("uses")]
+    assert uses  # contract is vacuous if the steps stop using actions
+    for ref in uses:
+        assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", ref), (
+            f"{ref} is not pinned to a full commit SHA"
+        )
+
+
 def test_action_yml__run_step_never_receives_the_token_as_env():
     # Regression for the round-1 review blocker: GITHUB_TOKEN as env on the
     # run step would sit in the exec-time environment of the step's bash,

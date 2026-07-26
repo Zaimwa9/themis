@@ -40,7 +40,11 @@ jobs:
     # job dies without the pipeline's failure comment.
     timeout-minutes: 60
     steps:
-      - uses: Zaimwa9/themis@main  # pin a release tag in real use
+      # Pin this to a release commit SHA (not a tag or branch — both are
+      # mutable) before granting it your secrets in real use. @main here is
+      # a bootstrap placeholder: no released commit contains the action yet;
+      # the first release after merge pins it.
+      - uses: Zaimwa9/themis@main
         with:
           engine: claude
         env:
