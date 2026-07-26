@@ -140,9 +140,11 @@ introduced as regular tracked findings.
 Mechanics and bounds:
 
 - The last reviewed commit is read from a checkpoint themis writes at the
-  start of its own summary comments; marker text anywhere else — comments by
-  others, bot replies quoting untrusted text, or the review prose itself —
-  is ignored. The scan walks the conversation from the newest comment
+  start of its own summary comments, carrying a signature bound to the
+  repository, PR and commit; marker text anywhere else — comments by others,
+  bot replies quoting untrusted text, or the review prose itself — is
+  ignored, and an unsigned or unverifiable one is refused rather than trusted
+  (see [`security.md`](security.md#control-markers-and-the-delta-checkpoint)). The scan walks the conversation from the newest comment
   backwards and stops at the latest checkpoint, so later discussion volume
   does not bury it; in the extreme case where the scan's safety bound
   (thousands of comments) runs out first, the push gets a full review

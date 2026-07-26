@@ -40,6 +40,10 @@ CI runs exactly pytest and ruff; both must pass.
   bug fixes ship a regression test that fails without the fix.
 - Every string that ends up on GitHub passes `redact_outbound`
   (`src/themis/security.py`). A new posting path without it is a blocker.
+  Agent-written bodies (summaries, findings, replies) use
+  `sanitize_agent_text` instead: it also defangs `<!-- themis:... -->`
+  markers, which themis reads back off GitHub as control decisions. Only
+  controller-authored constants may carry a real marker.
 - Engine subprocesses receive `allowlisted_env` only, never `os.environ`.
 - Per-repo config parsing is lenient: invalid values degrade to defaults with
   a warning, never a crash.

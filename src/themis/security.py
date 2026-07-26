@@ -1,4 +1,5 @@
-"""GitHub webhook HMAC verification and outbound secret redaction."""
+"""GitHub webhook HMAC verification, outbound secret redaction, and
+neutralisation of themis control markers in agent-authored text."""
 
 import base64
 import hashlib
@@ -35,6 +36,16 @@ _TOKEN_PATTERNS = (
 )
 
 _MIN_SECRET_LEN = 8  # a short placeholder value must never redact real prose
+
+# Themis reads its own HTML-comment markers back off GitHub to make control
+# decisions (which commit a delta review starts from, whether a title-skip
+# notice was already posted). Those decisions are only sound while the
+# controller is the sole author of marker text: an agent body is written
+# from a hostile PR's content and can be induced to reproduce any literal
+# string. Deliberately permissive about spacing and case - the readers match
+# exact strings, so over-defanging agent prose is the safe direction.
+_CONTROL_MARKER_RE = re.compile(r"<!--(\s*)themis:", re.IGNORECASE)
+_DEFANGED_MARKER = r"<!--\1themis-quoted:"
 
 
 def verify_signature(payload: bytes, secret: str, signature_header: str | None) -> bool:
@@ -97,3 +108,21 @@ def redact_outbound(text: str) -> str:
     if count:
         logger.warning("themis_outbound_redacted count=%d", count)
     return text
+
+
+def strip_control_markers(text: str) -> str:
+    """Defang themis control markers so agent text cannot impersonate the
+    controller. The marker stays readable (`<!-- themis-quoted:...`) - an
+    agent quoting themis's own source in a finding should still show what it
+    quoted; it just no longer parses as a marker on the way back in."""
+    text, count = _CONTROL_MARKER_RE.subn(_DEFANGED_MARKER, text)
+    if count:
+        logger.warning("themis_agent_marker_defanged count=%d", count)
+    return text
+
+
+def sanitize_agent_text(text: str) -> str:
+    """The full outbound filter for anything an engine wrote: secrets out,
+    control markers defanged. Controller-authored bodies use
+    `redact_outbound` alone - they are allowed to carry real markers."""
+    return strip_control_markers(redact_outbound(text))

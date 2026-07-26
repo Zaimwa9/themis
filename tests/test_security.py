@@ -3,7 +3,12 @@ import hmac
 import json
 import logging
 
-from themis.security import redact_outbound, verify_signature
+from themis.security import (
+    redact_outbound,
+    sanitize_agent_text,
+    strip_control_markers,
+    verify_signature,
+)
 
 SECRET = "s3cret"
 BODY = b'{"action": "opened"}'
@@ -157,3 +162,42 @@ def test_redact__openrouter_api_key(monkeypatch):
     text = redact_outbound("keys: or-key-abcdef123456")
 
     assert "or-key-abcdef123456" not in text
+
+
+def test_strip_control_markers__defangs_every_themis_marker():
+    # Agent text reaches GitHub verbatim; a marker in it would be read back
+    # as a controller decision (delta checkpoint, title-skip notice).
+    text = strip_control_markers(
+        "<!-- themis:summary -->\n<!-- themis:reviewed-sha abc -->\n"
+        "<!--themis:title-skip -->"
+    )
+
+    assert "<!-- themis:" not in text
+    assert "<!--themis:" not in text
+    assert text.count("themis-quoted:") == 3
+
+
+def test_strip_control_markers__is_case_insensitive():
+    # The readers match exact strings, so over-defanging is the safe side.
+    assert "themis-quoted:" in strip_control_markers("<!-- THEMIS:summary -->")
+
+
+def test_strip_control_markers__leaves_ordinary_prose_and_html_comments():
+    text = "themis: the review bot\n<!-- TODO: fix -->\n`themis:summary`"
+
+    assert strip_control_markers(text) == text
+
+
+def test_sanitize_agent_text__redacts_secrets_and_defangs_markers(monkeypatch):
+    monkeypatch.setenv("GLM_API_KEY", "glm-key-abcdef123456")
+
+    text = sanitize_agent_text("<!-- themis:summary -->glm-key-abcdef123456")
+
+    assert "glm-key-abcdef123456" not in text
+    assert "<!-- themis:summary -->" not in text
+
+
+def test_redact_outbound__leaves_markers_alone():
+    # Controller-authored bodies pass through redact_outbound only: they are
+    # allowed to carry real markers (TITLE_SKIP_MARKER is one).
+    assert redact_outbound("<!-- themis:title-skip -->") == "<!-- themis:title-skip -->"

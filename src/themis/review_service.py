@@ -3,6 +3,8 @@
 import asyncio
 import ast
 import contextlib
+import hashlib
+import hmac
 import json
 import logging
 import re
@@ -51,7 +53,7 @@ from themis.output import (
 )
 from themis.prompts import DOCTRINE_PATH, build_discussion_prompt, build_review_prompt
 from themis.trusted_context import apply_trusted_context
-from themis.security import redact_outbound
+from themis.security import redact_outbound, sanitize_agent_text
 from themis.remote import RemoteEngine
 from themis.workspace import (
     clone_url_for,
@@ -93,16 +95,21 @@ CANCELLED_COMMENT = (
 )
 TITLE_SKIP_MARKER = "<!-- themis:title-skip -->"
 # Embedded in every summary comment so a later push can delta-review
-# `<last-reviewed-sha>..HEAD` (issue #11). Read back only from bot-authored
-# comments whose body starts with the controller-written summary prefix:
-# anyone can paste marker text into a PR comment, bot discussion replies can
-# echo untrusted text, and even the engine-written summary prose could carry
-# a forged marker - but none of those can put one at the fixed prefix the
-# controller prepends, and a forged sha would silently shrink (or skip) the
-# delta under review.
-REVIEWED_SHA_MARKER = "<!-- themis:reviewed-sha {sha} -->"
+# `<last-reviewed-sha>..HEAD` (issue #11). A forged sha would silently shrink
+# - or, matching the head, entirely skip - the delta under review, so three
+# things must hold at once for a checkpoint to count: the comment is
+# bot-authored, the marker sits at the fixed prefix the controller prepends,
+# and no agent-written body can contain marker text at all
+# (`sanitize_agent_text` defangs it, which is what stops a discussion reply
+# from opening with a checkpoint of its own), and the tag verifies under the
+# controller's key. Exactly 40 hex on both sides: one shape, so no short
+# checkpoint can prefix-match a head sha.
+_SHA_RE = r"[0-9a-f]{40}"
+_CHECKPOINT_TAG_LEN = 32
+REVIEWED_SHA_MARKER = "<!-- themis:reviewed-sha {sha} {tag} -->"
 _SUMMARY_CHECKPOINT_RE = re.compile(
-    re.escape(SUMMARY_MARKER) + r"\n<!-- themis:reviewed-sha ([0-9a-f]{7,40}) -->\n"
+    re.escape(SUMMARY_MARKER)
+    + rf"\n<!-- themis:reviewed-sha ({_SHA_RE}) ([0-9a-f]{{{_CHECKPOINT_TAG_LEN}}}) -->\n"
 )
 TITLE_SKIPPED_COMMENT = (
     "Automatic review skipped: the PR title matches the `triggers.skip_titles` "
@@ -311,6 +318,50 @@ class ReviewService:
         )
         return False
 
+    def _checkpoint_tag(self, repo: str, pr_number: int, sha: str) -> str:
+        """Keyed binding of a checkpoint to its repo, PR and commit.
+
+        The key is the GitHub App private key: controller-held, required in
+        every deployment, and never in an engine's allowlisted env - so a
+        checkpoint cannot be manufactured by an agent body, nor replayed from
+        another PR. Prevention (`sanitize_agent_text` keeps marker text out
+        of agent-written comments) and this verification are deliberately
+        both in place: one missed sanitisation point must not be enough to
+        skip a push's review."""
+        return hmac.new(
+            self.settings.gh_app_private_key_pem.encode(),
+            f"themis-checkpoint\0{repo}\0{pr_number}\0{sha}".encode(),
+            hashlib.sha256,
+        ).hexdigest()[:_CHECKPOINT_TAG_LEN]
+
+    def _checkpoint_sha(
+        self, comment: dict[str, Any], repo: str, pr_number: int
+    ) -> str | None:
+        """The sha this comment checkpoints, or None if it is not one.
+
+        Three conditions, all necessary: the bot authored it, the marker sits
+        at the fixed prefix the controller prepends (never mid-body), and the
+        tag verifies."""
+        if ((comment.get("user") or {}).get("login") or "") not in _bot_logins(
+            self.bot_login
+        ):
+            return None
+        match = _SUMMARY_CHECKPOINT_RE.match(comment.get("body") or "")
+        if match is None:
+            return None
+        sha, tag = match.group(1), match.group(2)
+        if not hmac.compare_digest(tag, self._checkpoint_tag(repo, pr_number, sha)):
+            # Loud: a key rotation reads the same as a forgery attempt here,
+            # and both must be diagnosable rather than look like "never
+            # reviewed". The scan keeps going, so an older genuine checkpoint
+            # still wins.
+            logger.warning(
+                "themis_delta_checkpoint_unverified repo=%s pr=%s sha=%s",
+                repo, pr_number, sha,
+            )
+            return None
+        return sha
+
     async def _resolve_delta_base(
         self, gh: Any, repo: str, pr_number: int, head_sha: str
     ) -> str | None:
@@ -327,19 +378,16 @@ class ReviewService:
         review nobody asked for. CommentScanCapped is deliberately NOT
         caught here: an exhausted scan means the checkpoint is unknowable,
         and the caller falls back to a full review rather than skipping."""
-        logins = _bot_logins(self.bot_login)
-
-        def is_checkpoint(comment: dict[str, Any]) -> bool:
-            if ((comment.get("user") or {}).get("login") or "") not in logins:
-                return False
-            # Anchored at the start of the body: only the controller writes
-            # there, so a marker echoed inside a bot reply (or forged inside
-            # engine-written summary prose) never counts as a checkpoint.
-            return _SUMMARY_CHECKPOINT_RE.match(comment.get("body") or "") is not None
+        # One acceptance rule, used as both the pagination stop and the
+        # parser: a predicate looser than the parser would end the scan on a
+        # comment the parser then rejects, hiding the genuine checkpoint
+        # behind it.
+        def checkpoint_sha(comment: dict[str, Any]) -> str | None:
+            return self._checkpoint_sha(comment, repo, pr_number)
 
         try:
             comments = await gh.list_issue_comments_newest(
-                repo, pr_number, stop=is_checkpoint
+                repo, pr_number, stop=lambda c: checkpoint_sha(c) is not None
             )
         except (httpx.HTTPError, GitHubGraphQLError) as error:
             logger.warning(
@@ -349,18 +397,15 @@ class ReviewService:
             return None
         last_sha: str | None = None
         for comment in comments:  # newest first: the first checkpoint is the latest
-            if ((comment.get("user") or {}).get("login") or "") not in logins:
-                continue
-            match = _SUMMARY_CHECKPOINT_RE.match(comment.get("body") or "")
-            if match:
-                last_sha = match.group(1)
+            last_sha = checkpoint_sha(comment)
+            if last_sha is not None:
                 break
         if last_sha is None:
             logger.info(
                 "themis_delta_no_prior_review repo=%s pr=%s", repo, pr_number
             )
             return None
-        if head_sha.startswith(last_sha):
+        if head_sha == last_sha:
             # The queue collapsed rapid pushes, or the webhook was redelivered:
             # the head on record is already reviewed.
             logger.info(
@@ -658,7 +703,11 @@ class ReviewService:
                     captured = self.learning_service.capture(
                         workspace, repo, pr_number, author_login, learnings, pending
                     )
-                reply = redact_outbound(reply)
+                # A discussion answer is an issue comment whose whole body the
+                # engine wrote from a hostile PR's text: without defanging it
+                # could open with a checkpoint prefix and suppress the delta
+                # review of a planned push.
+                reply = sanitize_agent_text(reply)
                 if captured is not None:
                     reply += LEARNING_FOOTER
                 # Codex runs can outlive the 60-min installation token; post with
@@ -919,8 +968,15 @@ class ReviewService:
         # After truncation, so the marker a later delta review reads back can
         # never be cut. Guarded on shape: the sha reached GitHub as-is, and a
         # non-hex value would break the marker's un-forgeable format.
-        if re.fullmatch(r"[0-9a-f]{7,40}", commit_sha):
-            summary = REVIEWED_SHA_MARKER.format(sha=commit_sha) + "\n" + summary
+        if re.fullmatch(_SHA_RE, commit_sha):
+            summary = (
+                REVIEWED_SHA_MARKER.format(
+                    sha=commit_sha,
+                    tag=self._checkpoint_tag(repo, pr_number, commit_sha),
+                )
+                + "\n"
+                + summary
+            )
         await gh.post_summary_comment(repo, pr_number, summary)
 
 
@@ -993,11 +1049,13 @@ _FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*?)[ \t]*\r?\n?$")
 
 
 def _redact_actions(actions: ReviewActions) -> None:
-    actions.summary = redact_outbound(actions.summary)
+    # Engine-written every one of them, so control markers are defanged too:
+    # the summary body is what a later delta review scans for a checkpoint.
+    actions.summary = sanitize_agent_text(actions.summary)
     for finding in actions.findings:
-        finding["body"] = redact_outbound(finding["body"])
+        finding["body"] = sanitize_agent_text(finding["body"])
     for reply in actions.replies:
-        reply["body"] = redact_outbound(reply["body"])
+        reply["body"] = sanitize_agent_text(reply["body"])
 
 
 def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
