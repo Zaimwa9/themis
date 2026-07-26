@@ -76,7 +76,7 @@ limits:
   clone_depth: 50
 triggers:
   auto_review: true
-  delta_review: true       # re-review pushed commits as a delta once a review exists
+  delta_review: false      # opt-in: re-review pushed commits as a delta once a review exists
   # skip_titles:            # wildcard patterns; a matching PR title skips the auto-review
   #   - 'ci: *'
   #   - 'chore: *'
@@ -109,7 +109,7 @@ review:
 | `limits.max_attempts` | `2` | attempts before Themis gives up and posts a failure comment |
 | `limits.clone_depth` | `50` | git fetch depth for the shallow PR clone |
 | `triggers.auto_review` | `true` | `false` = mention-only, no automatic review on PR open or ready-for-review |
-| `triggers.delta_review` | `true` | on push to an already-reviewed PR, re-review only the commits since the last themis review; `false` = pushes trigger nothing; see below |
+| `triggers.delta_review` | `false` | opt-in: on push to an already-reviewed PR, re-review only the commits since the last themis review; off by default because every push costs an engine run; see below |
 | `triggers.skip_titles` | `[]` | case-insensitive wildcard patterns (`*`, `?`); a PR whose title matches any of them gets no automatic review (mention/API reviews still run); see below |
 | `learnings.enabled` | `true` | per-repo learnings memory; see [docs/learnings.md](learnings.md) |
 | `learnings.digest_threshold` | `10` | pending learnings needed before Themis opens/updates the digest PR (min 1) |
@@ -124,7 +124,11 @@ sibling fields.
 
 ### Delta re-reviews (`triggers.delta_review`)
 
-Once a themis review exists on a PR, pushing new commits triggers a scoped
+Opt-in — off by default, because it turns every push to a reviewed PR into
+an automatic engine run. Enable it with `delta_review: true` on repos where
+the iterate-on-findings loop is worth that cost.
+
+Once enabled and a themis review exists on a PR, pushing new commits triggers a scoped
 re-review of just what changed since the last reviewed commit — the review
 prompt narrows to `git diff <last-reviewed-sha>..HEAD`, checks each open
 finding thread against the new code (resolving verified fixes, replying with

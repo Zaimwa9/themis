@@ -1455,6 +1455,9 @@ async def test_git_is_ancestor__unknown_sha__false(tmp_path):
 
 DELTA_PRIOR_SHA = "1234567890abcdef1234567890abcdef12345678"
 
+# Delta re-reviews are opt-in; tests exercising the delta path enable them.
+DELTA_OPT_IN = "triggers:\n  delta_review: true\n"
+
 
 def _summary_comment(sha: str, login: str = "test-reviewer[bot]") -> dict:
     return {
@@ -1507,6 +1510,7 @@ async def test_review__non_hex_commit_sha__marker_omitted(service, gh):
 
 
 async def test_review__delta_with_prior_review__prompt_scoped_to_delta(service, gh):
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
     service.is_ancestor = _ancestor_true
     seen_prompts: list = []
@@ -1522,6 +1526,7 @@ async def test_review__delta_newest_bot_marker_wins(service, gh):
     # The listing is newest-first; a bot comment without a marker (courtesy
     # comment) must not stop the scan before the latest summary.
     newer = "feedfacefeedfacefeedfacefeedfacefeedface"
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.list_issue_comments_newest.return_value = [
         {"user": {"login": "test-reviewer[bot]"}, "body": "quota reached"},
         _summary_comment(newer),
@@ -1537,6 +1542,7 @@ async def test_review__delta_newest_bot_marker_wins(service, gh):
 
 
 async def test_review__delta_without_prior_review__skipped(service, gh):
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.list_issue_comments_newest.return_value = []
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
@@ -1551,6 +1557,7 @@ async def test_review__delta_without_prior_review__skipped(service, gh):
 async def test_review__delta_marker_from_non_bot_author__ignored(service, gh):
     # Anyone can paste the marker into a PR comment; a forged sha would
     # shrink the delta under review. Only bot-authored comments count.
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.list_issue_comments_newest.return_value = [
         _summary_comment(DELTA_PRIOR_SHA, login="attacker")
     ]
@@ -1566,6 +1573,7 @@ async def test_review__delta_marker_from_non_bot_author__ignored(service, gh):
 async def test_review__delta_marker_not_at_summary_prefix__ignored(service, gh):
     # Bot discussion replies can echo untrusted text (a quoted marker, a
     # future head sha); only the controller-written summary prefix counts.
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.list_issue_comments_newest.return_value = [
         {
             "user": {"login": "test-reviewer[bot]"},
@@ -1591,6 +1599,7 @@ async def test_review__delta_forged_marker_inside_summary_prose__ignored(service
         + "\nreview text\n"
         + REVIEWED_SHA_MARKER.format(sha="f" * 40)
     )
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.list_issue_comments_newest.return_value = [
         {"user": {"login": "test-reviewer[bot]"}, "body": body}
     ]
@@ -1605,6 +1614,7 @@ async def test_review__delta_forged_marker_inside_summary_prose__ignored(service
 
 async def test_review__delta_head_already_reviewed__skipped(service, gh):
     head = "abc1234" + "0" * 33
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.get_pr.return_value = {**gh.get_pr.return_value, "head": {"sha": head}}
     gh.list_issue_comments_newest.return_value = [_summary_comment(head)]
     seen_prompts: list = []
@@ -1619,6 +1629,7 @@ async def test_review__delta_head_already_reviewed__skipped(service, gh):
 async def test_review__delta_base_not_ancestor__full_review_fallback(service, gh):
     # Force-push rewrote the reviewed commit away: the delta base is unusable,
     # so the push still gets reviewed - as a full review.
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
 
     async def not_ancestor(workspace, sha):
@@ -1631,6 +1642,20 @@ async def test_review__delta_base_not_ancestor__full_review_fallback(service, gh
 
     assert "delta re-review" not in seen_prompts[0]
     gh.post_summary_comment.assert_awaited_once()
+
+
+async def test_review__delta_not_opted_in__skipped(service, gh):
+    # Opt-in feature: with no repo config at all, a delta job runs nothing
+    # and never reaches the marker scan.
+    gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+    gh.list_issue_comments_newest.assert_not_awaited()
 
 
 async def test_review__delta_disabled_by_repo_config__skipped(service, gh):
@@ -1646,7 +1671,11 @@ async def test_review__delta_disabled_by_repo_config__skipped(service, gh):
 
 
 async def test_review__delta_respects_auto_review_opt_out(service, gh):
-    gh.get_file_text.return_value = "triggers:\n  auto_review: false\n"
+    # Enabling delta_review does not resurrect pushes when auto reviews as a
+    # whole are off.
+    gh.get_file_text.return_value = (
+        "triggers:\n  auto_review: false\n  delta_review: true\n"
+    )
     gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
@@ -1660,6 +1689,7 @@ async def test_review__delta_respects_auto_review_opt_out(service, gh):
 async def test_review__delta_comments_read_fails__skipped_not_full(service, gh):
     # A transient GitHub error on the marker scan must not buy a full-cost
     # review nobody asked for, and must not raise out of the job.
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.list_issue_comments_newest.side_effect = _http_error(500)
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
@@ -1673,6 +1703,7 @@ async def test_review__delta_comments_read_fails__skipped_not_full(service, gh):
 async def test_review__delta_unaddressed_bot_thread__surfaced_in_summary(service, gh):
     # The engine skipped a thread disposition entirely: the omission must be
     # visible in the summary, never silently recorded as a completed review.
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
     gh.list_review_threads.return_value = [_bot_thread()]
     service.is_ancestor = _ancestor_true
@@ -1689,6 +1720,7 @@ async def test_review__delta_unaddressed_bot_thread__surfaced_in_summary(service
 async def test_review__delta_thread_resolved_or_replied__no_omission_note(service, gh):
     # The default agent resolves T_1 and replies to databaseId 11: both
     # dispositions count, so no omission note is added.
+    gh.get_file_text.return_value = DELTA_OPT_IN
     gh.list_issue_comments_newest.return_value = [_summary_comment(DELTA_PRIOR_SHA)]
     gh.list_review_threads.return_value = [_bot_thread()]
     service.is_ancestor = _ancestor_true

@@ -76,9 +76,11 @@ def _section_or_default(value: object, model_cls: type, event: str) -> object:
 class TriggersConfig(BaseModel):
     auto_review: bool = True
     # Scoped re-review of the commits pushed since the last themis review
-    # (issue #11). Only fires when a prior review exists on the PR, and only
-    # while auto_review is enabled: a push is an automatic trigger.
-    delta_review: bool = True
+    # (issue #11). Opt-in: every push to a reviewed PR costs an engine run,
+    # so repos enable it deliberately. Only fires when a prior review exists
+    # on the PR, and only while auto_review is enabled: a push is an
+    # automatic trigger.
+    delta_review: bool = False
     # Case-insensitive wildcard patterns covering the whole PR title:
     # `*` = any run of characters, `?` = one character, everything else
     # literal. A match skips the auto review; mention/API reviews still run.
@@ -88,17 +90,19 @@ class TriggersConfig(BaseModel):
     @classmethod
     def _trigger_bool_or_default(cls, value: object, info: ValidationInfo) -> object:
         """An invalid flag must not void the rest of the repo config. Lax
-        coercion first, so yaml spellings like "false"/"no"/0 keep opting
-        out; only true garbage degrades to the default (enabled)."""
+        coercion first, so yaml spellings like "false"/"no"/0 keep working;
+        only true garbage degrades to the field's own default (on for
+        auto_review, off for delta_review)."""
+        default = cls.model_fields[info.field_name].default
         if value is None:
-            return True  # bare `auto_review:` key, same idiom as a bare section
+            return default  # bare `auto_review:` key, same idiom as a bare section
         try:
             return _LAX_BOOL.validate_python(value)
         except ValidationError:
             logger.warning(
                 "themis_invalid_%s value=%r", info.field_name, str(value)[:50]
             )
-            return True
+            return default
 
     @field_validator("skip_titles", mode="before")
     @classmethod

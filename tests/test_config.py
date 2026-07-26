@@ -242,14 +242,14 @@ def test_repo_config__auto_review_bare_key_is_default_without_warning(caplog):
     assert "themis_invalid_auto_review" not in caplog.text
 
 
-def test_repo_config__delta_review_default_enabled():
-    assert parse_repo_config(None).triggers.delta_review is True
+def test_repo_config__delta_review_default_disabled():
+    assert parse_repo_config(None).triggers.delta_review is False
 
 
-def test_repo_config__delta_review_opt_out():
-    text = "triggers:\n  delta_review: false\n"
+def test_repo_config__delta_review_opt_in():
+    text = "triggers:\n  delta_review: true\n"
     config = parse_repo_config(text)
-    assert config.triggers.delta_review is False
+    assert config.triggers.delta_review is True
     assert config.triggers.auto_review is True  # untouched sibling
 
 
@@ -257,9 +257,16 @@ def test_repo_config__delta_review_invalid_degrades_to_default(caplog):
     text = "triggers:\n  delta_review: banana\n  auto_review: false\n"
     with caplog.at_level(logging.WARNING):
         config = parse_repo_config(text)
-    assert config.triggers.delta_review is True
+    assert config.triggers.delta_review is False
     assert config.triggers.auto_review is False
     assert "themis_invalid_delta_review" in caplog.text
+
+
+def test_repo_config__delta_review_bare_key_stays_disabled(caplog):
+    with caplog.at_level(logging.WARNING):
+        config = parse_repo_config("triggers:\n  delta_review:\n")
+    assert config.triggers.delta_review is False
+    assert "themis_invalid_delta_review" not in caplog.text
 
 
 def test_repo_config__auto_review_yaml_spellings_still_coerce():
