@@ -96,13 +96,13 @@ CANCELLED_COMMENT = (
 TITLE_SKIP_MARKER = "<!-- themis:title-skip -->"
 # Embedded in every summary comment so a later push can delta-review
 # `<last-reviewed-sha>..HEAD` (issue #11). A forged sha would silently shrink
-# - or, matching the head, entirely skip - the delta under review, so three
-# things must hold at once for a checkpoint to count: the comment is
-# bot-authored, the marker sits at the fixed prefix the controller prepends,
-# and no agent-written body can contain marker text at all
-# (`sanitize_agent_text` defangs it, which is what stops a discussion reply
-# from opening with a checkpoint of its own), and the tag verifies under the
-# controller's key. Exactly 40 hex on both sides: one shape, so no short
+# - or, matching the head, entirely skip - the delta under review, so a
+# checkpoint only counts when the comment is bot-authored, the marker sits at
+# the fixed prefix the controller prepends, and the tag verifies under the
+# controller's key. Backing all three: no agent-written body can contain
+# marker text at all (`sanitize_agent_text` defangs it), which is what stops
+# a discussion reply - engine prose from position 0 - from opening with a
+# checkpoint of its own. Exactly 40 hex on both sides: one shape, so no short
 # checkpoint can prefix-match a head sha.
 _SHA_RE = r"[0-9a-f]{40}"
 _CHECKPOINT_TAG_LEN = 32
@@ -392,17 +392,16 @@ class ReviewService:
         prior review may well exist but its base cannot be established (the
         scan ran out of pages, or every checkpoint on record fails to
         verify): the caller reviews in full rather than skipping."""
-        # One acceptance rule, used as both the pagination stop and the
-        # parser: a predicate looser than the parser would end the scan on a
-        # comment the parser then rejects, hiding the genuine checkpoint
-        # behind it. An unverifiable checkpoint deliberately does not stop
-        # the scan - an older genuine one still counts.
-        def match(comment: dict[str, Any]) -> tuple[str | None, bool]:
-            return self._checkpoint_match(comment, repo, pr_number)
-
+        # One acceptance rule behind both the pagination stop and the parser:
+        # a stop looser than the parser would end the scan on a comment the
+        # parser then rejects, hiding the genuine checkpoint behind it. An
+        # unverifiable checkpoint deliberately does not stop the scan - an
+        # older genuine one still counts.
         try:
             comments = await gh.list_issue_comments_newest(
-                repo, pr_number, stop=lambda c: match(c)[0] is not None
+                repo,
+                pr_number,
+                stop=lambda c: self._checkpoint_sha(c, repo, pr_number) is not None,
             )
         except CommentScanCapped as error:
             raise DeltaBaseUnknown(str(error)) from None
@@ -415,7 +414,9 @@ class ReviewService:
         last_sha: str | None = None
         unverifiable = False
         for comment in comments:  # newest first: the first checkpoint is the latest
-            last_sha, seen_unverifiable = match(comment)
+            last_sha, seen_unverifiable = self._checkpoint_match(
+                comment, repo, pr_number
+            )
             unverifiable = unverifiable or seen_unverifiable
             if last_sha is not None:
                 break
@@ -611,9 +612,9 @@ class ReviewService:
                 # Redact before anything measures text: redaction can EXPAND
                 # (a short secret becomes the longer marker), so budgets
                 # computed on pre-redaction lengths would overflow the posting
-                # cap and drop tail findings. _post_review_results redacts
+                # cap and drop tail findings. _post_review_results sanitizes
                 # again as the posting-path backstop; that is idempotent.
-                _redact_actions(actions)
+                _sanitize_actions(actions)
                 post_gh = self.make_client(await self.get_token(installation_id))
                 async with post_gh:
                     await self._drop_findings_outside_diff(
@@ -942,7 +943,7 @@ class ReviewService:
     async def _post_review_results(
         self, gh: Any, repo: str, pr_number: int, commit_sha: str, actions: ReviewActions
     ) -> None:
-        _redact_actions(actions)
+        _sanitize_actions(actions)
         summary = actions.summary
         if actions.findings:
             try:
@@ -1071,7 +1072,7 @@ def _bot_in_thread(thread: dict[str, Any], bot_login: str) -> bool:
 _FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*?)[ \t]*\r?\n?$")
 
 
-def _redact_actions(actions: ReviewActions) -> None:
+def _sanitize_actions(actions: ReviewActions) -> None:
     # Engine-written every one of them, so control markers are defanged too:
     # the summary body is what a later delta review scans for a checkpoint.
     actions.summary = sanitize_agent_text(actions.summary)
