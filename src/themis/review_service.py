@@ -254,6 +254,12 @@ async def git_changed_lines(
     return anchors
 
 
+class DeltaBaseUnknown(Exception):
+    """A prior review may exist but the commit it covered cannot be
+    established, so a delta cannot be scoped. Distinct from "never reviewed":
+    the recovery is a full review, not a skip."""
+
+
 @dataclass
 class ReviewService:
     settings: Settings
@@ -334,33 +340,40 @@ class ReviewService:
             hashlib.sha256,
         ).hexdigest()[:_CHECKPOINT_TAG_LEN]
 
-    def _checkpoint_sha(
+    def _checkpoint_match(
         self, comment: dict[str, Any], repo: str, pr_number: int
-    ) -> str | None:
-        """The sha this comment checkpoints, or None if it is not one.
+    ) -> tuple[str | None, bool]:
+        """`(verified sha or None, carried an unverifiable checkpoint)`.
 
-        Three conditions, all necessary: the bot authored it, the marker sits
-        at the fixed prefix the controller prepends (never mid-body), and the
-        tag verifies."""
+        Three conditions, all necessary for a sha: the bot authored it, the
+        marker sits at the fixed prefix the controller prepends (never
+        mid-body), and the tag verifies. The second element separates "this
+        comment is not a checkpoint" from "this comment claims to be one and
+        I cannot confirm it" - the caller must not read the latter as a PR
+        that was never reviewed."""
         if ((comment.get("user") or {}).get("login") or "") not in _bot_logins(
             self.bot_login
         ):
-            return None
+            return None, False
         match = _SUMMARY_CHECKPOINT_RE.match(comment.get("body") or "")
         if match is None:
-            return None
+            return None, False
         sha, tag = match.group(1), match.group(2)
         if not hmac.compare_digest(tag, self._checkpoint_tag(repo, pr_number, sha)):
             # Loud: a key rotation reads the same as a forgery attempt here,
-            # and both must be diagnosable rather than look like "never
-            # reviewed". The scan keeps going, so an older genuine checkpoint
-            # still wins.
+            # and both must be diagnosable. The scan keeps going, so an older
+            # genuine checkpoint still wins.
             logger.warning(
                 "themis_delta_checkpoint_unverified repo=%s pr=%s sha=%s",
                 repo, pr_number, sha,
             )
-            return None
-        return sha
+            return None, True
+        return sha, False
+
+    def _checkpoint_sha(
+        self, comment: dict[str, Any], repo: str, pr_number: int
+    ) -> str | None:
+        return self._checkpoint_match(comment, repo, pr_number)[0]
 
     async def _resolve_delta_base(
         self, gh: Any, repo: str, pr_number: int, head_sha: str
@@ -375,20 +388,24 @@ class ReviewService:
         deep later conversation traffic buried it. A failed read skips the
         delta rather than degrading to a full review: synchronize fires on
         every push, and a transient GitHub error must not buy a full-cost
-        review nobody asked for. CommentScanCapped is deliberately NOT
-        caught here: an exhausted scan means the checkpoint is unknowable,
-        and the caller falls back to a full review rather than skipping."""
+        review nobody asked for. DeltaBaseUnknown is raised instead when a
+        prior review may well exist but its base cannot be established (the
+        scan ran out of pages, or every checkpoint on record fails to
+        verify): the caller reviews in full rather than skipping."""
         # One acceptance rule, used as both the pagination stop and the
         # parser: a predicate looser than the parser would end the scan on a
         # comment the parser then rejects, hiding the genuine checkpoint
-        # behind it.
-        def checkpoint_sha(comment: dict[str, Any]) -> str | None:
-            return self._checkpoint_sha(comment, repo, pr_number)
+        # behind it. An unverifiable checkpoint deliberately does not stop
+        # the scan - an older genuine one still counts.
+        def match(comment: dict[str, Any]) -> tuple[str | None, bool]:
+            return self._checkpoint_match(comment, repo, pr_number)
 
         try:
             comments = await gh.list_issue_comments_newest(
-                repo, pr_number, stop=lambda c: checkpoint_sha(c) is not None
+                repo, pr_number, stop=lambda c: match(c)[0] is not None
             )
+        except CommentScanCapped as error:
+            raise DeltaBaseUnknown(str(error)) from None
         except (httpx.HTTPError, GitHubGraphQLError) as error:
             logger.warning(
                 "themis_delta_comments_failed repo=%s pr=%s error=%s",
@@ -396,11 +413,17 @@ class ReviewService:
             )
             return None
         last_sha: str | None = None
+        unverifiable = False
         for comment in comments:  # newest first: the first checkpoint is the latest
-            last_sha = checkpoint_sha(comment)
+            last_sha, seen_unverifiable = match(comment)
+            unverifiable = unverifiable or seen_unverifiable
             if last_sha is not None:
                 break
         if last_sha is None:
+            if unverifiable:
+                # Rotated app key, or a second instance holding a different
+                # one: this PR *was* reviewed, we just cannot say from where.
+                raise DeltaBaseUnknown(f"{repo}#{pr_number}: no verifiable checkpoint")
             logger.info(
                 "themis_delta_no_prior_review repo=%s pr=%s", repo, pr_number
             )
@@ -462,15 +485,15 @@ class ReviewService:
                     delta_base = await self._resolve_delta_base(
                         gh, repo, pr_number, pr["head"]["sha"]
                     )
-                except CommentScanCapped:
-                    # The checkpoint may exist beyond the scan's safety bound,
-                    # so "no prior review" is unknowable. Skipping would
-                    # silently drop the promised re-review; a full review is
-                    # the safe recovery and re-seeds a checkpoint at the
-                    # conversation tail, so the next scan is one page again.
+                except DeltaBaseUnknown as error:
+                    # A prior review exists (or may) but its base is not
+                    # establishable. Skipping would silently drop the
+                    # promised re-review; a full review is the safe recovery
+                    # and re-seeds a verifiable checkpoint at the
+                    # conversation tail, so the next push deltas again.
                     logger.warning(
-                        "themis_delta_scan_capped_fallback_full repo=%s pr=%s",
-                        repo, pr_number,
+                        "themis_delta_base_unknown_fallback_full repo=%s pr=%s reason=%s",
+                        repo, pr_number, error,
                     )
                 else:
                     if delta_base is None:

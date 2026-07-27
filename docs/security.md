@@ -90,8 +90,12 @@ Two independent controls, either one sufficient:
   controller-held, never in an engine's environment. A checkpoint that fails
   verification is refused and logged (`themis_delta_checkpoint_unverified`),
   and the scan continues to the previous one; it is never silently treated as
-  "no prior review". The binding also stops a genuine checkpoint from being
-  replayed into another PR or repository.
+  "no prior review". If *no* checkpoint on the PR verifies — which is what a
+  rotated app key looks like, not only an attack — the push is reviewed in
+  full rather than skipped, and that review re-seeds a checkpoint under the
+  current key, so the cost is one push and deltas resume. The binding also
+  stops a genuine checkpoint from being replayed into another PR or
+  repository.
 
 A checkpoint is additionally only read from bot-authored comments, and only
 at the fixed prefix the controller itself writes.

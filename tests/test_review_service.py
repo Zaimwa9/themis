@@ -1832,6 +1832,29 @@ async def test_review__delta_scan_capped__full_review_fallback(service, gh):
     gh.post_summary_comment.assert_awaited_once()
 
 
+async def test_review__delta_no_verifiable_checkpoint__full_review_fallback(
+    service, gh, caplog
+):
+    # Rotated app key (or a second instance holding a different one): the PR
+    # *was* reviewed, we just cannot say from where. Skipping would drop the
+    # promised re-review exactly when nothing is wrong with the push, so it
+    # gets a full review - which re-seeds a verifiable checkpoint, making
+    # this a one-push cost rather than a permanent stop.
+    gh.get_file_text.return_value = DELTA_OPT_IN
+    gh.list_issue_comments_newest.return_value = [
+        _summary_comment(service, DELTA_PRIOR_SHA, tag="0" * 32)
+    ]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    with caplog.at_level(logging.WARNING):
+        await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert "delta re-review" not in seen_prompts[0]
+    gh.post_summary_comment.assert_awaited_once()
+    assert "themis_delta_base_unknown_fallback_full" in caplog.text
+
+
 async def test_review__delta_comments_read_fails__skipped_not_full(service, gh):
     # A transient GitHub error on the marker scan must not buy a full-cost
     # review nobody asked for, and must not raise out of the job.
