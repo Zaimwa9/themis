@@ -32,6 +32,7 @@ from themis.review_service import (
     run_review_job,
 )
 from themis.output import MAX_BODY_LEN, OUTPUT_DIR, OutputError
+from themis.prompts import DOCTRINE_PATH
 
 pytestmark = pytest.mark.asyncio
 
@@ -1164,6 +1165,35 @@ async def test_discuss__conversation__posts_issue_comment(service, gh):
 
     gh.post_issue_comment.assert_awaited_once_with(REPO, 7, "here is the answer")
     gh.add_reaction.assert_not_awaited()
+
+
+async def test_discuss__committed_doctrine__reply_prompt_follows_it(
+    service, gh, tmp_path
+):
+    # The doctrine governs reply voice too, and a committed one wins over the
+    # packaged default exactly as it does for a review.
+    doctrine = tmp_path / "ws" / DOCTRINE_PATH
+    doctrine.parent.mkdir(parents=True, exist_ok=True)
+    doctrine.write_text("# House doctrine\nBe terse.\n")
+    seen_prompts: list = []
+
+    async def agent(*, prompt, workspace, **kwargs) -> str:
+        seen_prompts.append(prompt)
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "reply.md").write_text("answered")
+        return "ok"
+
+    service.resolve_engine = _resolver(agent)
+
+    await service.discuss(
+        repo=REPO, pr_number=7, installation_id=42, comment_id=501,
+        body="@test-reviewer is this fixed?", kind="conversation",
+        in_reply_to_id=None, mentions_bot=True,
+    )
+
+    assert DOCTRINE_PATH in seen_prompts[0]
+    assert "<doctrine>" not in seen_prompts[0]
 
 
 async def test_discuss__reply_cannot_carry_a_delta_checkpoint(service, gh):
