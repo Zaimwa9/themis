@@ -148,6 +148,11 @@ the last review already covered exits before any engine starts). Enable it
 with `delta_review: true` on repos where the iterate-on-findings loop is
 worth that cost.
 
+Independent of `auto_review`, which governs first reviews only: a
+mention-only repo (`auto_review: false`) can enable `delta_review` and get
+"review once by mention, then every push re-checks itself" — the prior review
+is the consent, so no further mention is needed.
+
 Once enabled and a themis review exists on a PR, pushing new commits triggers a scoped
 re-review of just what changed since the last reviewed commit — the review
 prompt narrows to `git diff <last-reviewed-sha>..HEAD`, checks each open
@@ -184,9 +189,12 @@ Mechanics and bounds:
   a full review instead.
 - Server mode only: [GitHub Action mode](github-action.md) has no App key to
   sign checkpoints with, so this setting has no effect there.
-- Delta re-reviews are automatic triggers: `auto_review: false` disables them
-  too, and `triggers.skip_titles` matches skip them like any auto review. An
-  explicit `@mention review` always runs a full review.
+- Delta re-reviews are automatic triggers, but `auto_review` does not gate
+  them: they answer a review that already exists, so `delta_review` alone
+  enables them. Drafts still skip them (as with any automatic trigger), and
+  `triggers.skip_titles` matches skip them too — retitling a PR to a filtered
+  pattern stops further deltas. An explicit `@mention review` always runs a
+  full review.
 
 ### Title filters (`triggers.skip_titles`)
 

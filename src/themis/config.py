@@ -77,9 +77,9 @@ class TriggersConfig(BaseModel):
     auto_review: bool = True
     # Scoped re-review of the commits pushed since the last themis review
     # (issue #11). Opt-in: pushes to a reviewed PR turn into engine runs
-    # (coalesced while one is active), so repos enable it deliberately. Only fires when a prior review exists
-    # on the PR, and only while auto_review is enabled: a push is an
-    # automatic trigger.
+    # (coalesced while one is active), so repos enable it deliberately. Only
+    # fires when a prior review exists on the PR; independent of auto_review,
+    # which governs first reviews only.
     delta_review: bool = False
     # Case-insensitive wildcard patterns covering the whole PR title:
     # `*` = any run of characters, `?` = one character, everything else

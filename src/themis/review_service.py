@@ -468,7 +468,14 @@ class ReviewService:
                 )
                 return
             repo_config = await self._fetch_repo_config(gh, repo)
-            if auto and not repo_config.triggers.auto_review:
+            # auto_review governs first reviews only. A delta re-review is
+            # gated by triggers.delta_review and by a prior review existing on
+            # the PR, which is consent enough: whoever asked for that review
+            # (or the repo, by enabling auto_review then) also wants to hear
+            # about the commits that answer it. Coupling the two would make
+            # delta unreachable for mention-only repos, whose iterate-on-
+            # findings loop is exactly what delta serves.
+            if auto and not delta and not repo_config.triggers.auto_review:
                 logger.info("themis_auto_review_disabled repo=%s pr=%s", repo, pr_number)
                 return
             if auto and (
