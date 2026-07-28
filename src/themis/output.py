@@ -10,7 +10,9 @@ OUTPUT_DIR = ".review-output"
 # Every file the engine may write under OUTPUT_DIR. The agent service redacts
 # exactly this set before results cross back to the controller; extend it in
 # lockstep with any new parsed file.
-OUTPUT_FILES = ("summary.md", "actions.json", "reply.md", "learning.json")
+OUTPUT_FILES = (
+    "summary.md", "actions.json", "reply.md", "learning.json", "resolution.json",
+)
 MAX_BODY_LEN = 65000
 MAX_FILE_SIZE = 1_000_000
 VALID_SIDES = ("LEFT", "RIGHT")
@@ -106,6 +108,27 @@ def parse_reply(workspace: Path) -> str:
         raise OutputError("reply.md is empty")
     _check_body_len("reply.md", reply)
     return reply
+
+
+def parse_resolution(workspace: Path) -> bool:
+    """Whether the agent verified the replied-to thread's issue as fixed.
+
+    Absent file means no claim, which is the common case and never an error.
+    Raises OutputError on invalid content; the caller treats that as no
+    resolution, never as a job failure - the reply itself still posts."""
+    path = workspace / OUTPUT_DIR / "resolution.json"
+    if not path.exists():
+        return False
+    try:
+        raw = json.loads(_read_capped(path, workspace))
+    except json.JSONDecodeError as error:
+        raise OutputError(f"resolution.json is not valid JSON: {error}") from error
+    if not isinstance(raw, dict):
+        raise OutputError(f"resolution.json root must be an object, got {type(raw).__name__}")
+    resolved = raw.get("resolved")
+    if not isinstance(resolved, bool):
+        raise OutputError(f"resolution missing or invalid 'resolved': {raw!r}")
+    return resolved
 
 
 def parse_learning(workspace: Path) -> dict[str, Any] | None:

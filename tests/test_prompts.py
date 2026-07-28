@@ -582,3 +582,21 @@ def test_build_review_prompt__skills_index_sentence_is_opt_in():
     without = build_review_prompt("o/r", 1, "main")
     assert ".review-input/skills-index.md" in with_index
     assert ".review-input/skills-index.md" not in without
+
+
+def test_build_discussion_prompt__thread__may_resolve_via_file():
+    prompt = build_discussion_prompt(
+        question="fixed?", kind="thread", thread_context='{"id": "T_1"}'
+    )
+
+    assert "resolution.json" in prompt
+    assert "Never say you are resolving" in prompt
+
+
+def test_build_discussion_prompt__conversation__no_resolution_instruction():
+    # A conversation comment has no thread to resolve.
+    prompt = build_discussion_prompt(
+        question="why?", kind="conversation", thread_context=""
+    )
+
+    assert "resolution.json" not in prompt

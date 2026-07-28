@@ -663,6 +663,21 @@ def build_discussion_prompt(
     )
     learnings_section = _LEARNINGS_SECTION if has_learnings else ""
     capture_section = _CAPTURE_SECTION if capture else ""
+    # Only a thread reply can resolve anything: a conversation comment has no
+    # thread behind it. Saying "resolving" in prose does nothing on its own -
+    # the file is the only signal the controller acts on, so the prompt ties
+    # the claim to it and keeps the bar at "verified in the code".
+    resolution_section = (
+        "\n\nIf this thread is one of your own findings and you have verified in "
+        "the current\ncheckout that it is fixed, write `{\"resolved\": true}` to "
+        "`.review-output/resolution.json`\nand say so in one short line. Write "
+        "nothing there if the fix is partial, if you\ncannot confirm it, or if "
+        "the thread is a question rather than a finding - an open\nthread costs "
+        "far less than one closed over a live defect. Never say you are "
+        "resolving\nor closing a thread unless you wrote that file."
+        if kind == "thread"
+        else ""
+    )
     return f"""\
 You are the repository's PR review bot. Someone commented on {location} of a pull
 request. The repository is checked out at the PR head in the current
@@ -676,4 +691,4 @@ directory; PR metadata is in `.review-input/pr.json`.
 {capture_section}Answer concisely and concretely. Open only the files needed to answer; do not
 explore the repository broadly. Cite `file:line` when referencing code.
 Write your answer as Markdown to `.review-output/reply.md`. Do not attempt to
-post to GitHub yourself."""
+post to GitHub yourself.{resolution_section}"""

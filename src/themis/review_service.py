@@ -50,6 +50,7 @@ from themis.output import (
     ReviewActions,
     parse_output,
     parse_reply,
+    parse_resolution,
 )
 from themis.prompts import DOCTRINE_PATH, build_discussion_prompt, build_review_prompt
 from themis.trusted_context import apply_trusted_context
@@ -779,8 +780,52 @@ class ReviewService:
                         await self.learning_service.flush(
                             post_gh, repo, repo_config.learnings.digest_threshold
                         )
+                    if thread is not None:
+                        await self._resolve_answered_thread(
+                            post_gh, workspace, thread, repo, pr_number
+                        )
             finally:
                 self.cleanup(workspace)
+
+    async def _resolve_answered_thread(
+        self, gh: Any, workspace: Path, thread: dict[str, Any],
+        repo: str, pr_number: int,
+    ) -> None:
+        """Close the replied-to thread when the agent verified its fix.
+
+        Runs after the reply is posted and never raises: the answer is the
+        job's deliverable, and an unresolved thread is a far smaller failure
+        than a lost reply. Only the bot's own threads qualify - resolving a
+        thread a human opened would close their question on their behalf."""
+        try:
+            if not parse_resolution(workspace):
+                return
+        except OutputError as error:
+            logger.warning(
+                "themis_resolution_invalid repo=%s pr=%s error=%s",
+                repo, pr_number, error,
+            )
+            return
+        nodes = thread.get("comments", {}).get("nodes", [])
+        author = (nodes[0].get("author") or {}).get("login", "") if nodes else ""
+        if author not in _bot_logins(self.bot_login):
+            logger.warning(
+                "themis_resolution_dropped_not_bot_thread repo=%s pr=%s author=%s",
+                repo, pr_number, author,
+            )
+            return
+        try:
+            await gh.resolve_thread(thread["id"])
+        except (httpx.HTTPError, GitHubGraphQLError, KeyError) as error:
+            logger.warning(
+                "themis_resolve_thread_failed repo=%s pr=%s error=%s",
+                repo, pr_number, error,
+            )
+            return
+        logger.info(
+            "themis_thread_resolved_on_reply repo=%s pr=%s thread=%s",
+            repo, pr_number, thread.get("id"),
+        )
 
     async def _attempt(
         self,
