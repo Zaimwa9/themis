@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.0](https://github.com/Zaimwa9/themis/compare/v0.11.1...v0.12.0) (2026-07-28)
+
+
+### Features
+
+* re-review pushed commits as a delta (triggers.delta_review) ([#94](https://github.com/Zaimwa9/themis/issues/94)) ([c257779](https://github.com/Zaimwa9/themis/commit/c257779198370159293f225720f25f3b0bd33b66))
+
+
+### Bug Fixes
+
+* delta re-reviews no longer require auto_review ([#103](https://github.com/Zaimwa9/themis/issues/103)) ([7d72692](https://github.com/Zaimwa9/themis/commit/7d726920d5c2d70b8849ef75f02d48ca40056b7a))
+
 ## [0.11.1](https://github.com/Zaimwa9/themis/compare/v0.11.0...v0.11.1) (2026-07-26)
 
 
