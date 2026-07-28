@@ -78,8 +78,25 @@ def test_parse_event__pr_synchronize__delta_review_job():
     assert job.delta is True
 
 
-def test_parse_event__pr_synchronize_draft__none():
+def test_parse_event__pr_synchronize_draft__delta_review_job():
+    # A draft carrying a themis review still re-reviews the pushes answering
+    # its findings; the worker enforces that a prior review exists.
     payload = _pr_payload("synchronize", draft=True)
+
+    job = parse_event("pull_request", payload, MENTION)
+
+    assert isinstance(job, ReviewJob)
+    assert job.auto is True
+    assert job.delta is True
+
+
+def test_parse_event__pr_opened_draft__none():
+    # First reviews still skip drafts: only the delta action gets through.
+    assert parse_event("pull_request", _pr_payload("opened", draft=True), MENTION) is None
+
+
+def test_parse_event__pr_ready_for_review_draft__none():
+    payload = _pr_payload("ready_for_review", draft=True)
     assert parse_event("pull_request", payload, MENTION) is None
 
 
