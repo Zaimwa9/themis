@@ -189,12 +189,14 @@ Mechanics and bounds:
   a full review instead.
 - Server mode only: [GitHub Action mode](github-action.md) has no App key to
   sign checkpoints with, so this setting has no effect there.
-- Delta re-reviews are automatic triggers, but `auto_review` does not gate
-  them: they answer a review that already exists, so `delta_review` alone
-  enables them. Drafts still skip them (as with any automatic trigger), and
-  `triggers.skip_titles` matches skip them too — retitling a PR to a filtered
-  pattern stops further deltas. An explicit `@mention review` always runs a
-  full review.
+- Delta re-reviews are automatic triggers, but neither `auto_review` nor draft
+  status gates them: they answer a review that already exists, so
+  `delta_review` alone enables them. Drafts included — a draft carrying a
+  themis review was already asked about, and iterating on findings before
+  marking ready is the normal way to work. A push to a draft that has never
+  been reviewed still gets nothing. `triggers.skip_titles` matches do skip
+  deltas — retitling a PR to a filtered pattern stops further ones. An
+  explicit `@mention review` always runs a full review.
 
 ### Title filters (`triggers.skip_titles`)
 
