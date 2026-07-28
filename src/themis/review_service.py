@@ -324,6 +324,15 @@ class ReviewService:
         )
         return False
 
+    def _checkpoint_key(self) -> str:
+        """Secret the checkpoint tag is keyed with, or "" when there is none.
+
+        Server mode has the App private key. Action mode deliberately has no
+        App credentials at all, and the workflow token it does hold is
+        per-run, so nothing there can sign a checkpoint one run and verify it
+        the next - delta re-reviews are simply unavailable in that mode."""
+        return self.settings.gh_app_private_key_pem
+
     def _checkpoint_tag(self, repo: str, pr_number: int, sha: str) -> str:
         """Keyed binding of a checkpoint to its repo, PR and commit.
 
@@ -335,7 +344,7 @@ class ReviewService:
         both in place: one missed sanitisation point must not be enough to
         skip a push's review."""
         return hmac.new(
-            self.settings.gh_app_private_key_pem.encode(),
+            self._checkpoint_key().encode(),
             f"themis-checkpoint\0{repo}\0{pr_number}\0{sha}".encode(),
             hashlib.sha256,
         ).hexdigest()[:_CHECKPOINT_TAG_LEN]
@@ -480,6 +489,16 @@ class ReviewService:
                 if not repo_config.triggers.delta_review:
                     logger.info(
                         "themis_delta_review_disabled repo=%s pr=%s", repo, pr_number
+                    )
+                    return
+                if not self._checkpoint_key():
+                    # No controller secret to sign with (action mode holds no
+                    # App key): an unkeyed tag is computable by anyone, so a
+                    # checkpoint would be decorative. Skip rather than run an
+                    # unrequested full review on every push.
+                    logger.warning(
+                        "themis_delta_unavailable_no_checkpoint_key repo=%s pr=%s",
+                        repo, pr_number,
                     )
                     return
                 try:
@@ -992,7 +1011,7 @@ class ReviewService:
         # After truncation, so the marker a later delta review reads back can
         # never be cut. Guarded on shape: the sha reached GitHub as-is, and a
         # non-hex value would break the marker's un-forgeable format.
-        if re.fullmatch(_SHA_RE, commit_sha):
+        if self._checkpoint_key() and re.fullmatch(_SHA_RE, commit_sha):
             summary = (
                 REVIEWED_SHA_MARKER.format(
                     sha=commit_sha,

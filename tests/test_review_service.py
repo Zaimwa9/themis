@@ -1774,6 +1774,44 @@ async def test_review__delta_base_not_ancestor__full_review_fallback(service, gh
     gh.post_summary_comment.assert_awaited_once()
 
 
+async def test_review__delta_without_checkpoint_key__skipped(service, gh, caplog):
+    # Action mode holds no App key, so nothing there can sign a checkpoint.
+    # An unkeyed tag is computable by anyone, so the delta must not run - and
+    # skipping (not a full review) keeps a push from silently costing an
+    # engine run nobody asked for.
+    service.settings = make_settings(
+        workspace_root=service.settings.workspace_root, gh_app_private_key_pem=""
+    )
+    gh.get_file_text.return_value = DELTA_OPT_IN
+    gh.list_issue_comments_newest.return_value = [_summary_comment(service, "1" * 40)]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    with caplog.at_level(logging.WARNING):
+        await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+    assert "themis_delta_unavailable_no_checkpoint_key" in caplog.text
+
+
+async def test_review__no_checkpoint_key__summary_carries_no_marker(service, gh):
+    # Writing a checkpoint nobody can verify is worse than writing none: it
+    # looks like provenance without being any.
+    service.settings = make_settings(
+        workspace_root=service.settings.workspace_root, gh_app_private_key_pem=""
+    )
+
+    async def head_sha(workspace):
+        return "a" * 40
+    service.head_sha = head_sha
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    body = gh.post_summary_comment.await_args.args[2]
+    assert "themis:reviewed-sha" not in body
+
+
 async def test_review__delta_not_opted_in__skipped(service, gh):
     # Opt-in feature: with no repo config at all, a delta job runs nothing
     # and never reaches the marker scan.

@@ -182,6 +182,8 @@ Mechanics and bounds:
 - After a force-push (or when the shallow clone no longer reaches the last
   reviewed commit) there is no trustworthy delta, so the push is reviewed as
   a full review instead.
+- Server mode only: [GitHub Action mode](github-action.md) has no App key to
+  sign checkpoints with, so this setting has no effect there.
 - Delta re-reviews are automatic triggers: `auto_review: false` disables them
   too, and `triggers.skip_titles` matches skip them like any auto review. An
   explicit `@mention review` always runs a full review.

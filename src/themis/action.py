@@ -256,6 +256,7 @@ async def run_action() -> str:
             job.repo, job.pr_number, job.installation_id, job.auto,
             trigger_comment_id=job.trigger_comment_id,
             extra_context=job.extra_context,
+            delta=job.delta,
         )
         return "review"
     assert isinstance(job, DiscussJob)
