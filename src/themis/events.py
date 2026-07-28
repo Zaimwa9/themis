@@ -8,6 +8,9 @@ from typing import Any, Literal
 logger = logging.getLogger(__name__)
 
 _PR_ACTIONS = {"opened", "ready_for_review"}
+# Head-updating actions become delta re-review candidates (issue #11); the
+# worker decides whether a prior themis review exists to delta against.
+_PR_DELTA_ACTIONS = {"synchronize"}
 
 # Comment authors whose `review <context>` text may steer the review prompt.
 # Anyone allowed to comment can still trigger a review; only these roles can
@@ -25,6 +28,9 @@ class ReviewJob:
     trigger_comment_id: int | None = None
     # Optional request text supplied after the `review` command.
     extra_context: str | None = None
+    # True for pull_request.synchronize: re-review only the commits pushed
+    # since the last themis review, when one exists (issue #11).
+    delta: bool = False
 
 
 @dataclass(frozen=True)
@@ -66,7 +72,8 @@ def _installation_id(payload: dict[str, Any]) -> int:
 
 
 def _parse_pull_request(payload: dict[str, Any]) -> ReviewJob | None:
-    if payload.get("action") not in _PR_ACTIONS:
+    action = payload.get("action")
+    if action not in _PR_ACTIONS | _PR_DELTA_ACTIONS:
         return None
     pr = payload["pull_request"]
     # Automatic triggers skip drafts. Explicit requests (mention commands,
@@ -78,6 +85,7 @@ def _parse_pull_request(payload: dict[str, Any]) -> ReviewJob | None:
         pr_number=pr["number"],
         installation_id=_installation_id(payload),
         auto=True,
+        delta=action in _PR_DELTA_ACTIONS,
     )
 
 

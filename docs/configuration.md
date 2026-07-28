@@ -94,6 +94,7 @@ limits:
   clone_depth: 50
 triggers:
   auto_review: true
+  delta_review: false      # opt-in: re-review pushed commits as a delta once a review exists
   # skip_titles:            # wildcard patterns; a matching PR title skips the auto-review
   #   - 'ci: *'
   #   - 'chore: *'
@@ -126,6 +127,7 @@ review:
 | `limits.max_attempts` | `2` | attempts before Themis gives up and posts a failure comment |
 | `limits.clone_depth` | `50` | git fetch depth for the shallow PR clone |
 | `triggers.auto_review` | `true` | `false` = mention-only, no automatic review on PR open or ready-for-review |
+| `triggers.delta_review` | `false` | opt-in: on push to an already-reviewed PR, re-review only the commits since the last themis review; off by default because each non-coalesced push may cost an engine run; see below |
 | `triggers.skip_titles` | `[]` | case-insensitive wildcard patterns (`*`, `?`); a PR whose title matches any of them gets no automatic review (mention/API reviews still run); see below |
 | `learnings.enabled` | `true` | per-repo learnings memory; see [docs/learnings.md](learnings.md) |
 | `learnings.digest_threshold` | `10` | pending learnings needed before Themis opens/updates the digest PR (min 1) |
@@ -137,6 +139,54 @@ A partial file overlays the defaults key by key, so you only need to set the
 fields you want to change. Unknown fields are ignored. An invalid field warns
 and falls back to that field's built-in default without discarding valid
 sibling fields.
+
+### Delta re-reviews (`triggers.delta_review`)
+
+Opt-in — off by default, because it turns pushes to a reviewed PR into
+automatic engine runs (rapid pushes coalesce into one, and a push whose head
+the last review already covered exits before any engine starts). Enable it
+with `delta_review: true` on repos where the iterate-on-findings loop is
+worth that cost.
+
+Once enabled and a themis review exists on a PR, pushing new commits triggers a scoped
+re-review of just what changed since the last reviewed commit — the review
+prompt narrows to `git diff <last-reviewed-sha>..HEAD`, checks each open
+finding thread against the new code (resolving verified fixes, replying with
+what is still missing otherwise), and reports issues the fix commits
+introduced as regular tracked findings.
+
+Mechanics and bounds:
+
+- The last reviewed commit is read from a checkpoint themis writes at the
+  start of its own summary comments, carrying a signature bound to the
+  repository, PR and commit; marker text anywhere else — comments by others,
+  bot replies quoting untrusted text, or the review prose itself — is
+  ignored, and an unsigned or unverifiable one is refused rather than trusted
+  (see [`security.md`](security.md#control-markers-and-the-delta-checkpoint)). The scan walks the conversation from the newest comment
+  backwards and stops at the latest checkpoint, so later discussion volume
+  does not bury it; in the extreme case where the scan's safety bound
+  (thousands of comments) runs out first, the push gets a full review
+  rather than a silent skip — which also posts a fresh checkpoint at the
+  conversation tail. A PR that has never been reviewed gets nothing on push — the
+  first review still comes from PR open / ready-for-review, a mention, or
+  `/api/review`.
+- Thread follow-through is best-effort: the delta prompt requires resolving
+  each verified-fixed finding thread and replying to each still-open one,
+  and any open finding thread the run failed to re-check is listed in the
+  summary and stays open for the next review.
+- Rapid pushes collapse: while a review for the PR is queued or running,
+  further push events coalesce into a single follow-up check that runs once
+  the active review finishes — it re-reads the PR head and either covers
+  everything pushed since the last review in one delta or exits without
+  cost when that review already reached the head.
+- After a force-push (or when the shallow clone no longer reaches the last
+  reviewed commit) there is no trustworthy delta, so the push is reviewed as
+  a full review instead.
+- Server mode only: [GitHub Action mode](github-action.md) has no App key to
+  sign checkpoints with, so this setting has no effect there.
+- Delta re-reviews are automatic triggers: `auto_review: false` disables them
+  too, and `triggers.skip_titles` matches skip them like any auto review. An
+  explicit `@mention review` always runs a full review.
 
 ### Title filters (`triggers.skip_titles`)
 

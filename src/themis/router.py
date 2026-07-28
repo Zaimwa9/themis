@@ -61,6 +61,7 @@ def _enqueue(
                 settings, slug, job.repo, job.pr_number, job.installation_id, job.auto,
                 trigger_comment_id=job.trigger_comment_id,
                 extra_context=job.extra_context,
+                delta=job.delta,
             )
     else:
         async def run() -> None:
@@ -72,15 +73,25 @@ def _enqueue(
                 author_association=job.author_association,
                 author_login=job.author_login,
             )
-    return queue.enqueue(_job_id(job), run)
+    # A push during a running review must not vanish: the review's summary
+    # records the sha it cloned, so commits pushed after that clone would
+    # otherwise stay unreviewed until the next push. Delta jobs re-check the
+    # PR head against the last-reviewed marker and exit cheaply when the
+    # finished review already covered it, so a follow-up is always safe.
+    followup = isinstance(job, ReviewJob) and job.delta
+    return queue.enqueue(_job_id(job), run, followup=followup)
 
 
 def _skip_ack(job: ReviewJob | DiscussJob) -> bool:
     # Unmentioned thread replies are relevance-checked by the worker (it may
     # not be a bot thread at all); acking here would falsely acknowledge
     # replies the bot ends up ignoring. The worker reacts once it confirms
-    # relevance.
-    return isinstance(job, DiscussJob) and job.kind == "thread" and not job.mentions_bot
+    # relevance. Same doctrine for delta candidates: most pushes produce no
+    # re-review (no prior themis review, delta disabled), so the worker's
+    # rocket reaction is the first visible signal.
+    if isinstance(job, ReviewJob):
+        return job.delta
+    return job.kind == "thread" and not job.mentions_bot
 
 
 def _repo_allowed(repo: str, allowlist: frozenset[str] | None) -> bool:

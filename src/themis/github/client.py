@@ -2,6 +2,7 @@
 
 import base64
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -22,6 +23,14 @@ MAX_COMMENT_PAGES_TOTAL = 50
 # Same doctrine for PR conversation comments (the title-skip marker scan):
 # the bot's marker lands in the earliest pages, so a deep scan buys nothing.
 MAX_ISSUE_COMMENT_PAGES = 5
+# Backward marker scans stop at the first hit (the newest checkpoint sits at
+# the conversation tail), so they normally fetch a single page regardless of
+# this cap. It only bounds the no-marker case, where conversation volume
+# alone must not decide how many pages a public PR can make us fetch — 40
+# pages covers 4000 comments of later traffic and stays a runaway backstop,
+# not the expected read size. Exhausting it with a stop predicate armed is a
+# distinct outcome (CommentScanCapped), never a silent "not found".
+MAX_MARKER_SCAN_PAGES = 40
 _FAILED_CHECK_CONCLUSIONS = {
     "action_required",
     "cancelled",
@@ -30,6 +39,13 @@ _FAILED_CHECK_CONCLUSIONS = {
     "startup_failure",
     "timed_out",
 }
+
+
+class CommentScanCapped(Exception):
+    """A stop-predicate comment scan exhausted its page cap with pages still
+    unread: the marker may exist deeper, so "not found" would be a lie.
+    Deliberately not a GitHubGraphQLError — callers treating transient API
+    failures as "skip" need to pick an explicit recovery for this instead."""
 
 
 class GitHubGraphQLError(Exception):
@@ -79,6 +95,19 @@ query($id: ID!, $cursor: String) {
 _RESOLVE_MUTATION = """
 mutation($threadId: ID!) {
   resolveReviewThread(input: {threadId: $threadId}) { thread { id } }
+}
+"""
+
+_PR_COMMENTS_BACKWARD_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      comments(last: 100, before: $cursor) {
+        pageInfo { hasPreviousPage startCursor }
+        nodes { author { login } body }
+      }
+    }
+  }
 }
 """
 
@@ -286,6 +315,60 @@ class GitHubClient:
             f"{self._api_url}/repos/{repo}/issues/{number}/comments",
             max_pages=MAX_ISSUE_COMMENT_PAGES,
         )
+
+    async def list_issue_comments_newest(
+        self,
+        repo: str,
+        number: int,
+        max_pages: int = MAX_MARKER_SCAN_PAGES,
+        stop: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Newest-first PR conversation comments, bounded.
+
+        The REST listing pages in ascending order only, so a bounded read
+        from that end can never see the latest comments of a busy PR;
+        GraphQL's `last`/`before` reads the tail directly. Callers scanning
+        for the most recent bot marker (the delta-review base) need exactly
+        that end; they pass `stop` so pagination ends at the first match
+        (included in the result) instead of paying every page of a long
+        conversation. Exhausting `max_pages` before `stop` fires raises
+        CommentScanCapped — the marker may sit deeper, and only the caller
+        knows what failing to find it must mean. Nodes are normalised to the
+        REST comment shape (`user.login`, `body`) so both listings read
+        alike; GraphQL App logins lack the `[bot]` suffix, which
+        `_bot_logins` callers accept."""
+        owner, name = repo.split("/", 1)
+        comments: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _ in range(max_pages):
+            data = await self._graphql(
+                _PR_COMMENTS_BACKWARD_QUERY,
+                {"owner": owner, "name": name, "number": number, "cursor": cursor},
+            )
+            page = data["repository"]["pullRequest"]["comments"]
+            # Each page arrives oldest->newest; reverse it so the whole
+            # result is newest-first across pages.
+            for node in reversed(page["nodes"]):
+                comments.append({
+                    "user": {"login": (node.get("author") or {}).get("login") or ""},
+                    "body": node.get("body") or "",
+                })
+                if stop is not None and stop(comments[-1]):
+                    return comments
+            page_info = page["pageInfo"]
+            if not page_info.get("hasPreviousPage"):
+                return comments
+            cursor = page_info.get("startCursor")
+        # Exiting by cap means the conversation kept going past what we read;
+        # a caller's marker may exist deeper. Loud, so a blinded scan is
+        # diagnosable instead of looking like "no prior review".
+        logger.warning(
+            "themis_issue_comments_scan_capped repo=%s pr=%s pages=%s",
+            repo, number, max_pages,
+        )
+        if stop is not None:
+            raise CommentScanCapped(f"{repo}#{number}: no match in {max_pages} pages")
+        return comments
 
     async def list_pr_files(self, repo: str, number: int) -> list[str]:
         """All changed file paths in the PR (paginated; authoritative merge-base diff)."""

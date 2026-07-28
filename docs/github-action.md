@@ -135,6 +135,14 @@ the boundary moves to the process level:
   runner's copy is discarded after the run, so a refreshed chain is *not*
   persisted — API-key `auth.json` content avoids that class of trouble
   entirely.
+- **No delta re-reviews.** `triggers.delta_review` has no effect here, and
+  adding `synchronize` to the workflow's `types:` does nothing. The feature
+  needs a stable controller-held secret to sign the reviewed-commit
+  checkpoint it later reads back; action mode holds no App credentials, and
+  the workflow token it does hold is minted per run, so a checkpoint signed
+  in one run could never be verified in the next. Pushes are skipped with
+  `themis_delta_unavailable_no_checkpoint_key` rather than silently
+  charged a full review.
 - **Self-hosted runners** need Node 22+, `uv`-installable Python ≥ 3.12,
   and `git` on the PATH.
 - **Timeouts:** budget the job for the whole retry ladder, not one

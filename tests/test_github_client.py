@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 
 import httpx
 import pytest
@@ -9,6 +10,7 @@ from themis.github.client import (
     MAX_COMMENT_PAGES_TOTAL,
     MAX_ISSUE_COMMENT_PAGES,
     SUMMARY_MARKER,
+    CommentScanCapped,
     GitHubClient,
     GitHubGraphQLError,
 )
@@ -338,6 +340,138 @@ async def test_list_review_threads__two_pages__follows_cursor_and_returns_all():
 
     assert [t["id"] for t in threads] == ["T_1", "T_2"]
     assert requests[1]["cursor"] == "CUR_1"
+
+
+async def test_list_issue_comments_newest__normalises_to_rest_shape_newest_first():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/graphql"
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "comments": {
+                "pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                # GraphQL page order is oldest -> newest.
+                "nodes": [
+                    {"author": {"login": "dev"}, "body": "old"},
+                    {"author": None, "body": "ghost"},  # deleted account
+                    {"author": {"login": "themis-reviewer"}, "body": "new"},
+                ],
+            }}}}})
+
+    comments = await _client(handler).list_issue_comments_newest("acme/widgets", 7)
+
+    assert [c["user"]["login"] for c in comments] == ["themis-reviewer", "", "dev"]
+    assert [c["body"] for c in comments] == ["new", "ghost", "old"]
+
+
+async def test_list_issue_comments_newest__pages_backwards_from_the_tail():
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        variables = json.loads(request.content)["variables"]
+        requests.append(variables)
+        if variables["cursor"] is None:
+            return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+                "comments": {
+                    "pageInfo": {"hasPreviousPage": True, "startCursor": "CUR_0"},
+                    "nodes": [{"author": {"login": "c"}, "body": "3"},
+                              {"author": {"login": "d"}, "body": "4"}],
+                }}}}})
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "comments": {
+                "pageInfo": {"hasPreviousPage": False, "startCursor": None},
+                "nodes": [{"author": {"login": "a"}, "body": "1"},
+                          {"author": {"login": "b"}, "body": "2"}],
+            }}}}})
+
+    comments = await _client(handler).list_issue_comments_newest("acme/widgets", 7)
+
+    assert [c["body"] for c in comments] == ["4", "3", "2", "1"]
+    assert requests[1]["cursor"] == "CUR_0"
+
+
+async def test_list_issue_comments_newest__bounded_page_count():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "comments": {
+                "pageInfo": {"hasPreviousPage": True, "startCursor": f"CUR_{len(calls)}"},
+                "nodes": [{"author": {"login": "x"}, "body": "spam"}] * 100,
+            }}}}})
+
+    comments = await _client(handler).list_issue_comments_newest(
+        "acme/widgets", 7, max_pages=2
+    )
+
+    assert len(calls) == 2
+    assert len(comments) == 200
+
+
+async def test_list_issue_comments_newest__stop_found_beyond_five_pages():
+    # Regression: the checkpoint scan used to cap at 5 pages, so 500+ comments
+    # of later conversation traffic silently blinded delta reviews. The stop
+    # predicate now ends pagination at the first hit, however deep it sits,
+    # and the hit stays in the result.
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) < 7:
+            nodes = [{"author": {"login": "x"}, "body": "noise"}] * 100
+        else:
+            nodes = [
+                {"author": {"login": "x"}, "body": "older"},
+                {"author": {"login": "themis-reviewer"}, "body": "checkpoint"},
+                {"author": {"login": "x"}, "body": "newer noise"},
+            ]
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "comments": {
+                "pageInfo": {"hasPreviousPage": True, "startCursor": f"CUR_{len(calls)}"},
+                "nodes": nodes,
+            }}}}})
+
+    comments = await _client(handler).list_issue_comments_newest(
+        "acme/widgets", 7, stop=lambda c: c["body"] == "checkpoint"
+    )
+
+    assert len(calls) == 7
+    assert comments[-1]["body"] == "checkpoint"  # pagination ended on the hit
+    assert all(c["body"] != "older" for c in comments)
+
+
+async def test_list_issue_comments_newest__capped_scan_warns(caplog):
+    # Exhausting the cap with pages still unread must be diagnosable: without
+    # the log line a buried marker reads as "no prior review".
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "comments": {
+                "pageInfo": {"hasPreviousPage": True, "startCursor": "CUR"},
+                "nodes": [{"author": {"login": "x"}, "body": "spam"}],
+            }}}}})
+
+    with caplog.at_level(logging.WARNING):
+        await _client(handler).list_issue_comments_newest(
+            "acme/widgets", 7, max_pages=2
+        )
+
+    assert "themis_issue_comments_scan_capped" in caplog.text
+
+
+async def test_list_issue_comments_newest__capped_with_stop__raises():
+    # With a stop predicate armed, hitting the cap means the caller's marker
+    # may sit in the unread pages: "not found" would be a lie, so the scan
+    # raises and the caller picks an explicit recovery.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"repository": {"pullRequest": {
+            "comments": {
+                "pageInfo": {"hasPreviousPage": True, "startCursor": "CUR"},
+                "nodes": [{"author": {"login": "x"}, "body": "spam"}],
+            }}}}})
+
+    with pytest.raises(CommentScanCapped):
+        await _client(handler).list_issue_comments_newest(
+            "acme/widgets", 7, max_pages=2, stop=lambda c: False
+        )
 
 
 async def test_list_review_threads__graphql_errors__raises():

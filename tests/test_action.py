@@ -410,16 +410,18 @@ class FakeClient:
 class FakeService:
     def __init__(self, head_repo: dict | None):
         self.calls: list[tuple] = []
+        self.deltas: list[bool] = []
         self.client = FakeClient(head_repo)
         self.make_client = lambda token: self.client
 
     async def review(
         self, repo, pr_number, installation_id, auto,
-        trigger_comment_id=None, extra_context=None,
+        trigger_comment_id=None, extra_context=None, delta=False,
     ):
         self.calls.append(
             ("review", repo, pr_number, installation_id, auto, trigger_comment_id)
         )
+        self.deltas.append(delta)
 
     async def discuss(self, **kwargs):
         self.calls.append(("discuss", kwargs))
@@ -448,6 +450,20 @@ async def test_run_action__pr_opened__runs_auto_review(
 
     assert outcome == "review"
     assert fake_service.calls == [("review", REPO, 7, 0, True, None)]
+    assert fake_service.deltas == [False]
+
+
+async def test_run_action__pr_synchronize__forwards_the_delta_flag(
+    tmp_path, monkeypatch, fake_service
+):
+    # A push parses as a delta candidate; dropping the flag here would turn
+    # every push into an unrequested *full* review, bypassing the
+    # triggers.delta_review opt-in that gates it inside the service.
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    _write_event(tmp_path, monkeypatch, "pull_request", _pr_payload(action="synchronize"))
+
+    assert await run_action() == "review"
+    assert fake_service.deltas == [True]
 
 
 async def test_run_action__draft_pr__skipped(tmp_path, monkeypatch, fake_service):

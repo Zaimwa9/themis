@@ -3,6 +3,8 @@
 import asyncio
 import ast
 import contextlib
+import hashlib
+import hmac
 import json
 import logging
 import re
@@ -32,7 +34,12 @@ from themis.engines import (
 )
 from themis.events import TRUSTED_ASSOCIATIONS
 from themis.github.auth import get_installation_token, make_app_jwt
-from themis.github.client import GitHubClient, GitHubGraphQLError
+from themis.github.client import (
+    SUMMARY_MARKER,
+    CommentScanCapped,
+    GitHubClient,
+    GitHubGraphQLError,
+)
 from themis.learning_service import LEARNING_FOOTER, LearningService
 from themis.linked_context import fetch_linked_context
 from themis.learnings import Learning, PendingStore, to_jsonl
@@ -46,7 +53,7 @@ from themis.output import (
 )
 from themis.prompts import DOCTRINE_PATH, build_discussion_prompt, build_review_prompt
 from themis.trusted_context import apply_trusted_context
-from themis.security import redact_outbound
+from themis.security import redact_outbound, sanitize_agent_text
 from themis.remote import RemoteEngine
 from themis.workspace import (
     clone_url_for,
@@ -87,6 +94,23 @@ CANCELLED_COMMENT = (
     "Mention {mention} with `review` to retry."
 )
 TITLE_SKIP_MARKER = "<!-- themis:title-skip -->"
+# Embedded in every summary comment so a later push can delta-review
+# `<last-reviewed-sha>..HEAD` (issue #11). A forged sha would silently shrink
+# - or, matching the head, entirely skip - the delta under review, so a
+# checkpoint only counts when the comment is bot-authored, the marker sits at
+# the fixed prefix the controller prepends, and the tag verifies under the
+# controller's key. Backing all three: no agent-written body can contain
+# marker text at all (`sanitize_agent_text` defangs it), which is what stops
+# a discussion reply - engine prose from position 0 - from opening with a
+# checkpoint of its own. Exactly 40 hex on both sides: one shape, so no short
+# checkpoint can prefix-match a head sha.
+_SHA_RE = r"[0-9a-f]{40}"
+_CHECKPOINT_TAG_LEN = 32
+REVIEWED_SHA_MARKER = "<!-- themis:reviewed-sha {sha} {tag} -->"
+_SUMMARY_CHECKPOINT_RE = re.compile(
+    re.escape(SUMMARY_MARKER)
+    + rf"\n<!-- themis:reviewed-sha ({_SHA_RE}) ([0-9a-f]{{{_CHECKPOINT_TAG_LEN}}}) -->\n"
+)
 TITLE_SKIPPED_COMMENT = (
     "Automatic review skipped: the PR title matches the `triggers.skip_titles` "
     "rule `{pattern}` in `.themis/config.yaml`. Mention {mention} with `review` "
@@ -149,6 +173,19 @@ async def git_head_sha(workspace: Path) -> str | None:
         logger.warning("themis_head_sha_failed output=%s", output[-200:])
         return None
     return output.strip()
+
+
+async def git_is_ancestor(workspace: Path, sha: str) -> bool:
+    """Whether sha exists in the clone and is an ancestor of HEAD.
+
+    False covers every unusable case alike - unknown object (force-push
+    discarded it, or the shallow clone is too old to contain it), rewritten
+    history, git failure - because the caller's fallback for all of them is
+    the same safe direction: a full review instead of a delta."""
+    returncode, _ = await run_git(
+        "merge-base", "--is-ancestor", sha, "HEAD", cwd=workspace
+    )
+    return returncode == 0
 
 
 _DIFF_HUNK = re.compile(
@@ -217,6 +254,12 @@ async def git_changed_lines(
     return anchors
 
 
+class DeltaBaseUnknown(Exception):
+    """A prior review may exist but the commit it covered cannot be
+    established, so a delta cannot be scoped. Distinct from "never reviewed":
+    the recovery is a full review, not a skip."""
+
+
 @dataclass
 class ReviewService:
     settings: Settings
@@ -232,6 +275,7 @@ class ReviewService:
         git_changed_lines
     )
     head_sha: Callable[[Path], Awaitable[str | None]] = git_head_sha
+    is_ancestor: Callable[[Path, str], Awaitable[bool]] = git_is_ancestor
     trust_context: Callable[..., Awaitable[tuple[bool, bool]]] = apply_trusted_context
     learning_service: LearningService | None = None
 
@@ -280,10 +324,135 @@ class ReviewService:
         )
         return False
 
+    def _checkpoint_key(self) -> str:
+        """Secret the checkpoint tag is keyed with, or "" when there is none.
+
+        Server mode has the App private key. Action mode deliberately has no
+        App credentials at all, and the workflow token it does hold is
+        per-run, so nothing there can sign a checkpoint one run and verify it
+        the next - delta re-reviews are simply unavailable in that mode."""
+        return self.settings.gh_app_private_key_pem
+
+    def _checkpoint_tag(self, repo: str, pr_number: int, sha: str) -> str:
+        """Keyed binding of a checkpoint to its repo, PR and commit.
+
+        The key is the GitHub App private key: controller-held, required in
+        every deployment, and never in an engine's allowlisted env - so a
+        checkpoint cannot be manufactured by an agent body, nor replayed from
+        another PR. Prevention (`sanitize_agent_text` keeps marker text out
+        of agent-written comments) and this verification are deliberately
+        both in place: one missed sanitisation point must not be enough to
+        skip a push's review."""
+        return hmac.new(
+            self._checkpoint_key().encode(),
+            f"themis-checkpoint\0{repo}\0{pr_number}\0{sha}".encode(),
+            hashlib.sha256,
+        ).hexdigest()[:_CHECKPOINT_TAG_LEN]
+
+    def _checkpoint_match(
+        self, comment: dict[str, Any], repo: str, pr_number: int
+    ) -> tuple[str | None, bool]:
+        """`(verified sha or None, carried an unverifiable checkpoint)`.
+
+        Three conditions, all necessary for a sha: the bot authored it, the
+        marker sits at the fixed prefix the controller prepends (never
+        mid-body), and the tag verifies. The second element separates "this
+        comment is not a checkpoint" from "this comment claims to be one and
+        I cannot confirm it" - the caller must not read the latter as a PR
+        that was never reviewed."""
+        if ((comment.get("user") or {}).get("login") or "") not in _bot_logins(
+            self.bot_login
+        ):
+            return None, False
+        match = _SUMMARY_CHECKPOINT_RE.match(comment.get("body") or "")
+        if match is None:
+            return None, False
+        sha, tag = match.group(1), match.group(2)
+        if not hmac.compare_digest(tag, self._checkpoint_tag(repo, pr_number, sha)):
+            # Loud: a key rotation reads the same as a forgery attempt here,
+            # and both must be diagnosable. The scan keeps going, so an older
+            # genuine checkpoint still wins.
+            logger.warning(
+                "themis_delta_checkpoint_unverified repo=%s pr=%s sha=%s",
+                repo, pr_number, sha,
+            )
+            return None, True
+        return sha, False
+
+    def _checkpoint_sha(
+        self, comment: dict[str, Any], repo: str, pr_number: int
+    ) -> str | None:
+        return self._checkpoint_match(comment, repo, pr_number)[0]
+
+    async def _resolve_delta_base(
+        self, gh: Any, repo: str, pr_number: int, head_sha: str
+    ) -> str | None:
+        """Sha the last themis review covered, or None when no delta should run.
+
+        The marker is only trusted in comments the bot itself authored; the
+        newest one wins, so the scan walks the conversation newest-first -
+        a bounded oldest-first read would go blind on a busy PR and silently
+        stop delta reviews there. The checkpoint predicate doubles as the
+        pagination stop, so the fetch ends at the latest checkpoint however
+        deep later conversation traffic buried it. A failed read skips the
+        delta rather than degrading to a full review: synchronize fires on
+        every push, and a transient GitHub error must not buy a full-cost
+        review nobody asked for. DeltaBaseUnknown is raised instead when a
+        prior review may well exist but its base cannot be established (the
+        scan ran out of pages, or every checkpoint on record fails to
+        verify): the caller reviews in full rather than skipping."""
+        # One acceptance rule behind both the pagination stop and the parser:
+        # a stop looser than the parser would end the scan on a comment the
+        # parser then rejects, hiding the genuine checkpoint behind it. An
+        # unverifiable checkpoint deliberately does not stop the scan - an
+        # older genuine one still counts.
+        try:
+            comments = await gh.list_issue_comments_newest(
+                repo,
+                pr_number,
+                stop=lambda c: self._checkpoint_sha(c, repo, pr_number) is not None,
+            )
+        except CommentScanCapped as error:
+            raise DeltaBaseUnknown(str(error)) from None
+        except (httpx.HTTPError, GitHubGraphQLError) as error:
+            logger.warning(
+                "themis_delta_comments_failed repo=%s pr=%s error=%s",
+                repo, pr_number, error,
+            )
+            return None
+        last_sha: str | None = None
+        unverifiable = False
+        for comment in comments:  # newest first: the first checkpoint is the latest
+            last_sha, seen_unverifiable = self._checkpoint_match(
+                comment, repo, pr_number
+            )
+            unverifiable = unverifiable or seen_unverifiable
+            if last_sha is not None:
+                break
+        if last_sha is None:
+            if unverifiable:
+                # Rotated app key, or a second instance holding a different
+                # one: this PR *was* reviewed, we just cannot say from where.
+                raise DeltaBaseUnknown(f"{repo}#{pr_number}: no verifiable checkpoint")
+            logger.info(
+                "themis_delta_no_prior_review repo=%s pr=%s", repo, pr_number
+            )
+            return None
+        if head_sha == last_sha:
+            # The queue collapsed rapid pushes, or the webhook was redelivered:
+            # the head on record is already reviewed.
+            logger.info(
+                "themis_delta_head_unchanged repo=%s pr=%s sha=%s",
+                repo, pr_number, last_sha,
+            )
+            return None
+        return last_sha
+
     async def review(
         self, repo: str, pr_number: int, installation_id: int, auto: bool,
         trigger_comment_id: int | None = None,
         extra_context: str | None = None,
+        delta: bool = False,
     ) -> None:
         token = await self.get_token(installation_id)
         gh = self.make_client(token)
@@ -315,6 +484,40 @@ class ReviewService:
                     gh, installation_id, repo, pr_number, pattern
                 )
                 return
+            delta_base: str | None = None
+            if delta:
+                if not repo_config.triggers.delta_review:
+                    logger.info(
+                        "themis_delta_review_disabled repo=%s pr=%s", repo, pr_number
+                    )
+                    return
+                if not self._checkpoint_key():
+                    # No controller secret to sign with (action mode holds no
+                    # App key): an unkeyed tag is computable by anyone, so a
+                    # checkpoint would be decorative. Skip rather than run an
+                    # unrequested full review on every push.
+                    logger.warning(
+                        "themis_delta_unavailable_no_checkpoint_key repo=%s pr=%s",
+                        repo, pr_number,
+                    )
+                    return
+                try:
+                    delta_base = await self._resolve_delta_base(
+                        gh, repo, pr_number, pr["head"]["sha"]
+                    )
+                except DeltaBaseUnknown as error:
+                    # A prior review exists (or may) but its base is not
+                    # establishable. Skipping would silently drop the
+                    # promised re-review; a full review is the safe recovery
+                    # and re-seeds a verifiable checkpoint at the
+                    # conversation tail, so the next push deltas again.
+                    logger.warning(
+                        "themis_delta_base_unknown_fallback_full repo=%s pr=%s reason=%s",
+                        repo, pr_number, error,
+                    )
+                else:
+                    if delta_base is None:
+                        return
             engine = self._engine_for(repo_config)
             if not await self._ensure_engine_available(
                 engine, installation_id, repo, pr_number, "review"
@@ -364,6 +567,17 @@ class ReviewService:
                     skills=repo_config.agent.skills,
                     skills_index=skills_bridge,
                 )
+                if delta_base is not None and not await self.is_ancestor(
+                    workspace, delta_base
+                ):
+                    # Force-push rewrote the reviewed commit away, or the
+                    # shallow clone no longer reaches it: there is no
+                    # trustworthy delta, so review the whole PR again.
+                    logger.info(
+                        "themis_delta_fallback_full repo=%s pr=%s base=%s",
+                        repo, pr_number, delta_base,
+                    )
+                    delta_base = None
                 _write_inputs(
                     workspace, pr, threads, learnings=learnings,
                     linked_issues=linked_issues,
@@ -403,6 +617,7 @@ class ReviewService:
                     has_linked_issues=bool(linked_issues), modules=modules,
                     use_default_doctrine=use_default_doctrine,
                     skills_index=native_skills and skills_bridge,
+                    delta_base=delta_base,
                 )
                 actions = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
@@ -416,9 +631,9 @@ class ReviewService:
                 # Redact before anything measures text: redaction can EXPAND
                 # (a short secret becomes the longer marker), so budgets
                 # computed on pre-redaction lengths would overflow the posting
-                # cap and drop tail findings. _post_review_results redacts
+                # cap and drop tail findings. _post_review_results sanitizes
                 # again as the posting-path backstop; that is idempotent.
-                _redact_actions(actions)
+                _sanitize_actions(actions)
                 post_gh = self.make_client(await self.get_token(installation_id))
                 async with post_gh:
                     await self._drop_findings_outside_diff(
@@ -431,6 +646,10 @@ class ReviewService:
                     _keep_bot_authored_resolutions(
                         actions, threads, self.bot_login, repo, pr_number
                     )
+                    if delta_base is not None:
+                        _note_unaddressed_threads(
+                            actions, threads, self.bot_login, repo, pr_number
+                        )
                     # Anchor to the tree codex actually reviewed: the author may
                     # have pushed between the webhook and the clone.
                     commit_sha = await self.head_sha(workspace) or pr["head"]["sha"]
@@ -527,7 +746,11 @@ class ReviewService:
                     captured = self.learning_service.capture(
                         workspace, repo, pr_number, author_login, learnings, pending
                     )
-                reply = redact_outbound(reply)
+                # A discussion answer is an issue comment whose whole body the
+                # engine wrote from a hostile PR's text: without defanging it
+                # could open with a checkpoint prefix and suppress the delta
+                # review of a planned push.
+                reply = sanitize_agent_text(reply)
                 if captured is not None:
                     reply += LEARNING_FOOTER
                 # Codex runs can outlive the 60-min installation token; post with
@@ -739,7 +962,7 @@ class ReviewService:
     async def _post_review_results(
         self, gh: Any, repo: str, pr_number: int, commit_sha: str, actions: ReviewActions
     ) -> None:
-        _redact_actions(actions)
+        _sanitize_actions(actions)
         summary = actions.summary
         if actions.findings:
             try:
@@ -785,6 +1008,18 @@ class ReviewService:
         # note and the 422 fold can push past GitHub's 65,536-char limit.
         if len(summary) > MAX_BODY_LEN:
             summary = summary[:64000] + "\n\n[summary truncated: GitHub comment length limit]"
+        # After truncation, so the marker a later delta review reads back can
+        # never be cut. Guarded on shape: the sha reached GitHub as-is, and a
+        # non-hex value would break the marker's un-forgeable format.
+        if self._checkpoint_key() and re.fullmatch(_SHA_RE, commit_sha):
+            summary = (
+                REVIEWED_SHA_MARKER.format(
+                    sha=commit_sha,
+                    tag=self._checkpoint_tag(repo, pr_number, commit_sha),
+                )
+                + "\n"
+                + summary
+            )
         await gh.post_summary_comment(repo, pr_number, summary)
 
 
@@ -856,12 +1091,14 @@ def _bot_in_thread(thread: dict[str, Any], bot_login: str) -> bool:
 _FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*?)[ \t]*\r?\n?$")
 
 
-def _redact_actions(actions: ReviewActions) -> None:
-    actions.summary = redact_outbound(actions.summary)
+def _sanitize_actions(actions: ReviewActions) -> None:
+    # Engine-written every one of them, so control markers are defanged too:
+    # the summary body is what a later delta review scans for a checkpoint.
+    actions.summary = sanitize_agent_text(actions.summary)
     for finding in actions.findings:
-        finding["body"] = redact_outbound(finding["body"])
+        finding["body"] = sanitize_agent_text(finding["body"])
     for reply in actions.replies:
-        reply["body"] = redact_outbound(reply["body"])
+        reply["body"] = sanitize_agent_text(reply["body"])
 
 
 def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
@@ -989,6 +1226,48 @@ def _enforce_delivery_modules(
         actions.findings = []
 
 
+def _note_unaddressed_threads(
+    actions: ReviewActions, threads: list[dict[str, Any]], bot_login: str,
+    repo: str, pr_number: int,
+) -> None:
+    """Delta backstop: the prompt requires a disposition (resolve or reply)
+    for every open bot thread, but the engine is free-form and can omit one.
+    Dispositions stay best-effort - a rerun for a missed thread would double
+    engine cost and re-reply threads already answered - so an omission is
+    surfaced in the summary instead of vanishing: the thread stays open and
+    the reader sees that it was not re-checked."""
+    logins = _bot_logins(bot_login)
+    resolved = set(actions.resolve_thread_ids)
+    replied = {reply["in_reply_to"] for reply in actions.replies}
+    missed = []
+    for thread in threads:
+        if thread.get("isResolved"):
+            continue
+        nodes = thread.get("comments", {}).get("nodes", [])
+        author = (nodes[0].get("author") or {}).get("login", "") if nodes else ""
+        if author not in logins:
+            continue
+        if thread.get("id") in resolved:
+            continue
+        if any(node.get("databaseId") in replied for node in nodes):
+            continue
+        missed.append(thread)
+    if not missed:
+        return
+    logger.warning(
+        "themis_delta_threads_unaddressed repo=%s pr=%s count=%d ids=%s",
+        repo, pr_number, len(missed), [t.get("id") for t in missed],
+    )
+    lines = "\n".join(
+        f"- `{thread.get('path')}:{thread.get('line')}`" for thread in missed
+    )
+    actions.summary += (
+        f"\n\n##### {len(missed)} earlier finding(s) were not re-checked in"
+        f" this delta review\n{lines}\n\nThese threads stay open; the next"
+        " review checks them again."
+    )
+
+
 def _keep_bot_authored_resolutions(
     actions: ReviewActions, threads: list[dict[str, Any]], bot_login: str,
     repo: str, pr_number: int,
@@ -1062,7 +1341,7 @@ def build_service(settings: Settings, bot_slug: str) -> ReviewService:
 async def run_review_job(
     settings: Settings, bot_slug: str, repo: str, pr_number: int,
     installation_id: int, auto: bool, trigger_comment_id: int | None = None,
-    extra_context: str | None = None,
+    extra_context: str | None = None, delta: bool = False,
 ) -> None:
     service = build_service(settings, bot_slug)
     await asyncio.to_thread(sweep_stale, settings.workspace_root)
@@ -1071,6 +1350,7 @@ async def run_review_job(
             repo, pr_number, installation_id, auto,
             trigger_comment_id=trigger_comment_id,
             extra_context=extra_context,
+            delta=delta,
         )
     except asyncio.CancelledError:
         # The queue timeout also covers time spent behind the codex semaphore;

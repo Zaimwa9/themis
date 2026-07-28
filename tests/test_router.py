@@ -39,7 +39,8 @@ class RecordingQueue(InMemoryJobQueue):
         super().__init__()
         self.enqueued: list[str] = []
 
-    def enqueue(self, job_id, run):
+    def enqueue(self, job_id, run, followup=False):
+        self.followups = getattr(self, "followups", []) + [followup]
         if job_id in self.enqueued:
             return False
         self.enqueued.append(job_id)
@@ -62,8 +63,8 @@ def _make_client_capturing(settings=None):
     runs = []
     original_enqueue = queue.enqueue
 
-    def enqueue(job_id, run):
-        accepted = original_enqueue(job_id, run)
+    def enqueue(job_id, run, followup=False):
+        accepted = original_enqueue(job_id, run, followup=followup)
         if accepted:
             runs.append(run)
         return accepted
@@ -249,6 +250,28 @@ def test_webhook_pr_opened_enqueues_review_and_acks(monkeypatch):
     assert queue.enqueued == ["review:acme/widgets#5"]
     ack.assert_awaited_once()
     assert ack.await_args.kwargs == {"issue_number": 5}
+
+
+def test_webhook_pr_synchronize_enqueues_followup_delta_without_ack(monkeypatch):
+    # Delta candidates skip the eyes ack (most pushes trigger no review) and
+    # ask the queue to keep the newest rejected push for a follow-up run.
+    ack = AsyncMock()
+    monkeypatch.setattr("themis.router._ack", ack)
+    client, queue = make_client()
+    payload = json.dumps({**pr_opened_payload(), "action": "synchronize"}).encode()
+    response = client.post(
+        "/webhook",
+        content=payload,
+        headers={
+            "x-hub-signature-256": sign("hush", payload),
+            "x-github-event": "pull_request",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"status": "queued"}
+    assert queue.enqueued == ["review:acme/widgets#5"]
+    assert queue.followups == [True]
+    ack.assert_not_awaited()
 
 
 def test_webhook_mention_review_command_enqueues_review_and_acks_issue_comment(monkeypatch):

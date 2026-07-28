@@ -67,6 +67,39 @@ error messages (failed attempts, job-failure tracebacks), all pass through
 the same redaction before they can reach a log line. Treat worker logs as
 sensitive anyway; redaction is a backstop, not a license to ship logs.
 
+## Control markers and the delta checkpoint
+
+Themis writes HTML-comment markers into its own comments and reads them back
+to make control decisions — most importantly the reviewed-commit checkpoint a
+[delta re-review](configuration.md#delta-re-reviews-triggersdelta_review)
+starts from. Marker text is therefore privileged, while agent output is
+written from hostile PR content and can be induced to reproduce any literal
+string. Forging a checkpoint for a commit about to be pushed would otherwise
+make Themis treat that push as already reviewed and skip it.
+
+Two independent controls, either one sufficient:
+
+- **Agent bodies cannot contain markers.** Everything an engine writes
+  (summaries, findings, thread replies, conversation answers) passes
+  `sanitize_agent_text`, which defangs `<!-- themis:… -->` to
+  `<!-- themis-quoted:… -->`. The text stays readable — a finding quoting
+  Themis's own source still shows what it quoted — but no longer parses as a
+  marker on the way back in.
+- **Checkpoints are keyed.** Each one carries an HMAC-SHA256 tag over
+  repository, PR number and commit, keyed with the GitHub App private key —
+  controller-held, never in an engine's environment. A checkpoint that fails
+  verification is refused and logged (`themis_delta_checkpoint_unverified`),
+  and the scan continues to the previous one; it is never silently treated as
+  "no prior review". If *no* checkpoint on the PR verifies — which is what a
+  rotated app key looks like, not only an attack — the push is reviewed in
+  full rather than skipped, and that review re-seeds a checkpoint under the
+  current key, so the cost is one push and deltas resume. The binding also
+  stops a genuine checkpoint from being replayed into another PR or
+  repository.
+
+A checkpoint is additionally only read from bot-authored comments, and only
+at the fixed prefix the controller itself writes.
+
 ## Webhook verification
 
 `POST /webhook` requires a valid `X-Hub-Signature-256` HMAC-SHA256 over the
