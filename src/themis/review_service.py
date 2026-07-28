@@ -740,6 +740,7 @@ class ReviewService:
                     thread_context=json.dumps(thread, indent=2) if thread else "",
                     has_learnings=bool(learnings),
                     capture=capture,
+                    use_default_doctrine=not (workspace / DOCTRINE_PATH).exists(),
                 )
                 reply = await self._attempt(
                     repo, pr_number, installation_id, workspace, repo_config, engine, prompt,
