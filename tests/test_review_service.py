@@ -3727,3 +3727,118 @@ async def test_configure_agent_slot_admits_that_many_engine_runs():
                 assert slot.locked()  # but not a third
     finally:
         review_service.configure_agent_slot(1)
+
+
+# --- thread resolution from a reply ------------------------------------------
+
+
+def _resolving_reply_agent(resolved: bool | None = True, text: str = "fixed, resolving"):
+    """Reply agent that also writes resolution.json (None = writes nothing)."""
+    async def agent(*, prompt, workspace, **kwargs) -> str:
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "reply.md").write_text(text)
+        if resolved is not None:
+            (out / "resolution.json").write_text(json.dumps({"resolved": resolved}))
+        return "ok"
+    return agent
+
+
+async def _discuss_in_thread(service, comment_id: int = 12) -> None:
+    await service.discuss(
+        repo=REPO, pr_number=7, installation_id=42, comment_id=comment_id,
+        body="@test-reviewer fixed now?", kind="thread",
+        in_reply_to_id=11, mentions_bot=True,
+    )
+
+
+async def test_discuss__verified_fix_in_own_thread__resolves_it(service, gh):
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(_resolving_reply_agent(True))
+
+    await _discuss_in_thread(service)
+
+    gh.post_reply.assert_awaited_once()
+    gh.resolve_thread.assert_awaited_once_with("T_1")
+
+
+async def test_discuss__no_resolution_file__thread_left_open(service, gh):
+    # The default path: answering a question must not close the thread.
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(_resolving_reply_agent(None))
+
+    await _discuss_in_thread(service)
+
+    gh.post_reply.assert_awaited_once()
+    gh.resolve_thread.assert_not_awaited()
+
+
+async def test_discuss__resolved_false__thread_left_open(service, gh):
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(_resolving_reply_agent(False))
+
+    await _discuss_in_thread(service)
+
+    gh.resolve_thread.assert_not_awaited()
+
+
+async def test_discuss__human_thread__resolution_refused(service, gh, caplog):
+    # Closing someone else's thread would answer their question for them.
+    gh.list_review_threads.return_value = [_human_thread()]
+    service.resolve_engine = _resolver(_resolving_reply_agent(True))
+
+    with caplog.at_level(logging.WARNING):
+        await service.discuss(
+            repo=REPO, pr_number=7, installation_id=42, comment_id=22,
+            body="@test-reviewer fixed now?", kind="thread",
+            in_reply_to_id=21, mentions_bot=True,
+        )
+
+    gh.post_reply.assert_awaited_once()
+    gh.resolve_thread.assert_not_awaited()
+    assert "themis_resolution_dropped_not_bot_thread" in caplog.text
+
+
+async def test_discuss__malformed_resolution__reply_still_posts(service, gh, caplog):
+    gh.list_review_threads.return_value = [_bot_thread()]
+
+    async def agent(*, prompt, workspace, **kwargs) -> str:
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "reply.md").write_text("answered")
+        (out / "resolution.json").write_text("not json")
+        return "ok"
+
+    service.resolve_engine = _resolver(agent)
+
+    with caplog.at_level(logging.WARNING):
+        await _discuss_in_thread(service)
+
+    gh.post_reply.assert_awaited_once()
+    gh.resolve_thread.assert_not_awaited()
+    assert "themis_resolution_invalid" in caplog.text
+
+
+async def test_discuss__resolve_call_fails__reply_still_succeeds(service, gh, caplog):
+    gh.list_review_threads.return_value = [_bot_thread()]
+    gh.resolve_thread.side_effect = GitHubGraphQLError("nope")
+    service.resolve_engine = _resolver(_resolving_reply_agent(True))
+
+    with caplog.at_level(logging.WARNING):
+        await _discuss_in_thread(service)
+
+    gh.post_reply.assert_awaited_once()
+    assert "themis_resolve_thread_failed" in caplog.text
+
+
+async def test_discuss__conversation_comment__no_resolution_attempted(service, gh):
+    # A conversation comment has no thread behind it.
+    service.resolve_engine = _resolver(_resolving_reply_agent(True))
+
+    await service.discuss(
+        repo=REPO, pr_number=7, installation_id=42, comment_id=501,
+        body="@test-reviewer why?", kind="conversation",
+        in_reply_to_id=None, mentions_bot=True,
+    )
+
+    gh.resolve_thread.assert_not_awaited()

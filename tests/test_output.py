@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from themis.output import OUTPUT_DIR, OUTPUT_FILES, OutputError, ReviewActions, _read_capped, parse_output, parse_learning, parse_reply
+from themis.output import OUTPUT_DIR, OUTPUT_FILES, OutputError, ReviewActions, _read_capped, parse_output, parse_learning, parse_reply, parse_resolution
 
 
 def _write(workspace: Path, summary: str = "ok", actions: dict | None = None) -> None:
@@ -424,3 +424,42 @@ def test_parse_learning__invalid__raises(tmp_path, payload):
 
 def test_output_files__includes_learning_json():
     assert "learning.json" in OUTPUT_FILES
+
+
+def _write_resolution(workspace: Path, payload) -> None:
+    out = workspace / ".review-output"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "resolution.json").write_text(
+        payload if isinstance(payload, str) else json.dumps(payload)
+    )
+
+
+def test_parse_resolution__absent__false():
+    # No claim is the common case, not an error.
+    assert parse_resolution(Path("/nonexistent")) is False
+
+
+@pytest.mark.parametrize("payload, expected", [
+    ({"resolved": True}, True),
+    ({"resolved": False}, False),
+])
+def test_parse_resolution__valid__returns_claim(tmp_path, payload, expected):
+    _write_resolution(tmp_path, payload)
+    assert parse_resolution(tmp_path) is expected
+
+
+@pytest.mark.parametrize("payload", [
+    "not json",
+    [1, 2],
+    {},
+    {"resolved": "yes"},
+    {"resolved": 1},
+])
+def test_parse_resolution__invalid__raises(tmp_path, payload):
+    _write_resolution(tmp_path, payload)
+    with pytest.raises(OutputError):
+        parse_resolution(tmp_path)
+
+
+def test_output_files__includes_resolution_json():
+    assert "resolution.json" in OUTPUT_FILES
