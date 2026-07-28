@@ -459,10 +459,17 @@ class ReviewService:
         gh = self.make_client(token)
         async with gh:
             pr = await gh.get_pr(repo, pr_number)
-            # Draft status gates automatic triggers only: an explicit request
+            # Draft status gates first reviews only: an explicit request
             # (mention command, /api/review) is a deliberate ask and runs on a
-            # draft (issue #70). Closed PRs are always skipped.
-            if pr.get("state") != "open" or (auto and pr.get("draft")):
+            # draft (issue #70), and so does a delta re-review - a draft
+            # carrying a themis review was already asked about, and the pushes
+            # that follow answer its findings. Drafts are where the
+            # iterate-on-findings loop actually happens, so skipping them would
+            # leave delta unreachable for teams that review before marking
+            # ready. A push to a draft with no prior review still gets nothing:
+            # the delta base resolves to None below. Closed PRs are always
+            # skipped.
+            if pr.get("state") != "open" or (auto and not delta and pr.get("draft")):
                 logger.info(
                     "themis_skip_pr repo=%s pr=%s state=%s draft=%s auto=%s",
                     repo, pr_number, pr.get("state"), bool(pr.get("draft")), auto,

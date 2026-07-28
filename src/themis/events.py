@@ -76,9 +76,13 @@ def _parse_pull_request(payload: dict[str, Any]) -> ReviewJob | None:
     if action not in _PR_ACTIONS | _PR_DELTA_ACTIONS:
         return None
     pr = payload["pull_request"]
-    # Automatic triggers skip drafts. Explicit requests (mention commands,
-    # /api/review) carry auto=False and bypass draft status downstream.
-    if pr.get("draft"):
+    # Automatic triggers skip drafts, except a delta re-review: a draft that
+    # already carries a themis review was asked about deliberately, and the
+    # pushes that follow answer its findings. The worker still requires that
+    # prior review (no checkpoint, no delta), so this only widens which
+    # payloads reach it. Explicit requests (mention commands, /api/review)
+    # carry auto=False and bypass draft status downstream.
+    if pr.get("draft") and action not in _PR_DELTA_ACTIONS:
         return None
     return ReviewJob(
         repo=payload["repository"]["full_name"],

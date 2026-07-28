@@ -436,6 +436,53 @@ async def test_review__draft_pr_auto__does_nothing(service, gh):
     gh.post_review.assert_not_awaited()
 
 
+async def test_review__draft_pr_push_with_prior_review__deltas(service, gh):
+    # Drafts are where iterating on findings happens: a draft carrying a themis
+    # review was already asked about, so the pushes answering it re-review.
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "draft": True}
+    gh.get_file_text.return_value = DELTA_OPT_IN
+    gh.list_issue_comments_newest.return_value = [
+        _summary_comment(service, DELTA_PRIOR_SHA)
+    ]
+    service.is_ancestor = _ancestor_true
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert f"git diff {DELTA_PRIOR_SHA}..HEAD" in seen_prompts[0]
+    gh.post_summary_comment.assert_awaited_once()
+
+
+async def test_review__draft_pr_push_without_prior_review__does_nothing(service, gh):
+    # Allowing delta on drafts must not become a first review on every push.
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "draft": True}
+    gh.get_file_text.return_value = DELTA_OPT_IN
+    gh.list_issue_comments_newest.return_value = []
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__draft_pr_push_delta_disabled__does_nothing(service, gh):
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "draft": True}
+    gh.get_file_text.return_value = "triggers:\n  delta_review: false\n"
+    gh.list_issue_comments_newest.return_value = [
+        _summary_comment(service, DELTA_PRIOR_SHA)
+    ]
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+
+
 async def test_review__draft_pr_explicit_request__runs(service, gh):
     gh.get_pr.return_value = {**gh.get_pr.return_value, "draft": True}
 
