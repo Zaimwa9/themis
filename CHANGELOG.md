@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/Zaimwa9/themis/compare/v0.12.0...v0.13.0) (2026-07-28)
+
+
+### Features
+
+* a thread reply can resolve the thread it verified as fixed ([#105](https://github.com/Zaimwa9/themis/issues/105)) ([4172550](https://github.com/Zaimwa9/themis/commit/4172550a0015c1b59cbb77afe51fb7c7223b50d3))
+
+
+### Bug Fixes
+
+* **prompts:** apply the review doctrine to discussion replies ([#104](https://github.com/Zaimwa9/themis/issues/104)) ([8267723](https://github.com/Zaimwa9/themis/commit/8267723dab13421fa6ddcde93c4d789951e63133))
+
 ## [0.12.0](https://github.com/Zaimwa9/themis/compare/v0.11.1...v0.12.0) (2026-07-28)
 
 
