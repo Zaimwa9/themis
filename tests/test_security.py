@@ -201,3 +201,13 @@ def test_redact_outbound__leaves_markers_alone():
     # Controller-authored bodies pass through redact_outbound only: they are
     # allowed to carry real markers (TITLE_SKIP_MARKER is one).
     assert redact_outbound("<!-- themis:title-skip -->") == "<!-- themis:title-skip -->"
+
+
+def test_redact__github_token_env_value(monkeypatch):
+    # Action mode posts with the workflow's GITHUB_TOKEN; redact it by value,
+    # not only by the ghs_ shape (custom PATs may not match any pattern).
+    monkeypatch.setenv("GITHUB_TOKEN", "v1.super-secret-workflow-token")
+
+    text = redact_outbound("leak: v1.super-secret-workflow-token")
+
+    assert "v1.super-secret-workflow-token" not in text

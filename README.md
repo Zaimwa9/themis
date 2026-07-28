@@ -37,11 +37,24 @@ No clone or build needed: Themis ships as a prebuilt image,
 
 | Path | GitHub App | Best for |
 |---|---|---|
+| [GitHub Action](#github-action-zero-infrastructure) | none | zero infrastructure: reviews on GitHub's runners |
 | [Quick start](#quick-start-manifest-bootstrap--testing-not-long-term) | auto-created via manifest, random name | trying Themis in minutes, throwaway deployments |
 | [Production setup](#production-setup-manual-github-app) | created by you once, stable name | long-term installs that survive redeployments |
 | [Headless mode](#headless-mode-bring-your-own-webhook) | created by you once | teams with existing webhook infrastructure |
 
-All three run the same prebuilt image and support every engine.
+The three server paths run the same prebuilt image; all four support every
+engine.
+
+## GitHub Action (zero infrastructure)
+
+No server, tunnel, or GitHub App: a workflow runs the same engine + prompt
+pipeline on GitHub's runners and posts with the workflow's `GITHUB_TOKEN`.
+Copy [`examples/github-actions/themis-review.yml`](examples/github-actions/themis-review.yml)
+into `.github/workflows/`, add your engine credential as a repo secret
+(e.g. `CLAUDE_CODE_OAUTH_TOKEN`), done. New PRs get reviewed;
+`@themis review` and discussion replies work like in server mode.
+Trade-offs (no per-repo learnings, no fork-PR reviews, runner minutes) and
+the full input reference: [`docs/github-action.md`](docs/github-action.md).
 
 ## Quick start (manifest bootstrap — testing, not long-term)
 
@@ -387,6 +400,7 @@ volume: key in `.env`, done.
 - [`docs/server-deploy.md`](docs/server-deploy.md): deploying to any Docker host or PaaS, upgrades.
 - [`docs/local-tunnel.md`](docs/local-tunnel.md): the ngrok tunnel profile in depth.
 - [`docs/headless.md`](docs/headless.md): bring your own webhook handler, the `/api/review` and `/api/discuss` contracts.
+- [`docs/github-action.md`](docs/github-action.md): running Themis as a GitHub Action, inputs and trade-offs.
 - [`docs/doctrine.md`](docs/doctrine.md): the review doctrine, how it works and how to write a good one.
 - [`docs/learnings.md`](docs/learnings.md): per-repo memory — how Themis learns conventions from PR discussions and lands them via digest PRs.
 - [`docs/configuration.md`](docs/configuration.md): the full env and `.themis/config.yaml` reference.

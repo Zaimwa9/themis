@@ -71,6 +71,15 @@ def test_main_fails_fast_when_settings_missing(monkeypatch):
         main_module.main()
 
 
+def test_cli_dispatches_action_without_loading_controller_settings(monkeypatch):
+    called = []
+    monkeypatch.setattr(main_module, "action_main", lambda: called.append(True))
+
+    main_module.cli(["action"])
+
+    assert called == [True]
+
+
 def test_cli_dispatches_init_without_loading_controller_settings(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setattr(
