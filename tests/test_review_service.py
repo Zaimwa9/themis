@@ -1838,17 +1838,48 @@ async def test_review__delta_disabled_by_repo_config__skipped(service, gh):
     gh.post_summary_comment.assert_not_awaited()
 
 
-async def test_review__delta_respects_auto_review_opt_out(service, gh):
-    # Enabling delta_review does not resurrect pushes when auto reviews as a
-    # whole are off.
+async def test_review__delta_with_auto_review_off__still_deltas(service, gh):
+    # auto_review gates first reviews only. A mention-only repo that opts into
+    # delta_review gets "review once, then every push re-checks itself": the
+    # prior review is the consent the push builds on.
     gh.get_file_text.return_value = (
         "triggers:\n  auto_review: false\n  delta_review: true\n"
     )
+    gh.list_issue_comments_newest.return_value = [_summary_comment(service, DELTA_PRIOR_SHA)]
+    service.is_ancestor = _ancestor_true
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert f"git diff {DELTA_PRIOR_SHA}..HEAD" in seen_prompts[0]
+    gh.post_summary_comment.assert_awaited_once()
+
+
+async def test_review__delta_off_with_auto_review_off__push_ignored(service, gh):
+    # Decoupling delta from auto_review must not turn every push on a
+    # mention-only repo into a review: delta_review is still the switch.
+    gh.get_file_text.return_value = "triggers:\n  auto_review: false\n"
     gh.list_issue_comments_newest.return_value = [_summary_comment(service, DELTA_PRIOR_SHA)]
     seen_prompts: list = []
     service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
 
     await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    assert seen_prompts == []
+    gh.post_summary_comment.assert_not_awaited()
+
+
+async def test_review__first_review_with_auto_review_off__still_skipped(service, gh):
+    # The decoupling is delta-only: a PR-open event on a mention-only repo
+    # must stay silent even with delta_review enabled.
+    gh.get_file_text.return_value = (
+        "triggers:\n  auto_review: false\n  delta_review: true\n"
+    )
+    seen_prompts: list = []
+    service.resolve_engine = _resolver(_prompt_capturing_agent(seen_prompts))
+
+    await service.review(REPO, 7, 42, auto=True)
 
     assert seen_prompts == []
     gh.post_summary_comment.assert_not_awaited()
