@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/Zaimwa9/themis/compare/v0.13.0...v0.13.1) (2026-07-28)
+
+
+### Bug Fixes
+
+* delta re-reviews run on drafts that already have a review ([#107](https://github.com/Zaimwa9/themis/issues/107)) ([e097b47](https://github.com/Zaimwa9/themis/commit/e097b47f7636c62c6528c273b1f3e50e8042b1d4))
+
 ## [0.13.0](https://github.com/Zaimwa9/themis/compare/v0.12.0...v0.13.0) (2026-07-28)
 
 
