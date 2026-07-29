@@ -31,6 +31,10 @@ class ReviewJob:
     # True for pull_request.synchronize: re-review only the commits pushed
     # since the last themis review, when one exists (issue #11).
     delta: bool = False
+    # PR head at trigger time, when the payload carries one. Identifies the
+    # code a queued review would look at, so two triggers on the same commit
+    # collapse into one run (issue #77). None means unknown, never "same".
+    head_sha: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,7 @@ def _parse_pull_request(payload: dict[str, Any]) -> ReviewJob | None:
         installation_id=_installation_id(payload),
         auto=True,
         delta=action in _PR_DELTA_ACTIONS,
+        head_sha=(pr.get("head") or {}).get("sha") or None,
     )
 
 

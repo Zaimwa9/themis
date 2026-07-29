@@ -454,7 +454,15 @@ class ReviewService:
         trigger_comment_id: int | None = None,
         extra_context: str | None = None,
         delta: bool = False,
-    ) -> None:
+    ) -> str | None:
+        """The commit this run posted a review of, or None when it posted none.
+
+        Every early return here is a decision made against the PR as it stands
+        now (closed, draft, disabled, title-skipped, nothing new to delta
+        against), so returning None keeps a queued duplicate alive rather than
+        letting a skip look like coverage.
+        """
+        reviewed_sha: str | None = None
         token = await self.get_token(installation_id)
         gh = self.make_client(token)
         async with gh:
@@ -671,8 +679,10 @@ class ReviewService:
                     await self._post_review_results(
                         post_gh, repo, pr_number, commit_sha, actions
                     )
+                    reviewed_sha = commit_sha
             finally:
                 self.cleanup(workspace)
+        return reviewed_sha
 
     async def discuss(
         self,
@@ -1402,11 +1412,12 @@ async def run_review_job(
     settings: Settings, bot_slug: str, repo: str, pr_number: int,
     installation_id: int, auto: bool, trigger_comment_id: int | None = None,
     extra_context: str | None = None, delta: bool = False,
-) -> None:
+) -> str | None:
+    """The commit a review was posted for, for the queue to deduplicate on."""
     service = build_service(settings, bot_slug)
     await asyncio.to_thread(sweep_stale, settings.workspace_root)
     try:
-        await service.review(
+        return await service.review(
             repo, pr_number, installation_id, auto,
             trigger_comment_id=trigger_comment_id,
             extra_context=extra_context,

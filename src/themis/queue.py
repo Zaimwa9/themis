@@ -9,6 +9,7 @@ import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +20,27 @@ DEFAULT_JOB_TIMEOUT = 2700.0
 
 JobFactory = Callable[[], Awaitable[None]]
 
+# What to do with a job whose id is already active and whose revision is not
+# already in flight:
+#   "drop"     - discard it (the caller has nothing to re-examine later)
+#   "coalesce" - hold it until the slot frees, replacing the job held for that
+#                id in the same `coalesce_group`: they ask for the same thing,
+#                so the newest subsumes its predecessor
+#   "queue"    - hold it in arrival order and never let another job replace it
+# This is a property of the request, not of what it would turn out to process:
+# `revision` answers "is this provably the same work?", and a caller that
+# cannot tell passes None there while still stating what kind of ask this is.
+OnConflict = Literal["drop", "coalesce", "queue"]
+
 
 @dataclass(frozen=True)
 class _Job:
     id: str
     run: JobFactory
+    revision: str | None = None
+    # Which coalescing jobs this one may take the place of; None for a job
+    # that supersedes nothing.
+    coalesce_group: str | None = None
 
 
 class InMemoryJobQueue:
@@ -31,11 +48,16 @@ class InMemoryJobQueue:
 
     Dedup: an id that is queued or currently running is rejected as a
     duplicate; the id frees up when the job finishes (success, failure,
-    timeout, or cancellation). A rejected job enqueued with followup=True is
-    not dropped: the newest one is kept and enqueued once the active job
-    finishes, so an event that arrived mid-run (a push during a review) is
-    re-examined instead of silently lost. Queued-but-not-started jobs are
-    lost on restart; re-triggering (mention) is the documented recovery path.
+    timeout, or cancellation). A rejected job is not necessarily discarded -
+    see `on_conflict` - so an event that arrived mid-run (a push during a
+    review) is re-examined instead of silently lost. Queued-but-not-started
+    jobs are lost on restart; re-triggering (mention) is the documented
+    recovery path.
+
+    The id is a serialization key, not an identity: callers that share one id
+    across triggers (every review of a PR, say) pass a `revision` naming what
+    the job would process, and a revision already in flight under that id is
+    dropped instead of being held (issue #77).
     """
 
     def __init__(
@@ -44,28 +66,96 @@ class InMemoryJobQueue:
         self._timeout = job_timeout
         self._concurrency = concurrency
         self._queue: asyncio.Queue[_Job] = asyncio.Queue()
-        self._active_ids: set[str] = set()
-        self._followups: dict[str, _Job] = {}
+        self._active: dict[str, str | None] = {}
+        self._followups: dict[str, list[_Job]] = {}
         self._consumers: list[asyncio.Task[None]] = []
 
-    def enqueue(self, job_id: str, run: JobFactory, followup: bool = False) -> bool:
+    def enqueue(
+        self,
+        job_id: str,
+        run: JobFactory,
+        on_conflict: OnConflict = "drop",
+        revision: str | None = None,
+        coalesce_group: str = "",
+    ) -> bool:
         """True when queued, False when a job with this id is already active.
 
-        followup=True changes what rejection means: instead of dropping the
-        job, store it (newest wins - rapid rejections coalesce to one) and
-        enqueue it when the active id frees up. Only jobs that re-check
-        their own preconditions belong here; the follow-up runs uncondi-
-        tionally once the slot opens."""
-        if job_id in self._active_ids:
-            if followup:
-                self._followups[job_id] = _Job(job_id, run)
-                logger.info("themis_job_followup_stored id=%s", job_id)
-            else:
+        `on_conflict` decides what rejection means. "drop" discards. The other
+        two hold the job and run it, in arrival order, once the id frees up;
+        only jobs that re-check their own preconditions belong there, since a
+        held job runs unconditionally when the slot opens. "coalesce" marks the
+        job supersedable by a later job in the same `coalesce_group`, which
+        takes its place in position, so a stream of one kind of trigger cannot
+        reorder itself ahead of another. "queue" marks it not supersedable -
+        two people asking for two different things are two pieces of work, and
+        neither answers the other.
+
+        Only jobs that answer each other belong in one `coalesce_group`. A
+        group is a claim that the newest member does everything the older ones
+        would have; a trigger that might do less - or decline outright - is a
+        group of its own, however similar it looks.
+
+        A non-None `revision` matching one already in flight under this id -
+        the running job's or any held one's - is redundant work by definition
+        and is dropped whatever `on_conflict` says. None means "cannot tell",
+        and never matches: an unidentifiable job is queued or held, never
+        discarded.
+        """
+        if job_id in self._active:
+            if revision is not None and revision in self._in_flight_revisions(job_id):
+                logger.info(
+                    "themis_job_duplicate id=%s revision=%s", job_id, revision
+                )
+                return False
+            if on_conflict == "drop":
                 logger.info("themis_job_duplicate id=%s", job_id)
+                return False
+            group = coalesce_group if on_conflict == "coalesce" else None
+            self._hold(_Job(job_id, run, revision, group))
             return False
-        self._active_ids.add(job_id)
-        self._queue.put_nowait(_Job(job_id, run))
+        self._active[job_id] = revision
+        self._queue.put_nowait(_Job(job_id, run, revision))
         return True
+
+    def _hold(self, job: _Job) -> None:
+        """Keep `job` for when its id frees up, replacing the one it supersedes.
+
+        A coalescing job replaces the first held job of its own group, in
+        place: they ask for the same thing, so running both would be a
+        redundant pass, but the jobs held around it asked for something else
+        and keep both their place and their run."""
+        pending = self._followups.setdefault(job.id, [])
+        if job.coalesce_group is not None:
+            for index, held in enumerate(pending):
+                if held.coalesce_group == job.coalesce_group:
+                    pending[index] = job
+                    break
+            else:
+                pending.append(job)
+        else:
+            pending.append(job)
+        logger.info(
+            "themis_job_followup_stored id=%s pending=%d", job.id, len(pending)
+        )
+
+    def reviewed(self, job_id: str, revision: str) -> None:
+        """A running job reporting what it turned out to process.
+
+        A revision captured at trigger time only names the head as it looked
+        then; the job resolves the real head when it starts, and the two differ
+        whenever someone pushed in between. Reporting the real one keeps later
+        triggers for that same commit - and the follow-up already waiting for
+        it - from buying a second identical run."""
+        if job_id in self._active:
+            self._active[job_id] = revision
+
+    def _in_flight_revisions(self, job_id: str) -> set[str]:
+        """Revisions this id is already going to process: the running job's and
+        every held one's. All of them, so a re-delivered trigger matches the
+        held job it duplicates however deep that one sits."""
+        held = self._followups.get(job_id, ())
+        revisions = [self._active.get(job_id), *(job.revision for job in held)]
+        return {revision for revision in revisions if revision is not None}
 
     def start(self) -> None:
         if not self._consumers:
@@ -101,11 +191,30 @@ class InMemoryJobQueue:
                 # backstop so one bad job cannot kill the consumer.
                 logger.exception("themis_job_failed id=%s", job.id)
             finally:
-                self._active_ids.discard(job.id)
-                followup = self._followups.pop(job.id, None)
-                if followup is not None:
+                processed = self._active.pop(job.id, None)
+                pending = self._followups.pop(job.id, [])
+                if processed is not None:
+                    # The job that just finished turned out to cover exactly
+                    # what these held jobs were waiting to do.
+                    kept = [held for held in pending if held.revision != processed]
+                    if len(kept) < len(pending):
+                        logger.info(
+                            "themis_job_followup_superseded id=%s revision=%s count=%d",
+                            job.id, processed, len(pending) - len(kept),
+                        )
+                    pending = kept
+                if pending:
+                    next_job, *rest = pending
                     # Re-activate immediately so rejections arriving between
-                    # this requeue and the follow-up's run keep coalescing.
-                    self._active_ids.add(followup.id)
-                    self._queue.put_nowait(followup)
-                    logger.info("themis_job_followup_enqueued id=%s", job.id)
+                    # this requeue and the next job's run keep coalescing, and
+                    # keep the rest held: they are distinct requests, and
+                    # dropping them here would lose the work the queue just
+                    # promised to do.
+                    self._active[next_job.id] = next_job.revision
+                    if rest:
+                        self._followups[next_job.id] = rest
+                    self._queue.put_nowait(next_job)
+                    logger.info(
+                        "themis_job_followup_enqueued id=%s pending=%d",
+                        job.id, len(rest),
+                    )
