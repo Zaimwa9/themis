@@ -80,7 +80,7 @@ def test_build_review_prompt__no_delta_base__no_delta_section():
     assert "A previous themis review" not in prompt
 
 
-def test_build_review_prompt__resolve_thread_ids__is_an_obligation():
+def test_build_review_prompt__fixed_findings__is_an_obligation():
     prompt = build_review_prompt("acme/widgets", 7, "main")
     flat = " ".join(prompt.split())
 
@@ -89,6 +89,17 @@ def test_build_review_prompt__resolve_thread_ids__is_an_obligation():
     assert "observed the fix in the checked-out code" in flat
     assert "never resolve on doubt" in flat
     assert "only threads you authored whose issue is fixed" not in flat
+
+
+def test_build_review_prompt__fixed_is_the_single_statement_for_a_verified_fix():
+    # Issue #91: saying "fixed" and asking for the thread to close must be one
+    # statement, or the two drift apart whenever the model states only one.
+    prompt = build_review_prompt("acme/widgets", 7, "main")
+    flat = " ".join(prompt.split())
+
+    assert '"fixed": [{"thread_id": "PRRT_...", "evidence": "..."}]' in flat
+    assert "saying it fixed and leaving the thread open are not separate options" in flat
+    assert "resolve_thread_ids" not in flat
 
 
 def test_build_review_prompt__canonical_modules_keep_original_order():

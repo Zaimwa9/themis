@@ -661,6 +661,11 @@ class ReviewService:
                     _keep_bot_authored_resolutions(
                         actions, threads, self.bot_login, repo, pr_number
                     )
+                    # After the human-thread guard, before the disposition
+                    # backstop: a verified fix counts as addressing its thread.
+                    _reconcile_fixed_threads(
+                        actions, threads, self.bot_login, repo, pr_number
+                    )
                     if delta_base is not None:
                         _note_unaddressed_threads(
                             actions, threads, self.bot_login, repo, pr_number
@@ -1056,6 +1061,21 @@ class ReviewService:
                     "themis_reply_post_failed repo=%s pr=%s in_reply_to=%s error=%s",
                     repo, pr_number, reply["in_reply_to"], error,
                 )
+        # Before the resolutions below, which include these threads: a thread
+        # that closes says why it closed, in the place the finding was raised.
+        for entry in actions.fixed:
+            if not entry["evidence"] or entry.get("in_reply_to") is None:
+                continue
+            try:
+                await gh.post_reply(
+                    repo, pr_number,
+                    in_reply_to=entry["in_reply_to"], body=entry["evidence"],
+                )
+            except (httpx.HTTPStatusError, GitHubGraphQLError) as error:
+                logger.warning(
+                    "themis_fix_evidence_post_failed repo=%s pr=%s thread=%s error=%s",
+                    repo, pr_number, entry["thread_id"], error,
+                )
         for thread_id in actions.resolve_thread_ids:
             try:
                 await gh.resolve_thread(thread_id)
@@ -1159,6 +1179,8 @@ def _sanitize_actions(actions: ReviewActions) -> None:
         finding["body"] = sanitize_agent_text(finding["body"])
     for reply in actions.replies:
         reply["body"] = sanitize_agent_text(reply["body"])
+    for entry in actions.fixed:
+        entry["evidence"] = sanitize_agent_text(entry["evidence"])
 
 
 def _strip_suggestion_blocks(text: str) -> tuple[str, int]:
@@ -1351,6 +1373,59 @@ def _keep_bot_authored_resolutions(
     actions.resolve_thread_ids = [
         t for t in actions.resolve_thread_ids if t in bot_thread_ids
     ]
+
+
+def _reconcile_fixed_threads(
+    actions: ReviewActions, threads: list[dict[str, Any]], bot_login: str,
+    repo: str, pr_number: int,
+) -> None:
+    """Make "verified fixed" and "resolve that thread" one statement (issue #91).
+
+    Every surviving `fixed` entry both posts its evidence in the thread and
+    resolves it, so a review cannot say fixed in prose while the thread stays
+    open. Claims this controller will not act on - someone else's thread, an id
+    that is not on this PR, a thread already resolved - are dropped and named in
+    `themis_thread_drift`: that combination is exactly the silent case, a review
+    that reads as closing a finding and a thread that stays open. Resolutions
+    arriving with no fix claim are logged the same way; they still apply, they
+    just carry no recorded verification. Neither direction resolves anything on
+    its own - surfacing drift is the point, never widening what gets closed.
+    """
+    logins = _bot_logins(bot_login)
+    # None = the thread is ours to resolve but carries no comment to reply
+    # under, so its evidence has nowhere to go; the resolution still stands.
+    anchors: dict[str, int | None] = {}
+    for thread in threads:
+        if thread.get("isResolved"):
+            continue
+        nodes = thread.get("comments", {}).get("nodes", [])
+        author = (nodes[0].get("author") or {}).get("login", "") if nodes else ""
+        if author not in logins:
+            continue
+        anchor = nodes[0].get("databaseId")
+        anchors[thread.get("id")] = anchor if isinstance(anchor, int) else None
+
+    kept: list[dict[str, Any]] = []
+    unresolvable: list[str] = []
+    for entry in actions.fixed:
+        if entry["thread_id"] not in anchors:
+            unresolvable.append(entry["thread_id"])
+            continue
+        kept.append({**entry, "in_reply_to": anchors[entry["thread_id"]]})
+    actions.fixed = kept
+
+    claimed = [entry["thread_id"] for entry in kept]
+    unclaimed = [t for t in actions.resolve_thread_ids if t not in set(claimed)]
+    if unresolvable or unclaimed:
+        logger.warning(
+            "themis_thread_drift repo=%s pr=%s fixed_not_resolvable=%s"
+            " resolved_without_claim=%s",
+            repo, pr_number, unresolvable, unclaimed,
+        )
+    # dict.fromkeys: a thread named by both shapes is resolved once.
+    actions.resolve_thread_ids = list(
+        dict.fromkeys(actions.resolve_thread_ids + claimed)
+    )
 
 
 async def _post_cancelled_comment(

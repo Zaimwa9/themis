@@ -37,6 +37,47 @@ def test_parse_output__summary_and_actions__returns_all(tmp_path: Path):
     )
 
 
+def test_parse_output__fixed_entries__thread_and_evidence(tmp_path: Path):
+    _write(tmp_path, "all good", {
+        "fixed": [{"thread_id": "PRRT_1", "evidence": "retry now wraps the write"}],
+    })
+
+    actions = parse_output(tmp_path)
+
+    assert actions.fixed == [
+        {"thread_id": "PRRT_1", "evidence": "retry now wraps the write"}
+    ]
+
+
+def test_parse_output__fixed_without_evidence__kept(tmp_path: Path):
+    # Losing the whole claim over a missing sentence would leave the thread
+    # open, which is the drift `fixed` exists to remove.
+    _write(tmp_path, "all good", {"fixed": [{"thread_id": "PRRT_1"}]})
+
+    assert parse_output(tmp_path).fixed == [{"thread_id": "PRRT_1", "evidence": ""}]
+
+
+def test_parse_output__fixed_not_list__raises(tmp_path: Path):
+    _write(tmp_path, "s", {"fixed": {"thread_id": "PRRT_1"}})
+
+    with pytest.raises(OutputError, match="'fixed' must be a list"):
+        parse_output(tmp_path)
+
+
+def test_parse_output__fixed_without_thread_id__raises(tmp_path: Path):
+    _write(tmp_path, "s", {"fixed": [{"evidence": "looks fixed"}]})
+
+    with pytest.raises(OutputError, match="thread_id"):
+        parse_output(tmp_path)
+
+
+def test_parse_output__fixed_with_non_string_evidence__raises(tmp_path: Path):
+    _write(tmp_path, "s", {"fixed": [{"thread_id": "PRRT_1", "evidence": 7}]})
+
+    with pytest.raises(OutputError, match="evidence"):
+        parse_output(tmp_path)
+
+
 def test_parse_output__summary_only__empty_actions(tmp_path: Path):
     _write(tmp_path, "clean PR")
 
@@ -45,6 +86,7 @@ def test_parse_output__summary_only__empty_actions(tmp_path: Path):
     assert actions.findings == []
     assert actions.resolve_thread_ids == []
     assert actions.replies == []
+    assert actions.fixed == []
 
 
 def test_parse_output__missing_summary__raises(tmp_path: Path):

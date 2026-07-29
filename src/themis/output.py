@@ -31,6 +31,10 @@ class ReviewActions:
     findings: list[dict[str, Any]] = field(default_factory=list)
     resolve_thread_ids: list[str] = field(default_factory=list)
     replies: list[dict[str, Any]] = field(default_factory=list)
+    # Prior findings the run verified as fixed in the checked-out code, each
+    # `{"thread_id": ..., "evidence": ...}`. "Verified fixed" and "resolve that
+    # thread" are one statement here, so they cannot drift apart (issue #91).
+    fixed: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _read_capped(path: Path, workspace: Path) -> str:
@@ -91,11 +95,16 @@ def parse_output(workspace: Path) -> ReviewActions:
     if not isinstance(replies_raw, list):
         raise OutputError(f"actions.json 'replies' must be a list, got {type(replies_raw).__name__}")
 
+    fixed_raw = raw.get("fixed", [])
+    if not isinstance(fixed_raw, list):
+        raise OutputError(f"actions.json 'fixed' must be a list, got {type(fixed_raw).__name__}")
+
     return ReviewActions(
         summary=summary,
         findings=[_validate_finding(f) for f in findings_raw],
         resolve_thread_ids=list(resolve_raw),
         replies=[_validate_reply(r) for r in replies_raw],
+        fixed=[_validate_fixed(f) for f in fixed_raw],
     )
 
 
@@ -242,3 +251,26 @@ def _validate_reply(raw: Any) -> dict[str, Any]:
     _check_body_len("reply body", body)
 
     return {"in_reply_to": in_reply_to, "body": body}
+
+
+def _validate_fixed(raw: Any) -> dict[str, Any]:
+    """A verified-fixed prior finding: the thread it lives in, and why.
+
+    `evidence` is optional - an engine that resolves without saying what it
+    saw is the shape `resolve_thread_ids` already had, and losing the whole
+    claim over a missing sentence would leave the thread open, which is the
+    drift this exists to remove."""
+    if not isinstance(raw, dict):
+        raise OutputError(f"fixed entry must be an object: {raw!r}")
+
+    thread_id = raw.get("thread_id")
+    if not isinstance(thread_id, str) or not thread_id.strip():
+        raise OutputError(f"fixed entry missing or invalid 'thread_id': {raw}")
+
+    evidence = raw.get("evidence")
+    if evidence is not None and not isinstance(evidence, str):
+        raise OutputError(f"fixed entry has invalid 'evidence': {raw}")
+    evidence = (evidence or "").strip()
+    _check_body_len("fixed evidence", evidence)
+
+    return {"thread_id": thread_id, "evidence": evidence}
