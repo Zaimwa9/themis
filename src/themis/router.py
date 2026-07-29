@@ -18,7 +18,7 @@ from themis.github.auth import (
     make_app_jwt,
 )
 from themis.github.client import GitHubClient
-from themis.queue import InMemoryJobQueue
+from themis.queue import InMemoryJobQueue, OnConflict
 from themis.security import verify_signature
 from themis.review_service import run_discussion_job, run_review_job
 
@@ -84,6 +84,19 @@ def _revision(job: ReviewJob) -> str | None:
     return None
 
 
+def _on_conflict(job: ReviewJob) -> OnConflict:
+    """Whether a later review of this PR would make this one redundant.
+
+    A push, an auto review and a plain mention all ask for the same thing -
+    review the PR as it stands - so the newest of them subsumes the others and
+    they coalesce into one run. A steered request carries an instruction of its
+    own; a later review does not answer it, so it waits its turn instead of
+    being replaced. Two owners asking for two different focus areas are two
+    reviews, and always were: before issue #77 each mention had its own job id.
+    """
+    return "queue" if job.extra_context else "coalesce"
+
+
 def _enqueue(
     settings: Settings, queue: InMemoryJobQueue, slug: str, job: ReviewJob | DiscussJob
 ) -> bool:
@@ -118,7 +131,9 @@ def _enqueue(
     # Review jobs re-resolve the PR from GitHub when they start, so running one
     # late is always safe; the revision keeps the genuinely redundant ones out.
     if isinstance(job, ReviewJob):
-        return queue.enqueue(_job_id(job), run, followup=True, revision=_revision(job))
+        return queue.enqueue(
+            _job_id(job), run, on_conflict=_on_conflict(job), revision=_revision(job)
+        )
     return queue.enqueue(_job_id(job), run)
 
 
@@ -230,8 +245,18 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             # Before enqueueing: the dedup revision needs the PR head, which a
             # comment payload does not carry.
             ack = None if _skip_ack(job) else _webhook_reaction_target(event, payload, job)
-            job = await _prepare_trigger(settings, job, ack)
-            enqueued = _enqueue(settings, queue, slug, job)
+            try:
+                job = await _prepare_trigger(settings, job, ack)
+            finally:
+                # Nothing on the network may cost us the trigger. Preparation
+                # swallows its own failures, but a cancelled handler (client
+                # disconnect, shutdown) raises through it - CancelledError is a
+                # BaseException - and GitHub does not redeliver a delivery whose
+                # connection it dropped. `finally` runs during that propagation
+                # and _enqueue never awaits, so the job is queued either way;
+                # it just keeps the head it arrived with (usually None), which
+                # degrades to per-comment dedup rather than losing the request.
+                enqueued = _enqueue(settings, queue, slug, job)
             logger.info(
                 "themis_enqueued job=%s repo=%s pr=%s duplicate=%s",
                 type(job).__name__, job.repo, job.pr_number, not enqueued,
@@ -267,8 +292,10 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             repo=body.repo, pr_number=body.pr_number,
             installation_id=installation_id, auto=False,
         )
-        job = await _prepare_trigger(settings, job, None)
-        enqueued = _enqueue(settings, queue, request.app.state.bot_slug, job)
+        try:
+            job = await _prepare_trigger(settings, job, None)
+        finally:  # see the webhook handler: the enqueue is not skippable
+            enqueued = _enqueue(settings, queue, request.app.state.bot_slug, job)
         return {"status": "queued" if enqueued else "duplicate"}
 
     @router.post("/api/discuss", status_code=202)
@@ -291,8 +318,10 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
                 if job.kind == "conversation"
                 else {"review_comment_id": job.comment_id}
             )
-        await _prepare_trigger(settings, job, ack)
-        enqueued = _enqueue(settings, queue, request.app.state.bot_slug, job)
+        try:
+            await _prepare_trigger(settings, job, ack)
+        finally:  # see the webhook handler: the enqueue is not skippable
+            enqueued = _enqueue(settings, queue, request.app.state.bot_slug, job)
         return {"status": "queued" if enqueued else "duplicate"}
 
     return router

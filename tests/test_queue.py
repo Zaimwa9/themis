@@ -57,7 +57,7 @@ async def test_followup_rejected_while_active_runs_after_completion():
     queue.start()
     assert queue.enqueue("review:a/b#1", job) is True
     await asyncio.sleep(0.05)  # running
-    assert queue.enqueue("review:a/b#1", followup, followup=True) is False
+    assert queue.enqueue("review:a/b#1", followup, on_conflict="coalesce") is False
     assert not followup_ran.is_set()
     release.set()
     await asyncio.wait_for(followup_ran.wait(), 2)
@@ -81,8 +81,8 @@ async def test_followup_coalesces_newest_wins():
     queue.start()
     queue.enqueue("review:a/b#1", job)
     await asyncio.sleep(0.05)
-    queue.enqueue("review:a/b#1", make("first"), followup=True)
-    queue.enqueue("review:a/b#1", make("second"), followup=True)
+    queue.enqueue("review:a/b#1", make("first"), on_conflict="coalesce")
+    queue.enqueue("review:a/b#1", make("second"), on_conflict="coalesce")
     release.set()
     await asyncio.sleep(0.05)
     assert ran == ["second"]
@@ -106,11 +106,11 @@ async def test_followup_id_stays_deduplicated_until_it_runs():
     queue.start()
     queue.enqueue("review:a/b#1", job)
     await asyncio.sleep(0.05)
-    queue.enqueue("review:a/b#1", followup, followup=True)
+    queue.enqueue("review:a/b#1", followup, on_conflict="coalesce")
     release.set()
     await asyncio.sleep(0.05)
     assert runs == ["followup"]
-    assert queue.enqueue("review:a/b#1", followup, followup=True) is True
+    assert queue.enqueue("review:a/b#1", followup, on_conflict="coalesce") is True
     await queue.stop()
 
 
@@ -130,9 +130,9 @@ async def test_same_revision_is_dropped_even_when_followup():
         runs.append("again")
 
     queue.start()
-    assert queue.enqueue("review:a/b#1", job, followup=True, revision="sha:aaa") is True
+    assert queue.enqueue("review:a/b#1", job, on_conflict="coalesce", revision="sha:aaa") is True
     await asyncio.sleep(0.05)
-    assert queue.enqueue("review:a/b#1", again, followup=True, revision="sha:aaa") is False
+    assert queue.enqueue("review:a/b#1", again, on_conflict="coalesce", revision="sha:aaa") is False
     release.set()
     await asyncio.sleep(0.05)
     assert runs == ["first"]
@@ -153,9 +153,9 @@ async def test_new_revision_still_runs_after_the_active_job():
         runs.append("pushed")
 
     queue.start()
-    queue.enqueue("review:a/b#1", job, followup=True, revision="sha:aaa")
+    queue.enqueue("review:a/b#1", job, on_conflict="coalesce", revision="sha:aaa")
     await asyncio.sleep(0.05)
-    assert queue.enqueue("review:a/b#1", pushed, followup=True, revision="sha:bbb") is False
+    assert queue.enqueue("review:a/b#1", pushed, on_conflict="coalesce", revision="sha:bbb") is False
     release.set()
     await asyncio.sleep(0.05)
     assert runs == ["first", "pushed"]
@@ -179,11 +179,11 @@ async def test_revision_matching_a_stored_followup_is_dropped():
         return followup
 
     queue.start()
-    queue.enqueue("review:a/b#1", job, followup=True, revision="sha:aaa")
+    queue.enqueue("review:a/b#1", job, on_conflict="coalesce", revision="sha:aaa")
     await asyncio.sleep(0.05)
-    queue.enqueue("review:a/b#1", make("stored"), followup=True, revision="sha:bbb")
+    queue.enqueue("review:a/b#1", make("stored"), on_conflict="coalesce", revision="sha:bbb")
     assert queue.enqueue(
-        "review:a/b#1", make("redelivered"), followup=True, revision="sha:bbb"
+        "review:a/b#1", make("redelivered"), on_conflict="coalesce", revision="sha:bbb"
     ) is False
     release.set()
     await asyncio.sleep(0.05)
@@ -209,12 +209,126 @@ async def test_followup_superseded_when_the_running_job_covered_its_revision():
         runs.append("pushed")
 
     queue.start()
-    queue.enqueue("review:a/b#1", job, followup=True, revision="sha:aaa")
+    queue.enqueue("review:a/b#1", job, on_conflict="coalesce", revision="sha:aaa")
     await asyncio.sleep(0.05)
-    queue.enqueue("review:a/b#1", pushed, followup=True, revision="sha:bbb")
+    queue.enqueue("review:a/b#1", pushed, on_conflict="coalesce", revision="sha:bbb")
     release.set()
     await asyncio.sleep(0.05)
     assert runs == ["first"]
+    await queue.stop()
+
+
+def _recorder(ran: list[str], tag: str, done: asyncio.Event | None = None):
+    """A job that records it ran, and sets `done` when it is the last expected."""
+    async def held() -> None:
+        ran.append(tag)
+        if done is not None:
+            done.set()
+    return held
+
+
+@pytest.mark.asyncio
+async def test_queued_jobs_are_never_replaced_and_run_in_order():
+    # Three people asking for three different things get three reviews: none
+    # of the asks answers another, so none may take another's place, and the
+    # slot freeing up must not lose the ones it is not running yet.
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    done = asyncio.Event()
+    ran: list[str] = []
+
+    async def job():
+        await release.wait()
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job)
+    await asyncio.sleep(0.05)
+    for index, tag in enumerate(["focus-a", "focus-b", "focus-c"], start=1):
+        last = done if tag == "focus-c" else None
+        assert queue.enqueue(
+            "review:a/b#1", _recorder(ran, tag, last),
+            on_conflict="queue", revision=f"context:{index}",
+        ) is False
+    release.set()
+    await asyncio.wait_for(done.wait(), 2)
+    assert ran == ["focus-a", "focus-b", "focus-c"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_coalescing_job_replaces_its_own_kind_in_place():
+    # A push supersedes an earlier push but not the explicit request held
+    # between them, and it inherits that push's position: a stream of pushes
+    # cannot reorder itself ahead of someone who asked first.
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    done = asyncio.Event()
+    ran: list[str] = []
+
+    async def job():
+        await release.wait()
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job)
+    await asyncio.sleep(0.05)
+    queue.enqueue("review:a/b#1", _recorder(ran, "push-1"), on_conflict="coalesce", revision="sha:aaa")
+    queue.enqueue("review:a/b#1", _recorder(ran, "focus", done), on_conflict="queue", revision="context:1")
+    queue.enqueue("review:a/b#1", _recorder(ran, "push-2"), on_conflict="coalesce", revision="sha:bbb")
+    release.set()
+    await asyncio.wait_for(done.wait(), 2)
+    assert ran == ["push-2", "focus"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_superseding_drops_only_the_held_jobs_the_run_covered():
+    # The finished job answers the push held behind it, and nothing else: an
+    # explicit request waiting alongside is a different question.
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    done = asyncio.Event()
+    ran: list[str] = []
+
+    async def job():
+        await release.wait()
+        queue.reviewed("review:a/b#1", "sha:bbb")
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job, on_conflict="coalesce", revision="sha:aaa")
+    await asyncio.sleep(0.05)
+    queue.enqueue("review:a/b#1", _recorder(ran, "focus-a"), on_conflict="queue", revision="context:1")
+    queue.enqueue("review:a/b#1", _recorder(ran, "pushed"), on_conflict="coalesce", revision="sha:bbb")
+    queue.enqueue("review:a/b#1", _recorder(ran, "focus-b", done), on_conflict="queue", revision="context:2")
+    release.set()
+    await asyncio.wait_for(done.wait(), 2)
+    assert ran == ["focus-a", "focus-b"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_revision_held_behind_another_still_deduplicates():
+    # Webhook re-delivery of a request that is held but not first in line is
+    # still a duplicate: the check reads every held revision, not the next one.
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    done = asyncio.Event()
+    ran: list[str] = []
+
+    async def job():
+        await release.wait()
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job)
+    await asyncio.sleep(0.05)
+    queue.enqueue("review:a/b#1", _recorder(ran, "focus"), on_conflict="queue", revision="context:1")
+    queue.enqueue("review:a/b#1", _recorder(ran, "pushed", done), on_conflict="coalesce", revision="sha:bbb")
+    assert queue.enqueue(
+        "review:a/b#1", _recorder(ran, "redelivered"),
+        on_conflict="queue", revision="context:1",
+    ) is False
+    release.set()
+    await asyncio.wait_for(done.wait(), 2)
+    assert ran == ["focus", "pushed"]
     await queue.stop()
 
 
@@ -235,9 +349,9 @@ async def test_reviewed_revision_deduplicates_later_triggers():
         runs.append("later")
 
     queue.start()
-    queue.enqueue("review:a/b#1", job, followup=True, revision="sha:aaa")
+    queue.enqueue("review:a/b#1", job, on_conflict="coalesce", revision="sha:aaa")
     await asyncio.sleep(0.05)
-    assert queue.enqueue("review:a/b#1", later, followup=True, revision="sha:bbb") is False
+    assert queue.enqueue("review:a/b#1", later, on_conflict="coalesce", revision="sha:bbb") is False
     release.set()
     await asyncio.sleep(0.05)
     assert runs == ["first"]
@@ -276,9 +390,9 @@ async def test_unknown_revision_never_counts_as_a_duplicate():
         runs.append("unknown")
 
     queue.start()
-    queue.enqueue("review:a/b#1", job, followup=True, revision=None)
+    queue.enqueue("review:a/b#1", job, on_conflict="coalesce", revision=None)
     await asyncio.sleep(0.05)
-    assert queue.enqueue("review:a/b#1", unknown, followup=True, revision=None) is False
+    assert queue.enqueue("review:a/b#1", unknown, on_conflict="coalesce", revision=None) is False
     release.set()
     await asyncio.sleep(0.05)
     assert runs == ["unknown"]

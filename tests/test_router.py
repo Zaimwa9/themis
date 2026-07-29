@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -44,12 +45,14 @@ class RecordingQueue(InMemoryJobQueue):
         super().__init__()
         self.enqueued: list[str] = []
         self.revisions: list[str | None] = []
-        self.followups: list[bool] = []
+        self.conflicts: list[str] = []
         self.runs: list = []
 
-    def enqueue(self, job_id, run, followup=False, revision=None):
-        self.followups.append(followup)
-        accepted = super().enqueue(job_id, run, followup=followup, revision=revision)
+    def enqueue(self, job_id, run, on_conflict="drop", revision=None):
+        self.conflicts.append(on_conflict)
+        accepted = super().enqueue(
+            job_id, run, on_conflict=on_conflict, revision=revision
+        )
         if accepted:
             self.enqueued.append(job_id)
             self.revisions.append(revision)
@@ -89,8 +92,10 @@ def _make_client_capturing(settings=None):
     runs = []
     original_enqueue = queue.enqueue
 
-    def enqueue(job_id, run, followup=False, revision=None):
-        accepted = original_enqueue(job_id, run, followup=followup, revision=revision)
+    def enqueue(job_id, run, on_conflict="drop", revision=None):
+        accepted = original_enqueue(
+            job_id, run, on_conflict=on_conflict, revision=revision
+        )
         if accepted:
             runs.append(run)
         return accepted
@@ -296,7 +301,7 @@ def test_webhook_pr_synchronize_enqueues_followup_delta_without_ack(monkeypatch)
     assert response.status_code == 200
     assert response.json() == {"status": "queued"}
     assert queue.enqueued == ["review:acme/widgets#5"]
-    assert queue.followups == [True]
+    assert queue.conflicts == ["coalesce"]
     assert acks == [None]
 
 
@@ -403,6 +408,80 @@ def test_webhook_steered_mention_is_never_a_duplicate(monkeypatch):
     steered = _post_mention(client, 502, body=steer, association="OWNER")
     assert steered.json() == {"status": "duplicate"}
     assert set(queue._followups) == {"review:acme/widgets#5"}  # stored, not dropped
+
+
+def test_webhook_two_steered_mentions_behind_a_review_both_survive(monkeypatch):
+    # Two reviewers asking for two different focus areas during one running
+    # review are two pieces of work: neither answers the other, so neither may
+    # take the other's place in the queue.
+    prepared_trigger(monkeypatch, head_sha="cafe1234")
+    client, queue = make_client()
+
+    assert _post_mention(client, 501).json() == {"status": "queued"}
+    for comment_id, angle in ((502, "the retry path"), (503, "the token scrub")):
+        steered = _post_mention(
+            client, comment_id,
+            body=f"@test-reviewer review focus on {angle}",
+            association="OWNER",
+        )
+        assert steered.json() == {"status": "duplicate"}  # not now: still queued
+    # This queue is never drained, so what is held is what would run, in order.
+    held = queue._followups["review:acme/widgets#5"]
+    assert [job.revision for job in held] == ["context:502", "context:503"]
+
+
+def test_webhook_pushes_coalesce_around_a_waiting_steered_mention(monkeypatch):
+    # The push half of the same rule: repeated pushes still collapse to one
+    # follow-up, and collapsing must not move them past the request that was
+    # already waiting.
+    prepared_trigger(monkeypatch, head_sha="cafe1234")
+    client, queue = make_client()
+
+    assert _post_mention(client, 501).json() == {"status": "queued"}
+    _post_synchronize(client, head_sha="aaa11111")
+    _post_mention(
+        client, 502, body="@test-reviewer review focus on the retry path",
+        association="OWNER",
+    )
+    _post_synchronize(client, head_sha="bbb22222")
+
+    held = queue._followups["review:acme/widgets#5"]
+    assert [job.revision for job in held] == ["delta:bbb22222", "context:502"]
+
+
+def test_webhook_cancelled_preparation_still_queues_the_review(monkeypatch):
+    # Preparation talks to GitHub before the enqueue. It swallows its own
+    # failures, but cancellation is a BaseException and raises straight
+    # through - and GitHub does not redeliver a delivery whose connection it
+    # dropped, so a trigger lost here is lost for good.
+    async def cancelled(settings, job, ack):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("themis.router._prepare_trigger", cancelled)
+    queue = RecordingQueue()
+    app = FastAPI()
+    app.state.bot_slug = "test-reviewer"
+    app.include_router(create_router(make_settings(), queue))
+
+    async def deliver() -> None:
+        # Driven on the loop rather than through TestClient, whose portal
+        # translates the cancellation into a different exception type.
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=True)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as http:
+            payload = json.dumps(issue_comment_payload(body="@test-reviewer review")).encode()
+            await http.post(
+                "/webhook", content=payload,
+                headers={
+                    "x-github-event": "issue_comment",
+                    "x-hub-signature-256": sign("hush", payload),
+                },
+            )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(deliver())
+
+    assert queue.enqueued == ["review:acme/widgets#5"]
+    assert queue.revisions == ["comment:501"]  # no head resolved: per-comment dedup
 
 
 def _post_synchronize(client, head_sha: str = "deadbeef"):
