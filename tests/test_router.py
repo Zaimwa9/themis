@@ -405,6 +405,42 @@ def test_webhook_steered_mention_is_never_a_duplicate(monkeypatch):
     assert set(queue._followups) == {"review:acme/widgets#5"}  # stored, not dropped
 
 
+def _post_synchronize(client, head_sha: str = "deadbeef"):
+    payload = json.dumps(
+        {**pr_opened_payload(head_sha=head_sha), "action": "synchronize"}
+    ).encode()
+    return client.post(
+        "/webhook",
+        content=payload,
+        headers={
+            "x-github-event": "pull_request",
+            "x-hub-signature-256": sign("hush", payload),
+        },
+    )
+
+
+def test_webhook_mention_is_not_swallowed_by_a_queued_delta_on_the_same_head(monkeypatch):
+    # A delta re-review covers only the new commits and may decline to run at
+    # all (delta disabled, no prior review). Collapsing a full-review request
+    # into it would answer that request with a narrower review, or nothing.
+    prepared_trigger(monkeypatch, head_sha="deadbeef")
+    client, queue = make_client()
+
+    assert _post_synchronize(client).json() == {"status": "queued"}
+    assert queue.revisions == ["delta:deadbeef"]
+    assert _post_mention(client, 501).json() == {"status": "duplicate"}
+    assert set(queue._followups) == {"review:acme/widgets#5"}  # stored, runs after
+
+
+def test_webhook_redelivered_synchronize_is_a_duplicate(monkeypatch):
+    prepared_trigger(monkeypatch, head_sha="deadbeef")
+    client, queue = make_client()
+
+    assert _post_synchronize(client).json() == {"status": "queued"}
+    assert _post_synchronize(client).json() == {"status": "duplicate"}
+    assert queue._followups == {}
+
+
 def test_review_run_corrects_the_revision_to_what_it_reviewed(monkeypatch):
     # The trigger-time head is a guess: the author may push between the webhook
     # and the clone, and the worker reviews whatever it finds.

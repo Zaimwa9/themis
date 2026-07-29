@@ -53,6 +53,18 @@ def _job_id(job: ReviewJob | DiscussJob) -> str:
     return f"discuss:{job.comment_id}"
 
 
+def _scope(job: ReviewJob) -> str:
+    """Which kind of review a revision names.
+
+    A delta re-review covers only the commits pushed since the last review and
+    may decline to run at all (delta disabled, no prior review, no checkpoint
+    key); a full review covers the PR. Two triggers on one commit are the same
+    work only when they are the same kind of work, so an unqualified sha would
+    let a queued delta swallow a mention asking for a full review - and answer
+    it with nothing when the delta then declines."""
+    return "delta" if job.delta else "sha"
+
+
 def _revision(job: ReviewJob) -> str | None:
     """What this review would look at, or None when that cannot be told.
 
@@ -66,7 +78,7 @@ def _revision(job: ReviewJob) -> str | None:
     if job.extra_context:
         return f"context:{job.trigger_comment_id}"
     if job.head_sha:
-        return f"sha:{job.head_sha}"
+        return f"{_scope(job)}:{job.head_sha}"
     if job.trigger_comment_id is not None:
         return f"comment:{job.trigger_comment_id}"
     return None
@@ -88,7 +100,7 @@ def _enqueue(
             # the queue drop triggers - including one already waiting behind
             # this job - for a commit this review has now answered.
             if reviewed is not None:
-                queue.reviewed(_job_id(job), f"sha:{reviewed}")
+                queue.reviewed(_job_id(job), f"{_scope(job)}:{reviewed}")
     else:
         async def run() -> None:
             await run_discussion_job(
