@@ -787,6 +787,19 @@ async def test_review__fixed_without_evidence__still_resolves(service, gh):
     gh.resolve_thread.assert_awaited_once_with("T_1")
 
 
+async def test_review__repeated_fixed_claim__one_reply_one_resolution(service, gh):
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(_fixed_agent([
+        {"thread_id": "T_1", "evidence": "the guard is there now"},
+        {"thread_id": "T_1", "evidence": "the guard is there now"},
+    ]))
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_reply.assert_awaited_once()
+    gh.resolve_thread.assert_awaited_once_with("T_1")
+
+
 async def test_review__fixed_claim_on_a_human_thread__dropped_and_logged(
     service, gh, caplog
 ):

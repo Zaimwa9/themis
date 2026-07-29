@@ -19,6 +19,12 @@ VALID_SIDES = ("LEFT", "RIGHT")
 MAX_LEARNING_TEXT = 500
 VALID_CONFIDENCE = ("high", "low")
 _LEARNING_ID_RE = re.compile(r"lrn-[0-9a-f]{8}")
+# GitHub review-thread node ids are base64url over an opaque payload. Pinning
+# the shape at the parse boundary keeps engine-authored text out of the
+# controller's logs: thread ids are echoed there by name when a disposition is
+# dropped, and an id that cannot match a real thread has nothing to lose by
+# being rejected here.
+_THREAD_ID_RE = re.compile(r"[A-Za-z0-9_=-]{1,255}")
 
 
 class OutputError(Exception):
@@ -90,6 +96,8 @@ def parse_output(workspace: Path) -> ReviewActions:
     for thread_id in resolve_raw:
         if not isinstance(thread_id, str):
             raise OutputError(f"resolve_thread_ids entry must be a string: {thread_id!r}")
+        if not _THREAD_ID_RE.fullmatch(thread_id):
+            raise OutputError("resolve_thread_ids entry is not a thread id")
 
     replies_raw = raw.get("replies", [])
     if not isinstance(replies_raw, list):
@@ -264,8 +272,9 @@ def _validate_fixed(raw: Any) -> dict[str, Any]:
         raise OutputError(f"fixed entry must be an object: {raw!r}")
 
     thread_id = raw.get("thread_id")
-    if not isinstance(thread_id, str) or not thread_id.strip():
-        raise OutputError(f"fixed entry missing or invalid 'thread_id': {raw}")
+    if not isinstance(thread_id, str) or not _THREAD_ID_RE.fullmatch(thread_id):
+        # Never echo the value: this is the branch a smuggled credential takes.
+        raise OutputError("fixed entry missing or invalid 'thread_id'")
 
     evidence = raw.get("evidence")
     if evidence is not None and not isinstance(evidence, str):

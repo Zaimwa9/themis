@@ -71,6 +71,26 @@ def test_parse_output__fixed_without_thread_id__raises(tmp_path: Path):
         parse_output(tmp_path)
 
 
+def test_parse_output__fixed_thread_id_is_not_a_node_id__raises_without_echoing(
+    tmp_path: Path,
+):
+    # The controller names dropped thread ids in its logs, so an id that is
+    # really smuggled text must not get that far - nor appear in the error.
+    secret = "ghp_" + "a" * 36
+    _write(tmp_path, "s", {"fixed": [{"thread_id": f"leak {secret}"}]})
+
+    with pytest.raises(OutputError) as error:
+        parse_output(tmp_path)
+    assert secret not in str(error.value)
+
+
+def test_parse_output__resolve_thread_id_is_not_a_node_id__raises(tmp_path: Path):
+    _write(tmp_path, "s", {"resolve_thread_ids": ["not a thread id"]})
+
+    with pytest.raises(OutputError, match="resolve_thread_ids"):
+        parse_output(tmp_path)
+
+
 def test_parse_output__fixed_with_non_string_evidence__raises(tmp_path: Path):
     _write(tmp_path, "s", {"fixed": [{"thread_id": "PRRT_1", "evidence": 7}]})
 

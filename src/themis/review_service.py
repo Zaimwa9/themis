@@ -1407,15 +1407,24 @@ def _reconcile_fixed_threads(
 
     kept: list[dict[str, Any]] = []
     unresolvable: list[str] = []
+    seen: set[str] = set()
     for entry in actions.fixed:
-        if entry["thread_id"] not in anchors:
-            unresolvable.append(entry["thread_id"])
+        thread_id = entry["thread_id"]
+        # One claim per thread: a repeated entry would post its evidence again,
+        # notifying everyone on the thread twice for one resolution.
+        if thread_id in seen:
             continue
-        kept.append({**entry, "in_reply_to": anchors[entry["thread_id"]]})
+        seen.add(thread_id)
+        if thread_id not in anchors:
+            unresolvable.append(thread_id)
+            continue
+        kept.append({**entry, "in_reply_to": anchors[thread_id]})
     actions.fixed = kept
 
     claimed = [entry["thread_id"] for entry in kept]
     unclaimed = [t for t in actions.resolve_thread_ids if t not in set(claimed)]
+    # Safe to name: every id here cleared the thread-id shape check in
+    # output.py, so none of them can carry engine prose into the log.
     if unresolvable or unclaimed:
         logger.warning(
             "themis_thread_drift repo=%s pr=%s fixed_not_resolvable=%s"
