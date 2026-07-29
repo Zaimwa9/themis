@@ -462,8 +462,18 @@ def test_build_review_prompt__verification_enabled__must_appear_with_empty_state
     flat = " ".join(prompt.split())
 
     assert "on every review" in flat
-    assert "For internal changes" in flat
+    assert "no user-visible surface" in flat
     assert "No additional verification steps" in flat
+
+
+def test_build_review_prompt__verification_leads_with_hand_run_functional_steps():
+    # Issue #86: commands the author's CI already runs add nothing; what a
+    # reviewer needs is how to exercise the change and what to expect.
+    flat = " ".join(build_review_prompt("acme/widgets", 7, "main").split())
+
+    assert "action plus the observable outcome" in flat
+    assert "exercises by hand against the running system" in flat
+    assert "never fills the block on its own" in flat
 
 
 def test_build_review_prompt__ci_context_always__status_line_required():
