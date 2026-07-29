@@ -192,6 +192,76 @@ async def test_revision_matching_a_stored_followup_is_dropped():
 
 
 @pytest.mark.asyncio
+async def test_followup_superseded_when_the_running_job_covered_its_revision():
+    # The head moves between trigger and clone: a review requested at A can
+    # start after B is pushed and review B, which makes the follow-up stored
+    # for B a second full run over code already reviewed.
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    runs: list[str] = []
+
+    async def job():
+        runs.append("first")
+        await release.wait()
+        queue.reviewed("review:a/b#1", "sha:bbb")  # cloned B, not the A it was queued at
+
+    async def pushed():
+        runs.append("pushed")
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job, followup=True, revision="sha:aaa")
+    await asyncio.sleep(0.05)
+    queue.enqueue("review:a/b#1", pushed, followup=True, revision="sha:bbb")
+    release.set()
+    await asyncio.sleep(0.05)
+    assert runs == ["first"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_reviewed_revision_deduplicates_later_triggers():
+    # Same correction, seen from the other side: a trigger arriving for the
+    # commit the running job turned out to be reviewing is redundant too.
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    runs: list[str] = []
+
+    async def job():
+        runs.append("first")
+        queue.reviewed("review:a/b#1", "sha:bbb")
+        await release.wait()
+
+    async def later():
+        runs.append("later")
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job, followup=True, revision="sha:aaa")
+    await asyncio.sleep(0.05)
+    assert queue.enqueue("review:a/b#1", later, followup=True, revision="sha:bbb") is False
+    release.set()
+    await asyncio.sleep(0.05)
+    assert runs == ["first"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_reviewed_is_ignored_once_the_job_is_gone():
+    queue = InMemoryJobQueue()
+    ran = asyncio.Event()
+
+    async def job():
+        ran.set()
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job, revision="sha:aaa")
+    await asyncio.wait_for(ran.wait(), 2)
+    await asyncio.sleep(0.05)
+    queue.reviewed("review:a/b#1", "sha:bbb")  # late report, id already freed
+    assert queue.enqueue("review:a/b#1", job, revision="sha:bbb") is True
+    await queue.stop()
+
+
+@pytest.mark.asyncio
 async def test_unknown_revision_never_counts_as_a_duplicate():
     # None means "cannot tell what this job would process"; guessing "same"
     # would drop real work, so it is always queued or stored.

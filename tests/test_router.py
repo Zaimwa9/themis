@@ -45,6 +45,7 @@ class RecordingQueue(InMemoryJobQueue):
         self.enqueued: list[str] = []
         self.revisions: list[str | None] = []
         self.followups: list[bool] = []
+        self.runs: list = []
 
     def enqueue(self, job_id, run, followup=False, revision=None):
         self.followups.append(followup)
@@ -52,6 +53,7 @@ class RecordingQueue(InMemoryJobQueue):
         if accepted:
             self.enqueued.append(job_id)
             self.revisions.append(revision)
+            self.runs.append(run)
         return accepted
 
 
@@ -401,6 +403,35 @@ def test_webhook_steered_mention_is_never_a_duplicate(monkeypatch):
     steered = _post_mention(client, 502, body=steer, association="OWNER")
     assert steered.json() == {"status": "duplicate"}
     assert set(queue._followups) == {"review:acme/widgets#5"}  # stored, not dropped
+
+
+def test_review_run_corrects_the_revision_to_what_it_reviewed(monkeypatch):
+    # The trigger-time head is a guess: the author may push between the webhook
+    # and the clone, and the worker reviews whatever it finds.
+    prepared_trigger(monkeypatch, head_sha="cafe1234")
+    monkeypatch.setattr(
+        "themis.router.run_review_job", AsyncMock(return_value="f00dfeed")
+    )
+    client, queue = make_client()
+    assert _post_mention(client, 501).json() == {"status": "queued"}
+    assert queue.revisions == ["sha:cafe1234"]
+
+    asyncio.run(queue.runs[0]())
+
+    assert queue._active["review:acme/widgets#5"] == "sha:f00dfeed"
+
+
+def test_review_run_that_posted_nothing_leaves_the_revision_alone(monkeypatch):
+    # A skip (closed PR, disabled auto-review, title skip) is not coverage:
+    # a duplicate waiting behind it must still get its chance.
+    prepared_trigger(monkeypatch, head_sha="cafe1234")
+    monkeypatch.setattr("themis.router.run_review_job", AsyncMock(return_value=None))
+    client, queue = make_client()
+    _post_mention(client, 501)
+
+    asyncio.run(queue.runs[0]())
+
+    assert queue._active["review:acme/widgets#5"] == "sha:cafe1234"
 
 
 def test_webhook_unresolvable_head_falls_back_to_per_comment_dedup(monkeypatch):

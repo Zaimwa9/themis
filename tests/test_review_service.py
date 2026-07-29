@@ -389,6 +389,22 @@ async def test_review__skipped_pr__no_rocket_reaction(service, gh):
     gh.add_reaction.assert_not_awaited()
 
 
+async def test_review__returns_the_commit_it_posted_a_review_of(service, gh):
+    # Issue #77: the queue deduplicates on this, so it has to name the tree the
+    # run actually cloned, not the head the trigger was captured at.
+    gh.get_pr.return_value = {**gh.get_pr.return_value, "head": {"sha": "stale99"}}
+
+    assert await service.review(REPO, 7, 42, auto=True) == "abc123"
+
+
+async def test_review__skipped_pr__reports_no_reviewed_commit(service, gh):
+    # A skip is not coverage: reporting one would let it silence a duplicate
+    # that deserves to run.
+    gh.get_pr.return_value = {"state": "closed", "draft": False}
+
+    assert await service.review(REPO, 7, 42, auto=True) is None
+
+
 async def test_review__rocket_reaction_fails__review_still_completes(service, gh):
     gh.add_reaction.side_effect = _http_error(500)
 

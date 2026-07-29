@@ -90,6 +90,17 @@ class InMemoryJobQueue:
         self._queue.put_nowait(_Job(job_id, run, revision))
         return True
 
+    def reviewed(self, job_id: str, revision: str) -> None:
+        """A running job reporting what it turned out to process.
+
+        A revision captured at trigger time only names the head as it looked
+        then; the job resolves the real head when it starts, and the two differ
+        whenever someone pushed in between. Reporting the real one keeps later
+        triggers for that same commit - and the follow-up already waiting for
+        it - from buying a second identical run."""
+        if job_id in self._active:
+            self._active[job_id] = revision
+
     def _in_flight_revisions(self, job_id: str) -> set[str]:
         """Revisions this id is already going to process: the active job's and
         the pending follow-up's, if either carries one."""
@@ -134,8 +145,20 @@ class InMemoryJobQueue:
                 # backstop so one bad job cannot kill the consumer.
                 logger.exception("themis_job_failed id=%s", job.id)
             finally:
-                self._active.pop(job.id, None)
+                processed = self._active.pop(job.id, None)
                 followup = self._followups.pop(job.id, None)
+                if (
+                    followup is not None
+                    and followup.revision is not None
+                    and followup.revision == processed
+                ):
+                    # The job that just finished turned out to cover exactly
+                    # what this follow-up was waiting to do.
+                    logger.info(
+                        "themis_job_followup_superseded id=%s revision=%s",
+                        job.id, followup.revision,
+                    )
+                    followup = None
                 if followup is not None:
                     # Re-activate immediately so rejections arriving between
                     # this requeue and the follow-up's run keep coalescing.

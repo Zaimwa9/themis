@@ -77,12 +77,18 @@ def _enqueue(
 ) -> bool:
     if isinstance(job, ReviewJob):
         async def run() -> None:
-            await run_review_job(
+            reviewed = await run_review_job(
                 settings, slug, job.repo, job.pr_number, job.installation_id, job.auto,
                 trigger_comment_id=job.trigger_comment_id,
                 extra_context=job.extra_context,
                 delta=job.delta,
             )
+            # The head resolved at trigger time is a guess about what this run
+            # would cover; this is what it actually covered. Correcting it lets
+            # the queue drop triggers - including one already waiting behind
+            # this job - for a commit this review has now answered.
+            if reviewed is not None:
+                queue.reviewed(_job_id(job), f"sha:{reviewed}")
     else:
         async def run() -> None:
             await run_discussion_job(
