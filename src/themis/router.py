@@ -55,14 +55,17 @@ def _job_id(job: ReviewJob | DiscussJob) -> str:
 
 
 def _scope(job: ReviewJob) -> str:
-    """Which kind of review a revision names.
+    """Which kind of review this is - the queue's coalesce group, and half of
+    what a revision names.
 
     A delta re-review covers only the commits pushed since the last review and
     may decline to run at all (delta disabled, no prior review, no checkpoint
-    key); a full review covers the PR. Two triggers on one commit are the same
-    work only when they are the same kind of work, so an unqualified sha would
-    let a queued delta swallow a mention asking for a full review - and answer
-    it with nothing when the delta then declines."""
+    key); a full review covers the PR. Two triggers are the same work only when
+    they are the same kind of work, and that holds in both directions: an
+    unqualified sha would let a queued delta swallow a mention asking for a
+    full review, and an unqualified coalesce group would let a push arriving
+    later replace a mention already waiting - each answering it with nothing
+    when the delta then declines."""
     return "delta" if job.delta else "sha"
 
 
@@ -102,6 +105,10 @@ def _on_conflict(job: ReviewJob) -> OnConflict:
     So an unresolved head changes the revision and not this. That combination
     is deliberately the conservative one: an unprovable duplicate is held and
     run rather than dropped, where a provable one is dropped outright.
+
+    Supersedable by *what* is `_scope`, passed as the queue's coalesce group: a
+    delta only ever answers another delta, because it covers just the commits
+    pushed since the last review and may decline to run at all.
     """
     return "queue" if job.extra_context else "coalesce"
 
@@ -141,7 +148,8 @@ def _enqueue(
     # late is always safe; the revision keeps the genuinely redundant ones out.
     if isinstance(job, ReviewJob):
         return queue.enqueue(
-            _job_id(job), run, on_conflict=_on_conflict(job), revision=_revision(job)
+            _job_id(job), run, on_conflict=_on_conflict(job),
+            revision=_revision(job), coalesce_group=_scope(job),
         )
     return queue.enqueue(_job_id(job), run)
 

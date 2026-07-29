@@ -23,9 +23,9 @@ JobFactory = Callable[[], Awaitable[None]]
 # What to do with a job whose id is already active and whose revision is not
 # already in flight:
 #   "drop"     - discard it (the caller has nothing to re-examine later)
-#   "coalesce" - hold it until the slot frees, replacing any other coalescing
-#                job held for that id: each one asks for "the current state",
-#                so the newest subsumes its predecessors
+#   "coalesce" - hold it until the slot frees, replacing the job held for that
+#                id in the same `coalesce_group`: they ask for the same thing,
+#                so the newest subsumes its predecessor
 #   "queue"    - hold it in arrival order and never let another job replace it
 # This is a property of the request, not of what it would turn out to process:
 # `revision` answers "is this provably the same work?", and a caller that
@@ -38,7 +38,9 @@ class _Job:
     id: str
     run: JobFactory
     revision: str | None = None
-    coalescing: bool = False
+    # Which coalescing jobs this one may take the place of; None for a job
+    # that supersedes nothing.
+    coalesce_group: str | None = None
 
 
 class InMemoryJobQueue:
@@ -74,6 +76,7 @@ class InMemoryJobQueue:
         run: JobFactory,
         on_conflict: OnConflict = "drop",
         revision: str | None = None,
+        coalesce_group: str = "",
     ) -> bool:
         """True when queued, False when a job with this id is already active.
 
@@ -81,10 +84,16 @@ class InMemoryJobQueue:
         two hold the job and run it, in arrival order, once the id frees up;
         only jobs that re-check their own preconditions belong there, since a
         held job runs unconditionally when the slot opens. "coalesce" marks the
-        job supersedable: a later coalescing job takes its place (in position,
-        so a stream of pushes cannot reorder itself ahead of an explicit
-        request). "queue" marks it not supersedable - two people asking for two
-        different things are two pieces of work, and neither answers the other.
+        job supersedable by a later job in the same `coalesce_group`, which
+        takes its place in position, so a stream of one kind of trigger cannot
+        reorder itself ahead of another. "queue" marks it not supersedable -
+        two people asking for two different things are two pieces of work, and
+        neither answers the other.
+
+        Only jobs that answer each other belong in one `coalesce_group`. A
+        group is a claim that the newest member does everything the older ones
+        would have; a trigger that might do less - or decline outright - is a
+        group of its own, however similar it looks.
 
         A non-None `revision` matching one already in flight under this id -
         the running job's or any held one's - is redundant work by definition
@@ -101,23 +110,24 @@ class InMemoryJobQueue:
             if on_conflict == "drop":
                 logger.info("themis_job_duplicate id=%s", job_id)
                 return False
-            self._hold(_Job(job_id, run, revision, on_conflict == "coalesce"))
+            group = coalesce_group if on_conflict == "coalesce" else None
+            self._hold(_Job(job_id, run, revision, group))
             return False
         self._active[job_id] = revision
         self._queue.put_nowait(_Job(job_id, run, revision))
         return True
 
     def _hold(self, job: _Job) -> None:
-        """Keep `job` for when its id frees up, replacing a superseded one.
+        """Keep `job` for when its id frees up, replacing the one it supersedes.
 
-        A coalescing job replaces the first coalescing job already held, in
-        place: it asks for the same thing (the PR's current state), so running
-        both would be a redundant pass, but the jobs held around it asked for
-        something else and keep both their place and their run."""
+        A coalescing job replaces the first held job of its own group, in
+        place: they ask for the same thing, so running both would be a
+        redundant pass, but the jobs held around it asked for something else
+        and keep both their place and their run."""
         pending = self._followups.setdefault(job.id, [])
-        if job.coalescing:
+        if job.coalesce_group is not None:
             for index, held in enumerate(pending):
-                if held.coalescing:
+                if held.coalesce_group == job.coalesce_group:
                     pending[index] = job
                     break
             else:

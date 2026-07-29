@@ -49,10 +49,11 @@ class RecordingQueue(InMemoryJobQueue):
         self.conflicts: list[str] = []
         self.runs: list = []
 
-    def enqueue(self, job_id, run, on_conflict="drop", revision=None):
+    def enqueue(self, job_id, run, on_conflict="drop", revision=None, coalesce_group=""):
         self.conflicts.append(on_conflict)
         accepted = super().enqueue(
-            job_id, run, on_conflict=on_conflict, revision=revision
+            job_id, run, on_conflict=on_conflict, revision=revision,
+            coalesce_group=coalesce_group,
         )
         if accepted:
             self.enqueued.append(job_id)
@@ -93,9 +94,10 @@ def _make_client_capturing(settings=None):
     runs = []
     original_enqueue = queue.enqueue
 
-    def enqueue(job_id, run, on_conflict="drop", revision=None):
+    def enqueue(job_id, run, on_conflict="drop", revision=None, coalesce_group=""):
         accepted = original_enqueue(
-            job_id, run, on_conflict=on_conflict, revision=revision
+            job_id, run, on_conflict=on_conflict, revision=revision,
+            coalesce_group=coalesce_group,
         )
         if accepted:
             runs.append(run)
@@ -555,6 +557,38 @@ def test_webhook_mention_is_not_swallowed_by_a_queued_delta_on_the_same_head(mon
     assert queue.revisions == ["delta:deadbeef"]
     assert _post_mention(client, 501).json() == {"status": "duplicate"}
     assert set(queue._followups) == {"review:acme/widgets#5"}  # stored, runs after
+
+
+def test_webhook_push_does_not_replace_a_mention_already_waiting(monkeypatch):
+    # The other arrival order of the swallowed-mention bug. A delta and a full
+    # review are both "review the PR when you get to it", so they coalesced -
+    # but a delta covers only the new commits and may decline outright, so the
+    # push cannot answer the mention it would be taking the place of.
+    prepared_trigger(monkeypatch, head_sha="cafe1234")
+    client, queue = make_client()
+    assert _post_mention(client, 501).json() == {"status": "queued"}  # now running
+
+    prepared_trigger(monkeypatch, head_sha="f00dfeed")  # a mention naming newer code
+    assert _post_mention(client, 502).json() == {"status": "duplicate"}  # held
+    _post_synchronize(client, head_sha="99999999")  # the author pushes on top
+
+    held = queue._followups["review:acme/widgets#5"]
+    assert [job.revision for job in held] == ["sha:f00dfeed", "delta:99999999"]
+
+
+def test_webhook_pushes_still_coalesce_with_each_other(monkeypatch):
+    # ... and separating the two kinds must not cost the collapsing that the
+    # follow-up slot exists for: a burst of pushes is still one re-review.
+    prepared_trigger(monkeypatch, head_sha="cafe1234")
+    client, queue = make_client()
+
+    assert _post_mention(client, 501).json() == {"status": "queued"}
+    _post_synchronize(client, head_sha="aaa11111")
+    _post_synchronize(client, head_sha="bbb22222")
+    _post_synchronize(client, head_sha="ccc33333")
+
+    held = queue._followups["review:acme/widgets#5"]
+    assert [job.revision for job in held] == ["delta:ccc33333"]
 
 
 def test_webhook_redelivered_synchronize_is_a_duplicate(monkeypatch):
