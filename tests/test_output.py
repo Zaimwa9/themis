@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -64,31 +65,32 @@ def test_parse_output__fixed_not_list__raises(tmp_path: Path):
         parse_output(tmp_path)
 
 
-def test_parse_output__fixed_without_thread_id__raises(tmp_path: Path):
+def test_parse_output__fixed_without_thread_id__dropped(tmp_path: Path):
     _write(tmp_path, "s", {"fixed": [{"evidence": "looks fixed"}]})
 
-    with pytest.raises(OutputError, match="thread_id"):
-        parse_output(tmp_path)
+    assert parse_output(tmp_path).fixed == []
 
 
-def test_parse_output__fixed_thread_id_is_not_a_node_id__raises_without_echoing(
-    tmp_path: Path,
+def test_parse_output__thread_id_that_is_not_a_node_id__dropped_and_counted(
+    tmp_path: Path, caplog
 ):
-    # The controller names dropped thread ids in its logs, so an id that is
-    # really smuggled text must not get that far - nor appear in the error.
+    # The controller names dropped thread ids in its logs, so smuggled text
+    # must not reach it - and must not be echoed on the way out either. The
+    # entry is dropped rather than raised on: OutputError costs the whole
+    # review, which is worse than losing one disposition.
     secret = "ghp_" + "a" * 36
-    _write(tmp_path, "s", {"fixed": [{"thread_id": f"leak {secret}"}]})
+    _write(tmp_path, "s", {
+        "fixed": [{"thread_id": f"leak {secret}"}, {"thread_id": "PRRT_ok"}],
+        "resolve_thread_ids": [f"leak {secret}", "PRRT_other"],
+    })
 
-    with pytest.raises(OutputError) as error:
-        parse_output(tmp_path)
-    assert secret not in str(error.value)
+    with caplog.at_level(logging.WARNING):
+        actions = parse_output(tmp_path)
 
-
-def test_parse_output__resolve_thread_id_is_not_a_node_id__raises(tmp_path: Path):
-    _write(tmp_path, "s", {"resolve_thread_ids": ["not a thread id"]})
-
-    with pytest.raises(OutputError, match="resolve_thread_ids"):
-        parse_output(tmp_path)
+    assert actions.fixed == [{"thread_id": "PRRT_ok", "evidence": ""}]
+    assert actions.resolve_thread_ids == ["PRRT_other"]
+    assert "themis_thread_id_rejected count=2" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_parse_output__fixed_with_non_string_evidence__raises(tmp_path: Path):

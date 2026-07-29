@@ -1074,7 +1074,7 @@ class ReviewService:
             except (httpx.HTTPStatusError, GitHubGraphQLError) as error:
                 logger.warning(
                     "themis_fix_evidence_post_failed repo=%s pr=%s thread=%s error=%s",
-                    repo, pr_number, entry["thread_id"], error,
+                    repo, pr_number, _loggable_thread_ids([entry["thread_id"]]), error,
                 )
         for thread_id in actions.resolve_thread_ids:
             try:
@@ -1082,7 +1082,7 @@ class ReviewService:
             except (httpx.HTTPStatusError, GitHubGraphQLError) as error:
                 logger.warning(
                     "themis_resolve_failed repo=%s pr=%s thread=%s error=%s",
-                    repo, pr_number, thread_id, error,
+                    repo, pr_number, _loggable_thread_ids([thread_id]), error,
                 )
         # actions.summary alone is capped by output.py, but the outside-diff
         # note and the 422 fold can push past GitHub's 65,536-char limit.
@@ -1368,11 +1368,22 @@ def _keep_bot_authored_resolutions(
     if dropped:
         logger.warning(
             "themis_resolutions_dropped repo=%s pr=%s ids=%s",
-            repo, pr_number, dropped,
+            repo, pr_number, _loggable_thread_ids(dropped),
         )
     actions.resolve_thread_ids = [
         t for t in actions.resolve_thread_ids if t in bot_thread_ids
     ]
+
+
+def _loggable_thread_ids(thread_ids: list[str]) -> str:
+    """Agent-supplied thread ids as one log value.
+
+    The shape check in `output.py` drops ids that could not name a thread, but
+    a credential can be shaped like a node id (`ghp_...` is base64url too), so
+    shape is not a credential boundary. `redact_outbound` is: it scrubs this
+    instance's own secrets and anything credential-shaped, which is what the
+    log needs before it repeats text an engine wrote."""
+    return redact_outbound(",".join(thread_ids))
 
 
 def _reconcile_fixed_threads(
@@ -1423,13 +1434,12 @@ def _reconcile_fixed_threads(
 
     claimed = [entry["thread_id"] for entry in kept]
     unclaimed = [t for t in actions.resolve_thread_ids if t not in set(claimed)]
-    # Safe to name: every id here cleared the thread-id shape check in
-    # output.py, so none of them can carry engine prose into the log.
     if unresolvable or unclaimed:
         logger.warning(
             "themis_thread_drift repo=%s pr=%s fixed_not_resolvable=%s"
             " resolved_without_claim=%s",
-            repo, pr_number, unresolvable, unclaimed,
+            repo, pr_number,
+            _loggable_thread_ids(unresolvable), _loggable_thread_ids(unclaimed),
         )
     # dict.fromkeys: a thread named by both shapes is resolved once.
     actions.resolve_thread_ids = list(

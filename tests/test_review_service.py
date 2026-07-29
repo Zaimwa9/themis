@@ -814,7 +814,26 @@ async def test_review__fixed_claim_on_a_human_thread__dropped_and_logged(
     gh.resolve_thread.assert_not_awaited()
     gh.post_reply.assert_not_awaited()
     assert "themis_thread_drift" in caplog.text
-    assert "fixed_not_resolvable=['T_2']" in caplog.text
+    assert "fixed_not_resolvable=T_2" in caplog.text
+
+
+async def test_review__token_shaped_thread_id__never_reaches_the_log(
+    service, gh, caplog
+):
+    # A credential can be shaped like a node id (`ghp_...` is base64url too),
+    # so the shape check is not a credential boundary - redaction is.
+    secret = "ghp_" + "b" * 36
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(
+        _fixed_agent([{"thread_id": secret}], resolve_thread_ids=[secret])
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await service.review(REPO, 7, 42, auto=True)
+
+    assert secret not in caplog.text
+    assert "themis_thread_drift" in caplog.text
+    gh.resolve_thread.assert_not_awaited()
 
 
 async def test_review__fixed_claim_on_an_unknown_thread__dropped_and_logged(
@@ -827,7 +846,7 @@ async def test_review__fixed_claim_on_an_unknown_thread__dropped_and_logged(
         await service.review(REPO, 7, 42, auto=True)
 
     gh.resolve_thread.assert_not_awaited()
-    assert "fixed_not_resolvable=['T_gone']" in caplog.text
+    assert "fixed_not_resolvable=T_gone" in caplog.text
 
 
 async def test_review__resolution_without_a_fix_claim__applies_and_is_logged(
@@ -842,7 +861,7 @@ async def test_review__resolution_without_a_fix_claim__applies_and_is_logged(
         await service.review(REPO, 7, 42, auto=True)
 
     gh.resolve_thread.assert_awaited_once_with("T_1")
-    assert "resolved_without_claim=['T_1']" in caplog.text
+    assert "resolved_without_claim=T_1" in caplog.text
 
 
 async def test_review__thread_named_by_both_shapes__resolved_once(service, gh):
