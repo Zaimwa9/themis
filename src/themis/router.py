@@ -1,5 +1,6 @@
 """Webhook + trigger API endpoints: verify, parse, enqueue. No heavy work here."""
 
+import asyncio
 import json
 import logging
 import secrets
@@ -162,6 +163,13 @@ def _repo_allowed(repo: str, allowlist: frozenset[str] | None) -> bool:
 
 JobT = TypeVar("JobT", bound=ReviewJob | DiscussJob)
 
+# GitHub records a webhook delivery as failed when the endpoint has not
+# answered within 10 seconds, and preparation is the only GitHub work on the
+# response path. It gets a fraction of that budget: what it produces is
+# enrichment (an eyes reaction, a sharper dedup key), never the trigger
+# itself, so a slow GitHub costs those and nothing else.
+TRIGGER_PREPARE_TIMEOUT = 5.0
+
 
 async def _prepare_trigger(
     settings: Settings, job: JobT, ack: dict[str, int] | None
@@ -171,16 +179,20 @@ async def _prepare_trigger(
     One installation token covers both: the eyes reaction on the trigger, and
     - for a review whose payload has no head sha (a mention, `/api/review`) -
     the PR head the dedup revision keys on. Everything here is best-effort and
-    never blocks enqueueing: on failure the job keeps the head it arrived with
-    (usually None), which degrades to per-comment dedup rather than dropping
-    work.
+    never blocks enqueueing: on failure, or past the deadline, the job keeps
+    the head it arrived with (usually None), which degrades to per-comment
+    dedup rather than dropping work.
     """
     needs_head = isinstance(job, ReviewJob) and job.head_sha is None
     if not needs_head and ack is None:
         return job
-    try:
+
+    async def prepare() -> None:
+        # Assigns as it goes rather than returning, so a deadline that lands
+        # mid-ack still keeps a head resolved a moment earlier.
+        nonlocal job
         app_jwt = make_app_jwt(settings.gh_app_client_id, settings.gh_app_private_key_pem)
-        async with httpx.AsyncClient(timeout=30) as auth_client:
+        async with httpx.AsyncClient(timeout=TRIGGER_PREPARE_TIMEOUT) as auth_client:
             token = await get_installation_token(auth_client, job.installation_id, app_jwt)
         async with GitHubClient(token) as gh:
             if needs_head:
@@ -196,6 +208,14 @@ async def _prepare_trigger(
                     )
             if ack is not None:
                 await gh.add_reaction(job.repo, **ack)
+
+    try:
+        await asyncio.wait_for(prepare(), TRIGGER_PREPARE_TIMEOUT)
+    except TimeoutError:
+        logger.warning(
+            "themis_trigger_prepare_timeout repo=%s pr=%s seconds=%s",
+            job.repo, job.pr_number, TRIGGER_PREPARE_TIMEOUT,
+        )
     except Exception as error:
         logger.warning(
             "themis_trigger_prepare_failed repo=%s pr=%s error=%s",

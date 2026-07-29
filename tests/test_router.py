@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import time
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -447,6 +448,30 @@ def test_webhook_pushes_coalesce_around_a_waiting_steered_mention(monkeypatch):
 
     held = queue._followups["review:acme/widgets#5"]
     assert [job.revision for job in held] == ["delta:bbb22222", "context:502"]
+
+
+def test_webhook_slow_github_still_answers_promptly_and_keeps_the_trigger(monkeypatch):
+    # GitHub records a delivery as failed if the endpoint has not answered
+    # within 10 seconds, and preparation is the only GitHub work on the
+    # response path. Past its deadline the trigger goes through without the
+    # enrichment rather than holding the response open for it.
+    monkeypatch.setattr("themis.router.TRIGGER_PREPARE_TIMEOUT", 0.05)
+    monkeypatch.setattr("themis.router.make_app_jwt", lambda *_: "jwt")
+
+    async def never_answers(*args, **kwargs):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr("themis.router.get_installation_token", never_answers)
+    client, queue = make_client()
+
+    started = time.monotonic()
+    response = _post_mention(client, 501)
+    elapsed = time.monotonic() - started
+
+    assert response.json() == {"status": "queued"}
+    assert elapsed < 5
+    assert queue.enqueued == ["review:acme/widgets#5"]
+    assert queue.revisions == ["comment:501"]  # no head resolved: per-comment dedup
 
 
 def test_webhook_cancelled_preparation_still_queues_the_review(monkeypatch):
