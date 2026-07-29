@@ -450,6 +450,27 @@ def test_webhook_pushes_coalesce_around_a_waiting_steered_mention(monkeypatch):
     assert [job.revision for job in held] == ["delta:bbb22222", "context:502"]
 
 
+def test_webhook_unresolved_head_keeps_more_work_than_a_resolved_one(monkeypatch):
+    # Two plain mentions during one running review, seen both ways. What a
+    # plain mention asks for - review this PR as it stands when you get to it -
+    # does not depend on which commit was head when it was typed, so the two
+    # collapse either way. The unresolved side is the more conservative of the
+    # two: it cannot prove redundancy, so it keeps a job to run rather than
+    # answering the second mention with nothing.
+    prepared_trigger(monkeypatch, head_sha="cafe1234")
+    resolved, resolved_queue = make_client()
+    assert _post_mention(resolved, 501).json() == {"status": "queued"}
+    assert _post_mention(resolved, 502).json() == {"status": "duplicate"}
+    assert resolved_queue._followups == {}  # provably redundant: dropped outright
+
+    prepared_trigger(monkeypatch, head_sha=None)
+    unresolved, unresolved_queue = make_client()
+    assert _post_mention(unresolved, 501).json() == {"status": "queued"}
+    assert _post_mention(unresolved, 502).json() == {"status": "duplicate"}
+    held = unresolved_queue._followups["review:acme/widgets#5"]
+    assert [job.revision for job in held] == ["comment:502"]  # kept, and answers both
+
+
 def test_webhook_slow_github_still_answers_promptly_and_keeps_the_trigger(monkeypatch):
     # GitHub records a delivery as failed if the endpoint has not answered
     # within 10 seconds, and preparation is the only GitHub work on the

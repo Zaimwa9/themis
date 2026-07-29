@@ -86,14 +86,22 @@ def _revision(job: ReviewJob) -> str | None:
 
 
 def _on_conflict(job: ReviewJob) -> OnConflict:
-    """Whether a later review of this PR would make this one redundant.
+    """Whether a later review of this PR would answer this request too.
 
-    A push, an auto review and a plain mention all ask for the same thing -
-    review the PR as it stands - so the newest of them subsumes the others and
-    they coalesce into one run. A steered request carries an instruction of its
-    own; a later review does not answer it, so it waits its turn instead of
-    being replaced. Two owners asking for two different focus areas are two
-    reviews, and always were: before issue #77 each mention had its own job id.
+    This and `_revision` key on different things on purpose. The revision asks
+    "is this provably the same work?", which needs the head commit and so is
+    unknowable when GitHub cannot be reached. This asks "does a later ask of
+    this kind answer this one?", which the trigger states itself: a push, an
+    auto review and a plain mention all ask for the PR as it stands whenever
+    the queue gets to it, so the newest subsumes the others whatever their
+    heads were. A steered request carries an instruction of its own that no
+    later review answers, so it waits its turn instead of being replaced - two
+    owners asking for two different focus areas are two reviews, and always
+    were: before issue #77 each mention had its own job id.
+
+    So an unresolved head changes the revision and not this. That combination
+    is deliberately the conservative one: an unprovable duplicate is held and
+    run rather than dropped, where a provable one is dropped outright.
     """
     return "queue" if job.extra_context else "coalesce"
 

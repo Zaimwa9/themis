@@ -27,6 +27,9 @@ JobFactory = Callable[[], Awaitable[None]]
 #                job held for that id: each one asks for "the current state",
 #                so the newest subsumes its predecessors
 #   "queue"    - hold it in arrival order and never let another job replace it
+# This is a property of the request, not of what it would turn out to process:
+# `revision` answers "is this provably the same work?", and a caller that
+# cannot tell passes None there while still stating what kind of ask this is.
 OnConflict = Literal["drop", "coalesce", "queue"]
 
 
