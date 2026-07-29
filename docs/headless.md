@@ -31,7 +31,11 @@ i.e. when the trigger API is disabled.
 ## POST /api/review
 
 Enqueues a full review, same dedup id as the webhook path
-(`review:{repo}#{pr_number}`).
+(`review:{repo}#{pr_number}`). At most one review of a PR runs at a time:
+a call naming a PR whose head commit is already under review is answered
+`duplicate` and nothing is enqueued. A call arriving while a *different*
+commit is under review is kept and runs once the in-flight review finishes
+(the response still reads `duplicate`, since nothing was queued).
 
 Calls to this route count as explicit requests: a draft PR is reviewed
 (only closed PRs are skipped), unlike the automatic webhook triggers,
@@ -103,7 +107,7 @@ curl -X POST https://your-themis-host/api/discuss \
 | Status | Meaning |
 |---|---|
 | `202 {"status": "queued"}` | enqueued |
-| `202 {"status": "duplicate"}` | a job with the same id is already queued or running |
+| `202 {"status": "duplicate"}` | nothing was queued: a job with the same id is already queued or running |
 | `401` | missing or wrong bearer token |
 | `403` | the App isn't installed on the repository |
 | `404` | the trigger API is disabled (`THEMIS_API_TOKEN` unset) |

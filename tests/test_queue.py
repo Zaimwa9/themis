@@ -115,6 +115,124 @@ async def test_followup_id_stays_deduplicated_until_it_runs():
 
 
 @pytest.mark.asyncio
+async def test_same_revision_is_dropped_even_when_followup():
+    # Issue #77: a second trigger for code already under review is redundant
+    # work, so it is discarded rather than kept for a follow-up run.
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    runs: list[str] = []
+
+    async def job():
+        runs.append("first")
+        await release.wait()
+
+    async def again():
+        runs.append("again")
+
+    queue.start()
+    assert queue.enqueue("review:a/b#1", job, followup=True, revision="sha:aaa") is True
+    await asyncio.sleep(0.05)
+    assert queue.enqueue("review:a/b#1", again, followup=True, revision="sha:aaa") is False
+    release.set()
+    await asyncio.sleep(0.05)
+    assert runs == ["first"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_new_revision_still_runs_after_the_active_job():
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    runs: list[str] = []
+
+    async def job():
+        runs.append("first")
+        await release.wait()
+
+    async def pushed():
+        runs.append("pushed")
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job, followup=True, revision="sha:aaa")
+    await asyncio.sleep(0.05)
+    assert queue.enqueue("review:a/b#1", pushed, followup=True, revision="sha:bbb") is False
+    release.set()
+    await asyncio.sleep(0.05)
+    assert runs == ["first", "pushed"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_revision_matching_a_stored_followup_is_dropped():
+    # A re-delivery of the push already waiting its turn must not displace it
+    # with an identical job, nor stack a third run.
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    runs: list[str] = []
+
+    async def job():
+        await release.wait()
+
+    def make(tag: str):
+        async def followup():
+            runs.append(tag)
+        return followup
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job, followup=True, revision="sha:aaa")
+    await asyncio.sleep(0.05)
+    queue.enqueue("review:a/b#1", make("stored"), followup=True, revision="sha:bbb")
+    assert queue.enqueue(
+        "review:a/b#1", make("redelivered"), followup=True, revision="sha:bbb"
+    ) is False
+    release.set()
+    await asyncio.sleep(0.05)
+    assert runs == ["stored"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_unknown_revision_never_counts_as_a_duplicate():
+    # None means "cannot tell what this job would process"; guessing "same"
+    # would drop real work, so it is always queued or stored.
+    queue = InMemoryJobQueue()
+    release = asyncio.Event()
+    runs: list[str] = []
+
+    async def job():
+        await release.wait()
+
+    async def unknown():
+        runs.append("unknown")
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job, followup=True, revision=None)
+    await asyncio.sleep(0.05)
+    assert queue.enqueue("review:a/b#1", unknown, followup=True, revision=None) is False
+    release.set()
+    await asyncio.sleep(0.05)
+    assert runs == ["unknown"]
+    await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_revision_frees_up_with_the_id():
+    queue = InMemoryJobQueue()
+    ran = asyncio.Event()
+
+    async def job():
+        ran.set()
+
+    queue.start()
+    queue.enqueue("review:a/b#1", job, revision="sha:aaa")
+    await asyncio.wait_for(ran.wait(), 2)
+    # Re-running the same commit is a legitimate request once nothing is in
+    # flight - the engine may have flaked, or the reviewer wants another pass.
+    assert queue.enqueue("review:a/b#1", job, revision="sha:aaa") is True
+    await queue.stop()
+
+
+@pytest.mark.asyncio
 async def test_duplicate_without_followup_never_reruns():
     queue = InMemoryJobQueue()
     release = asyncio.Event()

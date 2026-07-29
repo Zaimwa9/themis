@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -12,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from themis.config import Settings
+from themis.events import ReviewJob
 from themis.queue import InMemoryJobQueue
 from themis.router import _repo_allowed, create_router
 
@@ -35,16 +37,38 @@ def make_settings(**overrides) -> Settings:
 
 
 class RecordingQueue(InMemoryJobQueue):
+    """Never-drained stand-in: every enqueued job stays "in flight", so the
+    real queue's dedup rules apply to everything a test posts."""
+
     def __init__(self):
         super().__init__()
         self.enqueued: list[str] = []
+        self.revisions: list[str | None] = []
+        self.followups: list[bool] = []
 
-    def enqueue(self, job_id, run, followup=False):
-        self.followups = getattr(self, "followups", []) + [followup]
-        if job_id in self.enqueued:
-            return False
-        self.enqueued.append(job_id)
-        return True
+    def enqueue(self, job_id, run, followup=False, revision=None):
+        self.followups.append(followup)
+        accepted = super().enqueue(job_id, run, followup=followup, revision=revision)
+        if accepted:
+            self.enqueued.append(job_id)
+            self.revisions.append(revision)
+        return accepted
+
+
+def prepared_trigger(monkeypatch, head_sha: str | None = None) -> list[dict | None]:
+    """Replace the network side of `_prepare_trigger`: record the ack target
+    each call asked for, and hand back the job carrying the PR head GitHub
+    would have reported. Returns the recorded ack targets (None = no ack)."""
+    acks: list[dict | None] = []
+
+    async def prepare(settings, job, ack):
+        acks.append(ack)
+        if isinstance(job, ReviewJob) and job.head_sha is None and head_sha:
+            return replace(job, head_sha=head_sha)
+        return job
+
+    monkeypatch.setattr("themis.router._prepare_trigger", prepare)
+    return acks
 
 
 def make_client(settings=None):
@@ -63,8 +87,8 @@ def _make_client_capturing(settings=None):
     runs = []
     original_enqueue = queue.enqueue
 
-    def enqueue(job_id, run, followup=False):
-        accepted = original_enqueue(job_id, run, followup=followup)
+    def enqueue(job_id, run, followup=False, revision=None):
+        accepted = original_enqueue(job_id, run, followup=followup, revision=revision)
         if accepted:
             runs.append(run)
         return accepted
@@ -83,10 +107,12 @@ def sign(secret: str, body: bytes) -> str:
 # --- webhook payload builders -------------------------------------------------
 
 
-def pr_opened_payload(repo: str = "acme/widgets", number: int = 5) -> dict:
+def pr_opened_payload(
+    repo: str = "acme/widgets", number: int = 5, head_sha: str = "deadbeef"
+) -> dict:
     return {
         "action": "opened",
-        "pull_request": {"number": number, "draft": False},
+        "pull_request": {"number": number, "draft": False, "head": {"sha": head_sha}},
         "repository": {"full_name": repo},
         "installation": {"id": 42},
         "sender": {"type": "User"},
@@ -233,8 +259,7 @@ def test_webhook_unknown_event_ignored():
 
 
 def test_webhook_pr_opened_enqueues_review_and_acks(monkeypatch):
-    ack = AsyncMock()
-    monkeypatch.setattr("themis.router._ack", ack)
+    acks = prepared_trigger(monkeypatch)
     client, queue = make_client()
     payload = json.dumps(pr_opened_payload()).encode()
     response = client.post(
@@ -248,15 +273,14 @@ def test_webhook_pr_opened_enqueues_review_and_acks(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"status": "queued"}
     assert queue.enqueued == ["review:acme/widgets#5"]
-    ack.assert_awaited_once()
-    assert ack.await_args.kwargs == {"issue_number": 5}
+    assert queue.revisions == ["sha:deadbeef"]
+    assert acks == [{"issue_number": 5}]
 
 
 def test_webhook_pr_synchronize_enqueues_followup_delta_without_ack(monkeypatch):
     # Delta candidates skip the eyes ack (most pushes trigger no review) and
     # ask the queue to keep the newest rejected push for a follow-up run.
-    ack = AsyncMock()
-    monkeypatch.setattr("themis.router._ack", ack)
+    acks = prepared_trigger(monkeypatch)
     client, queue = make_client()
     payload = json.dumps({**pr_opened_payload(), "action": "synchronize"}).encode()
     response = client.post(
@@ -271,12 +295,11 @@ def test_webhook_pr_synchronize_enqueues_followup_delta_without_ack(monkeypatch)
     assert response.json() == {"status": "queued"}
     assert queue.enqueued == ["review:acme/widgets#5"]
     assert queue.followups == [True]
-    ack.assert_not_awaited()
+    assert acks == [None]
 
 
 def test_webhook_mention_review_command_enqueues_review_and_acks_issue_comment(monkeypatch):
-    ack = AsyncMock()
-    monkeypatch.setattr("themis.router._ack", ack)
+    acks = prepared_trigger(monkeypatch, head_sha="cafe1234")
     client, queue = make_client()
     payload = json.dumps(issue_comment_payload(body="@test-reviewer review")).encode()
     response = client.post(
@@ -289,14 +312,13 @@ def test_webhook_mention_review_command_enqueues_review_and_acks_issue_comment(m
     )
     assert response.status_code == 200
     assert response.json() == {"status": "queued"}
-    assert queue.enqueued == ["review:acme/widgets#5:comment:501"]
-    ack.assert_awaited_once()
-    assert ack.await_args.kwargs == {"issue_comment_id": 501}
+    assert queue.enqueued == ["review:acme/widgets#5"]
+    assert queue.revisions == ["sha:cafe1234"]
+    assert acks == [{"issue_comment_id": 501}]
 
 
 def test_webhook_review_thread_reply_without_mention_enqueues_discuss_no_ack(monkeypatch):
-    ack = AsyncMock()
-    monkeypatch.setattr("themis.router._ack", ack)
+    acks = prepared_trigger(monkeypatch)
     client, queue = make_client()
     payload = json.dumps(review_comment_payload(body="continuing", in_reply_to=555)).encode()
     response = client.post(
@@ -310,11 +332,11 @@ def test_webhook_review_thread_reply_without_mention_enqueues_discuss_no_ack(mon
     assert response.status_code == 200
     assert response.json() == {"status": "queued"}
     assert queue.enqueued == ["discuss:601"]
-    ack.assert_not_awaited()
+    assert acks == [None]
 
 
 def test_webhook_duplicate_enqueue_returns_duplicate(monkeypatch):
-    monkeypatch.setattr("themis.router._ack", AsyncMock())
+    prepared_trigger(monkeypatch)
     client, queue = make_client()
     payload = json.dumps(pr_opened_payload()).encode()
     headers = {
@@ -327,26 +349,70 @@ def test_webhook_duplicate_enqueue_returns_duplicate(monkeypatch):
     assert second.json() == {"status": "duplicate"}
 
 
-def test_webhook_distinct_review_commands_each_queue_a_review(monkeypatch):
-    monkeypatch.setattr("themis.router._ack", AsyncMock())
+def _post_mention(
+    client, comment_id: int, body: str = "@test-reviewer review", association: str = "NONE"
+):
+    payload = issue_comment_payload(comment_id=comment_id, body=body)
+    payload["comment"]["author_association"] = association
+    payload = json.dumps(payload).encode()
+    return client.post(
+        "/webhook",
+        content=payload,
+        headers={
+            "x-github-event": "issue_comment",
+            "x-hub-signature-256": sign("hush", payload),
+        },
+    )
+
+
+def test_webhook_second_mention_on_the_same_head_is_a_duplicate(monkeypatch):
+    # Issue #77: two people mentioning the bot on the same PR used to buy two
+    # full engine runs over byte-identical code.
+    prepared_trigger(monkeypatch, head_sha="cafe1234")
     client, queue = make_client()
-    headers = {"x-github-event": "issue_comment"}
 
-    for comment_id in (501, 502):
-        payload = json.dumps(
-            issue_comment_payload(comment_id=comment_id, body="@test-reviewer review")
-        ).encode()
-        response = client.post(
-            "/webhook",
-            content=payload,
-            headers={**headers, "x-hub-signature-256": sign("hush", payload)},
-        )
-        assert response.json() == {"status": "queued"}
+    assert _post_mention(client, 501).json() == {"status": "queued"}
+    assert _post_mention(client, 502).json() == {"status": "duplicate"}
+    assert queue.enqueued == ["review:acme/widgets#5"]
+    assert queue.revisions == ["sha:cafe1234"]
 
-    assert queue.enqueued == [
-        "review:acme/widgets#5:comment:501",
-        "review:acme/widgets#5:comment:502",
-    ]
+
+def test_webhook_mention_after_a_push_reviews_the_new_head(monkeypatch):
+    # ... while a mention naming code the queued review has not seen must
+    # still run once that review frees the PR's slot.
+    prepared_trigger(monkeypatch, head_sha="cafe1234")
+    client, queue = make_client()
+    assert _post_mention(client, 501).json() == {"status": "queued"}
+
+    prepared_trigger(monkeypatch, head_sha="f00dfeed")
+    assert _post_mention(client, 502).json() == {"status": "duplicate"}
+    assert queue.enqueued == ["review:acme/widgets#5"]  # not a second parallel run
+    assert set(queue._followups) == {"review:acme/widgets#5"}  # runs once the slot frees
+
+
+def test_webhook_steered_mention_is_never_a_duplicate(monkeypatch):
+    # The request text is part of what gets reviewed, so an owner asking for a
+    # specific angle is not the review already in flight.
+    prepared_trigger(monkeypatch, head_sha="cafe1234")
+    client, queue = make_client()
+    steer = "@test-reviewer review focus on the retry path and its timeouts"
+
+    assert _post_mention(client, 501).json() == {"status": "queued"}
+    steered = _post_mention(client, 502, body=steer, association="OWNER")
+    assert steered.json() == {"status": "duplicate"}
+    assert set(queue._followups) == {"review:acme/widgets#5"}  # stored, not dropped
+
+
+def test_webhook_unresolvable_head_falls_back_to_per_comment_dedup(monkeypatch):
+    # GitHub unreachable when the trigger arrived: re-deliveries of one comment
+    # still collapse, but distinct comments are no longer provably redundant.
+    prepared_trigger(monkeypatch, head_sha=None)
+    client, queue = make_client()
+
+    assert _post_mention(client, 501).json() == {"status": "queued"}
+    assert queue.revisions == ["comment:501"]
+    assert _post_mention(client, 501).json() == {"status": "duplicate"}
+    assert queue._followups == {}  # re-delivery dropped, not stored
 
 
 def test_webhook_route_absent_when_disabled():
@@ -425,8 +491,7 @@ def test_api_review_403_when_app_not_installed(monkeypatch):
 
 
 def test_api_discuss_enqueues_and_acks(monkeypatch):
-    ack = AsyncMock()
-    monkeypatch.setattr("themis.router._ack", ack)
+    acks = prepared_trigger(monkeypatch)
     monkeypatch.setattr("themis.router.make_app_jwt", lambda client_id, pem: "jwt")
     monkeypatch.setattr(
         "themis.router.get_repo_installation_id", AsyncMock(return_value=42)
@@ -445,13 +510,11 @@ def test_api_discuss_enqueues_and_acks(monkeypatch):
     )
     assert response.status_code == 202
     assert queue.enqueued == ["discuss:99"]
-    ack.assert_awaited_once()
-    assert ack.await_args.kwargs == {"issue_comment_id": 99}
+    assert acks == [{"issue_comment_id": 99}]
 
 
 def test_api_discuss_mentioned_thread_reply_acks_review_comment(monkeypatch):
-    ack = AsyncMock()
-    monkeypatch.setattr("themis.router._ack", ack)
+    acks = prepared_trigger(monkeypatch)
     monkeypatch.setattr("themis.router.make_app_jwt", lambda client_id, pem: "jwt")
     monkeypatch.setattr(
         "themis.router.get_repo_installation_id", AsyncMock(return_value=42)
@@ -466,12 +529,11 @@ def test_api_discuss_mentioned_thread_reply_acks_review_comment(monkeypatch):
     )
     assert response.status_code == 202
     assert queue.enqueued == ["discuss:99"]
-    assert ack.await_args.kwargs == {"review_comment_id": 99}
+    assert acks == [{"review_comment_id": 99}]
 
 
 def test_api_discuss_unmentioned_thread_reply_skips_ack(monkeypatch):
-    ack = AsyncMock()
-    monkeypatch.setattr("themis.router._ack", ack)
+    acks = prepared_trigger(monkeypatch)
     monkeypatch.setattr("themis.router.make_app_jwt", lambda client_id, pem: "jwt")
     monkeypatch.setattr(
         "themis.router.get_repo_installation_id", AsyncMock(return_value=42)
@@ -492,7 +554,7 @@ def test_api_discuss_unmentioned_thread_reply_skips_ack(monkeypatch):
     )
     assert response.status_code == 202
     assert queue.enqueued == ["discuss:99"]
-    ack.assert_not_awaited()
+    assert acks == [None]
 
 
 # --- author trust fields -----------------------------------------------------
@@ -501,7 +563,7 @@ def test_api_discuss_unmentioned_thread_reply_skips_ack(monkeypatch):
 def test_webhook_thread_reply_forwards_author_trust_to_discussion_job(monkeypatch):
     job = AsyncMock()
     monkeypatch.setattr("themis.router.run_discussion_job", job)
-    monkeypatch.setattr("themis.router._ack", AsyncMock())
+    prepared_trigger(monkeypatch)
     client, runs = _make_client_capturing()
     payload_dict = review_comment_payload(
         body="@test-reviewer remember: use the manager", in_reply_to=555
@@ -528,7 +590,7 @@ def test_webhook_thread_reply_forwards_author_trust_to_discussion_job(monkeypatc
 def test_api_discuss_association_defaults_untrusted(monkeypatch):
     job = AsyncMock()
     monkeypatch.setattr("themis.router.run_discussion_job", job)
-    monkeypatch.setattr("themis.router._ack", AsyncMock())
+    prepared_trigger(monkeypatch)
     monkeypatch.setattr("themis.router.make_app_jwt", lambda client_id, pem: "jwt")
     monkeypatch.setattr(
         "themis.router.get_repo_installation_id", AsyncMock(return_value=42)

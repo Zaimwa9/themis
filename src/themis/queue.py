@@ -24,6 +24,7 @@ JobFactory = Callable[[], Awaitable[None]]
 class _Job:
     id: str
     run: JobFactory
+    revision: str | None = None
 
 
 class InMemoryJobQueue:
@@ -36,6 +37,11 @@ class InMemoryJobQueue:
     finishes, so an event that arrived mid-run (a push during a review) is
     re-examined instead of silently lost. Queued-but-not-started jobs are
     lost on restart; re-triggering (mention) is the documented recovery path.
+
+    The id is a serialization key, not an identity: callers that share one id
+    across triggers (every review of a PR, say) pass a `revision` naming what
+    the job would process, and a revision already in flight under that id is
+    dropped instead of being stored as a follow-up (issue #77).
     """
 
     def __init__(
@@ -44,28 +50,55 @@ class InMemoryJobQueue:
         self._timeout = job_timeout
         self._concurrency = concurrency
         self._queue: asyncio.Queue[_Job] = asyncio.Queue()
-        self._active_ids: set[str] = set()
+        self._active: dict[str, str | None] = {}
         self._followups: dict[str, _Job] = {}
         self._consumers: list[asyncio.Task[None]] = []
 
-    def enqueue(self, job_id: str, run: JobFactory, followup: bool = False) -> bool:
+    def enqueue(
+        self,
+        job_id: str,
+        run: JobFactory,
+        followup: bool = False,
+        revision: str | None = None,
+    ) -> bool:
         """True when queued, False when a job with this id is already active.
 
         followup=True changes what rejection means: instead of dropping the
         job, store it (newest wins - rapid rejections coalesce to one) and
         enqueue it when the active id frees up. Only jobs that re-check
         their own preconditions belong here; the follow-up runs uncondi-
-        tionally once the slot opens."""
-        if job_id in self._active_ids:
+        tionally once the slot opens.
+
+        A non-None `revision` matching the in-flight job's - or the follow-up
+        already stored for it - is redundant work by definition, so it is
+        dropped even when followup=True. None means "cannot tell", and never
+        matches: an unidentifiable job is queued or stored, never discarded.
+        """
+        if job_id in self._active:
+            if revision is not None and revision in self._in_flight_revisions(job_id):
+                logger.info(
+                    "themis_job_duplicate id=%s revision=%s", job_id, revision
+                )
+                return False
             if followup:
-                self._followups[job_id] = _Job(job_id, run)
+                self._followups[job_id] = _Job(job_id, run, revision)
                 logger.info("themis_job_followup_stored id=%s", job_id)
             else:
                 logger.info("themis_job_duplicate id=%s", job_id)
             return False
-        self._active_ids.add(job_id)
-        self._queue.put_nowait(_Job(job_id, run))
+        self._active[job_id] = revision
+        self._queue.put_nowait(_Job(job_id, run, revision))
         return True
+
+    def _in_flight_revisions(self, job_id: str) -> set[str]:
+        """Revisions this id is already going to process: the active job's and
+        the pending follow-up's, if either carries one."""
+        pending = self._followups.get(job_id)
+        return {
+            revision
+            for revision in (self._active.get(job_id), pending.revision if pending else None)
+            if revision is not None
+        }
 
     def start(self) -> None:
         if not self._consumers:
@@ -101,11 +134,11 @@ class InMemoryJobQueue:
                 # backstop so one bad job cannot kill the consumer.
                 logger.exception("themis_job_failed id=%s", job.id)
             finally:
-                self._active_ids.discard(job.id)
+                self._active.pop(job.id, None)
                 followup = self._followups.pop(job.id, None)
                 if followup is not None:
                     # Re-activate immediately so rejections arriving between
                     # this requeue and the follow-up's run keep coalescing.
-                    self._active_ids.add(followup.id)
+                    self._active[followup.id] = followup.revision
                     self._queue.put_nowait(followup)
                     logger.info("themis_job_followup_enqueued id=%s", job.id)
