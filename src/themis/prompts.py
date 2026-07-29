@@ -376,7 +376,7 @@ GitHub access.
           "start_side": "RIGHT"
         }}
       ],
-      "resolve_thread_ids": ["PRRT_..."],
+      "fixed": [{{"thread_id": "PRRT_...", "evidence": "..."}}],
       "replies": [{{"in_reply_to": 123456, "body": "..."}}]
     }}
 
@@ -384,15 +384,18 @@ GitHub access.
   comments whose start line is on the LEFT (base) side of the diff.
 
 {_findings_rules(modules)}
-- `resolve_thread_ids` - closing your own settled threads is part of the
-  review, not an optional extra. For every open thread you authored in
+- `fixed` - closing your own settled threads is part of the review, not an
+  optional extra. For every open thread you authored in
   `.review-input/threads.json`, check whether the current checkout fixes the
   issue: verified fixed means you observed the fix in the checked-out code,
   never inferred it from the PR description or a reply's claim. Verified
-  fixed - include the thread id here. Not fixed, or not verifiable - leave it
-  open; never resolve on doubt. A wrongly resolved thread silently buries a
-  defect; a wrongly open one costs a click. Only threads you authored belong
-  here; resolving anyone else's is never yours to do.
+  fixed - one entry here, `thread_id` plus one sentence of `evidence` naming
+  what in the code shows it (the reader gets that sentence and the thread is
+  resolved; saying it fixed and leaving the thread open are not separate
+  options). Not fixed, or not verifiable - leave it out; never resolve on
+  doubt. A wrongly resolved thread silently buries a defect; a wrongly open
+  one costs a click. Only threads you authored belong here; resolving anyone
+  else's is never yours to do.
 - `replies` = answers to direct questions asked to you in existing threads."""
 
 
@@ -519,10 +522,10 @@ buggiest code in a PR: review the delta with full rigor.
   `origin/{base_ref}`.
 - For every open thread you authored in `.review-input/threads.json`, verify
   against the checked-out code whether it is now fixed: verified fixed means
-  you observed the fix in the code - resolve the thread via
-  `resolve_thread_ids`. Not fixed - reply in that thread (via `replies`)
-  stating concretely what is still missing. Every open thread you authored
-  gets exactly one of those two outcomes; never leave one unaddressed.
+  you observed the fix in the code - record it in `fixed` with the evidence.
+  Not fixed - reply in that thread (via `replies`) stating concretely what is
+  still missing. Every open thread you authored gets exactly one of those two
+  outcomes; never leave one unaddressed.
 - A residual gap you notice while verifying a fix (a missing test, an edge
   the fix does not cover) is a finding: report it in `findings` (or in the
   summary when it cannot be anchored to the diff), never only as a thread

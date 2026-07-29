@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,68 @@ def test_parse_output__summary_and_actions__returns_all(tmp_path: Path):
     )
 
 
+def test_parse_output__fixed_entries__thread_and_evidence(tmp_path: Path):
+    _write(tmp_path, "all good", {
+        "fixed": [{"thread_id": "PRRT_1", "evidence": "retry now wraps the write"}],
+    })
+
+    actions = parse_output(tmp_path)
+
+    assert actions.fixed == [
+        {"thread_id": "PRRT_1", "evidence": "retry now wraps the write"}
+    ]
+
+
+def test_parse_output__fixed_without_evidence__kept(tmp_path: Path):
+    # Losing the whole claim over a missing sentence would leave the thread
+    # open, which is the drift `fixed` exists to remove.
+    _write(tmp_path, "all good", {"fixed": [{"thread_id": "PRRT_1"}]})
+
+    assert parse_output(tmp_path).fixed == [{"thread_id": "PRRT_1", "evidence": ""}]
+
+
+def test_parse_output__fixed_not_list__raises(tmp_path: Path):
+    _write(tmp_path, "s", {"fixed": {"thread_id": "PRRT_1"}})
+
+    with pytest.raises(OutputError, match="'fixed' must be a list"):
+        parse_output(tmp_path)
+
+
+def test_parse_output__fixed_without_thread_id__dropped(tmp_path: Path):
+    _write(tmp_path, "s", {"fixed": [{"evidence": "looks fixed"}]})
+
+    assert parse_output(tmp_path).fixed == []
+
+
+def test_parse_output__thread_id_that_is_not_a_node_id__dropped_and_counted(
+    tmp_path: Path, caplog
+):
+    # The controller names dropped thread ids in its logs, so smuggled text
+    # must not reach it - and must not be echoed on the way out either. The
+    # entry is dropped rather than raised on: OutputError costs the whole
+    # review, which is worse than losing one disposition.
+    secret = "ghp_" + "a" * 36
+    _write(tmp_path, "s", {
+        "fixed": [{"thread_id": f"leak {secret}"}, {"thread_id": "PRRT_ok"}],
+        "resolve_thread_ids": [f"leak {secret}", "PRRT_other"],
+    })
+
+    with caplog.at_level(logging.WARNING):
+        actions = parse_output(tmp_path)
+
+    assert actions.fixed == [{"thread_id": "PRRT_ok", "evidence": ""}]
+    assert actions.resolve_thread_ids == ["PRRT_other"]
+    assert "themis_thread_id_rejected count=2" in caplog.text
+    assert secret not in caplog.text
+
+
+def test_parse_output__fixed_with_non_string_evidence__raises(tmp_path: Path):
+    _write(tmp_path, "s", {"fixed": [{"thread_id": "PRRT_1", "evidence": 7}]})
+
+    with pytest.raises(OutputError, match="evidence"):
+        parse_output(tmp_path)
+
+
 def test_parse_output__summary_only__empty_actions(tmp_path: Path):
     _write(tmp_path, "clean PR")
 
@@ -45,6 +108,7 @@ def test_parse_output__summary_only__empty_actions(tmp_path: Path):
     assert actions.findings == []
     assert actions.resolve_thread_ids == []
     assert actions.replies == []
+    assert actions.fixed == []
 
 
 def test_parse_output__missing_summary__raises(tmp_path: Path):
