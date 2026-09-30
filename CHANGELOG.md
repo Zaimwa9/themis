@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/Zaimwa9/themis/compare/v0.13.1...v0.14.0) (2026-09-30)
+
+
+### Features
+
+* verified-fixed findings resolve their own threads ([#111](https://github.com/Zaimwa9/themis/issues/111)) ([7e9982d](https://github.com/Zaimwa9/themis/commit/7e9982dc67464a9d8264c381c057b514dbcd3b97))
+
 ## [0.13.1](https://github.com/Zaimwa9/themis/compare/v0.13.0...v0.13.1) (2026-07-28)
 
 
