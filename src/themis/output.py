@@ -1,6 +1,7 @@
 """Parse and validate the files codex writes to .review-output/."""
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,15 @@ VALID_SIDES = ("LEFT", "RIGHT")
 MAX_LEARNING_TEXT = 500
 VALID_CONFIDENCE = ("high", "low")
 _LEARNING_ID_RE = re.compile(r"lrn-[0-9a-f]{8}")
+# GitHub review-thread node ids are base64url over an opaque payload. Pinning
+# the shape at the parse boundary keeps engine-authored text out of the
+# controller's logs: thread ids are echoed there by name when a disposition is
+# dropped, and an id that cannot match a real thread has nothing to lose by
+# being rejected here.
+_THREAD_ID_RE = re.compile(r"[A-Za-z0-9_=-]{1,255}")
+
+
+logger = logging.getLogger(__name__)
 
 
 class OutputError(Exception):
@@ -31,6 +41,10 @@ class ReviewActions:
     findings: list[dict[str, Any]] = field(default_factory=list)
     resolve_thread_ids: list[str] = field(default_factory=list)
     replies: list[dict[str, Any]] = field(default_factory=list)
+    # Prior findings the run verified as fixed in the checked-out code, each
+    # `{"thread_id": ..., "evidence": ...}`. "Verified fixed" and "resolve that
+    # thread" are one statement here, so they cannot drift apart (issue #91).
+    fixed: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _read_capped(path: Path, workspace: Path) -> str:
@@ -83,19 +97,45 @@ def parse_output(workspace: Path) -> ReviewActions:
         raise OutputError(
             f"actions.json 'resolve_thread_ids' must be a list, got {type(resolve_raw).__name__}"
         )
+    # An id that is not shaped like a node id could not have matched a thread
+    # anyway, so it is dropped rather than raised on: OutputError costs the
+    # whole review (retried, then a failure comment), and losing an engine run
+    # over one unusable id is a worse outcome than losing that one disposition.
+    # Never counted by value - this is where smuggled text would land.
+    rejected = 0
+    resolve_ids: list[str] = []
     for thread_id in resolve_raw:
         if not isinstance(thread_id, str):
             raise OutputError(f"resolve_thread_ids entry must be a string: {thread_id!r}")
+        if not _THREAD_ID_RE.fullmatch(thread_id):
+            rejected += 1
+            continue
+        resolve_ids.append(thread_id)
 
     replies_raw = raw.get("replies", [])
     if not isinstance(replies_raw, list):
         raise OutputError(f"actions.json 'replies' must be a list, got {type(replies_raw).__name__}")
 
+    fixed_raw = raw.get("fixed", [])
+    if not isinstance(fixed_raw, list):
+        raise OutputError(f"actions.json 'fixed' must be a list, got {type(fixed_raw).__name__}")
+    fixed: list[dict[str, Any]] = []
+    for entry in fixed_raw:
+        validated = _validate_fixed(entry)
+        if validated is None:
+            rejected += 1
+            continue
+        fixed.append(validated)
+
+    if rejected:
+        logger.warning("themis_thread_id_rejected count=%d", rejected)
+
     return ReviewActions(
         summary=summary,
         findings=[_validate_finding(f) for f in findings_raw],
-        resolve_thread_ids=list(resolve_raw),
+        resolve_thread_ids=resolve_ids,
         replies=[_validate_reply(r) for r in replies_raw],
+        fixed=fixed,
     )
 
 
@@ -242,3 +282,28 @@ def _validate_reply(raw: Any) -> dict[str, Any]:
     _check_body_len("reply body", body)
 
     return {"in_reply_to": in_reply_to, "body": body}
+
+
+def _validate_fixed(raw: Any) -> dict[str, Any] | None:
+    """A verified-fixed prior finding: the thread it lives in, and why.
+
+    None when `thread_id` is not shaped like a GitHub node id, for the caller
+    to drop and count - see the rejection note in `parse_output`. `evidence` is
+    optional: an engine that resolves without saying what it saw is the shape
+    `resolve_thread_ids` already had, and losing the whole claim over a missing
+    sentence would leave the thread open, which is the drift this exists to
+    remove."""
+    if not isinstance(raw, dict):
+        raise OutputError(f"fixed entry must be an object: {raw!r}")
+
+    thread_id = raw.get("thread_id")
+    if not isinstance(thread_id, str) or not _THREAD_ID_RE.fullmatch(thread_id):
+        return None
+
+    evidence = raw.get("evidence")
+    if evidence is not None and not isinstance(evidence, str):
+        raise OutputError(f"fixed entry has invalid 'evidence': {raw}")
+    evidence = (evidence or "").strip()
+    _check_body_len("fixed evidence", evidence)
+
+    return {"thread_id": thread_id, "evidence": evidence}

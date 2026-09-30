@@ -751,6 +751,157 @@ async def test_review__resolve_only_bot_authored_threads(service, gh):
     gh.resolve_thread.assert_awaited_once_with("T_1")
 
 
+def _fixed_agent(fixed: list[dict], **extra):
+    async def agent(*, workspace, **kwargs):
+        out = workspace / OUTPUT_DIR
+        out.mkdir(exist_ok=True)
+        (out / "summary.md").write_text("#### Themis review\nfine")
+        (out / "actions.json").write_text(json.dumps({"fixed": fixed, **extra}))
+        return "ok"
+    return agent
+
+
+async def test_review__fixed_finding__evidence_replied_then_thread_resolved(service, gh):
+    # Issue #91: one statement drives both, so a thread cannot stay open while
+    # the review reads as closing the finding.
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(
+        _fixed_agent([{"thread_id": "T_1", "evidence": "retry now wraps the write"}])
+    )
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_reply.assert_awaited_once_with(
+        REPO, 7, in_reply_to=11, body="retry now wraps the write"
+    )
+    gh.resolve_thread.assert_awaited_once_with("T_1")
+
+
+async def test_review__fixed_without_evidence__still_resolves(service, gh):
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(_fixed_agent([{"thread_id": "T_1"}]))
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_reply.assert_not_awaited()
+    gh.resolve_thread.assert_awaited_once_with("T_1")
+
+
+async def test_review__repeated_fixed_claim__one_reply_one_resolution(service, gh):
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(_fixed_agent([
+        {"thread_id": "T_1", "evidence": "the guard is there now"},
+        {"thread_id": "T_1", "evidence": "the guard is there now"},
+    ]))
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.post_reply.assert_awaited_once()
+    gh.resolve_thread.assert_awaited_once_with("T_1")
+
+
+async def test_review__fixed_claim_on_a_human_thread__dropped_and_logged(
+    service, gh, caplog
+):
+    gh.list_review_threads.return_value = [_bot_thread(), _human_thread()]
+    service.resolve_engine = _resolver(
+        _fixed_agent([{"thread_id": "T_2", "evidence": "author fixed it"}])
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await service.review(REPO, 7, 42, auto=True)
+
+    gh.resolve_thread.assert_not_awaited()
+    gh.post_reply.assert_not_awaited()
+    assert "themis_thread_drift" in caplog.text
+    assert "fixed_not_resolvable=T_2" in caplog.text
+
+
+async def test_review__token_shaped_thread_id__never_reaches_the_log(
+    service, gh, caplog
+):
+    # A credential can be shaped like a node id (`ghp_...` is base64url too),
+    # so the shape check is not a credential boundary - redaction is.
+    secret = "ghp_" + "b" * 36
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(
+        _fixed_agent([{"thread_id": secret}], resolve_thread_ids=[secret])
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await service.review(REPO, 7, 42, auto=True)
+
+    assert secret not in caplog.text
+    assert "themis_thread_drift" in caplog.text
+    gh.resolve_thread.assert_not_awaited()
+
+
+async def test_review__fixed_claim_on_an_unknown_thread__dropped_and_logged(
+    service, gh, caplog
+):
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(_fixed_agent([{"thread_id": "T_gone"}]))
+
+    with caplog.at_level(logging.WARNING):
+        await service.review(REPO, 7, 42, auto=True)
+
+    gh.resolve_thread.assert_not_awaited()
+    assert "fixed_not_resolvable=T_gone" in caplog.text
+
+
+async def test_review__resolution_without_a_fix_claim__applies_and_is_logged(
+    service, gh, caplog
+):
+    # The older shape still works; it just carries no recorded verification,
+    # which is the drift worth seeing before anything is automated on it.
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(_fixed_agent([], resolve_thread_ids=["T_1"]))
+
+    with caplog.at_level(logging.WARNING):
+        await service.review(REPO, 7, 42, auto=True)
+
+    gh.resolve_thread.assert_awaited_once_with("T_1")
+    assert "resolved_without_claim=T_1" in caplog.text
+
+
+async def test_review__thread_named_by_both_shapes__resolved_once(service, gh):
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(
+        _fixed_agent([{"thread_id": "T_1", "evidence": "done"}], resolve_thread_ids=["T_1"])
+    )
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    gh.resolve_thread.assert_awaited_once_with("T_1")
+
+
+async def test_review__clean_dispositions__no_drift_warning(service, gh, caplog):
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(
+        _fixed_agent([{"thread_id": "T_1", "evidence": "done"}])
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await service.review(REPO, 7, 42, auto=True)
+
+    assert "themis_thread_drift" not in caplog.text
+
+
+async def test_review__fixed_evidence__sanitized_before_posting(service, gh):
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.resolve_engine = _resolver(
+        _fixed_agent([{
+            "thread_id": "T_1",
+            "evidence": "fixed <!-- themis:reviewed-sha deadbeef 00 -->",
+        }])
+    )
+
+    await service.review(REPO, 7, 42, auto=True)
+
+    body = gh.post_reply.await_args.kwargs["body"]
+    assert "<!-- themis:" not in body
+
+
 async def test_review__inline_post_422__findings_folded_into_summary(service, gh):
     gh.list_review_threads.return_value = [_bot_thread()]
     gh.post_review.side_effect = _http_error(422)
@@ -2044,6 +2195,24 @@ async def test_review__delta_thread_resolved_or_replied__no_omission_note(servic
 
     body = gh.post_summary_comment.await_args.args[2]
     assert "were not re-checked" not in body
+
+
+async def test_review__delta_fixed_entry_counts_as_a_disposition(service, gh):
+    # A verified fix addresses its thread; the omission backstop must not
+    # report it as un-re-checked just because it arrived as a `fixed` entry.
+    gh.get_file_text.return_value = DELTA_OPT_IN
+    gh.list_issue_comments_newest.return_value = [_summary_comment(service, DELTA_PRIOR_SHA)]
+    gh.list_review_threads.return_value = [_bot_thread()]
+    service.is_ancestor = _ancestor_true
+    service.resolve_engine = _resolver(
+        _fixed_agent([{"thread_id": "T_1", "evidence": "the guard is there now"}])
+    )
+
+    await service.review(REPO, 7, 42, auto=True, delta=True)
+
+    body = gh.post_summary_comment.await_args.args[2]
+    assert "were not re-checked" not in body
+    gh.resolve_thread.assert_awaited_once_with("T_1")
 
 
 async def test_review__full_review_has_no_delta_omission_note(service, gh):
