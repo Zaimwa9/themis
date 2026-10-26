@@ -209,10 +209,17 @@ def _verify_paragraph(modules: dict[str, str]) -> str | None:
     return """\
    Add `<details><summary><b>🧪 How to verify</b></summary>` on every review. Add
    a blank line, then 3-5 one-line steps covering the riskiest paths first, and
-   finish with `</details>`. For internal changes, give commands or tests rather
-   than user-visible steps. If a cheap automated check would cover the change,
-   end with one `Automate:` line. When there is nothing beyond completed checks,
-   use the single line `No additional verification steps.` inside the block."""
+   finish with `</details>`. Every step is an action plus the observable outcome
+   that would differ if the change were wrong - "add `skip_titles: ['WIP*']`,
+   open a PR titled `WIP: x`, expect no review and a courtesy comment" - never a
+   bare command. Lead with steps someone exercises by hand against the running
+   system, end to end; for a change with no user-visible surface, that is the
+   smallest input that reaches it and the output to expect. A test command earns
+   a line only when it covers something the author's own checks do not already
+   run, and never fills the block on its own. If a cheap automated check would
+   cover the change, end with one `Automate:` line. When there is nothing beyond
+   completed checks, use the single line `No additional verification steps.`
+   inside the block."""
 
 
 def _assumptions_paragraph(modules: dict[str, str]) -> str | None:
