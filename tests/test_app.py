@@ -56,7 +56,10 @@ def make_settings(**overrides) -> Settings:
 def quiet_github(monkeypatch):
     monkeypatch.setattr("themis.app.make_app_jwt", lambda *a: "jwt")
     monkeypatch.setattr("themis.app.get_app_slug", AsyncMock(return_value="test-reviewer"))
-    monkeypatch.setattr("themis.router._ack", AsyncMock())
+    async def prepare(settings, job, ack):
+        return job
+
+    monkeypatch.setattr("themis.router._prepare_trigger", prepare)
     return monkeypatch
 
 

@@ -1,9 +1,11 @@
 """Webhook + trigger API endpoints: verify, parse, enqueue. No heavy work here."""
 
+import asyncio
 import json
 import logging
 import secrets
-from typing import Any, Literal
+from dataclasses import replace
+from typing import Any, Literal, TypeVar
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -17,7 +19,7 @@ from themis.github.auth import (
     make_app_jwt,
 )
 from themis.github.client import GitHubClient
-from themis.queue import InMemoryJobQueue
+from themis.queue import InMemoryJobQueue, OnConflict
 from themis.security import verify_signature
 from themis.review_service import run_discussion_job, run_review_job
 
@@ -43,13 +45,72 @@ class DiscussRequest(BaseModel):
 
 def _job_id(job: ReviewJob | DiscussJob) -> str:
     if isinstance(job, ReviewJob):
-        # A manual request needs its own job so that its running-status
-        # reaction lands on the comment that triggered it. Re-deliveries of
-        # the same webhook still share this key and remain deduplicated.
-        if job.trigger_comment_id is not None:
-            return f"review:{job.repo}#{job.pr_number}:comment:{job.trigger_comment_id}"
+        # Every trigger for a PR shares one key, so at most one review of it
+        # is ever in flight: two people mentioning the bot no longer buy two
+        # full engine runs over identical code, and a push mid-review cannot
+        # double-post alongside it under THEMIS_CONCURRENCY. Which of the
+        # colliding requests is redundant is `_revision`'s call, not the id's.
         return f"review:{job.repo}#{job.pr_number}"
     return f"discuss:{job.comment_id}"
+
+
+def _scope(job: ReviewJob) -> str:
+    """Which kind of review this is - the queue's coalesce group, and half of
+    what a revision names.
+
+    A delta re-review covers only the commits pushed since the last review and
+    may decline to run at all (delta disabled, no prior review, no checkpoint
+    key); a full review covers the PR. Two triggers are the same work only when
+    they are the same kind of work, and that holds in both directions: an
+    unqualified sha would let a queued delta swallow a mention asking for a
+    full review, and an unqualified coalesce group would let a push arriving
+    later replace a mention already waiting - each answering it with nothing
+    when the delta then declines."""
+    return "delta" if job.delta else "sha"
+
+
+def _revision(job: ReviewJob) -> str | None:
+    """What this review would look at, or None when that cannot be told.
+
+    Two triggers with the same revision produce the same review, so the queue
+    keeps one and drops the other. Steered requests are never redundant - the
+    context text is part of what gets reviewed - so they key on their own
+    comment. An unresolved head falls back to the comment id, which still
+    deduplicates webhook re-deliveries; None (no head, no comment) never
+    matches anything and always queues.
+    """
+    if job.extra_context:
+        return f"context:{job.trigger_comment_id}"
+    if job.head_sha:
+        return f"{_scope(job)}:{job.head_sha}"
+    if job.trigger_comment_id is not None:
+        return f"comment:{job.trigger_comment_id}"
+    return None
+
+
+def _on_conflict(job: ReviewJob) -> OnConflict:
+    """Whether a later review of this PR would answer this request too.
+
+    This and `_revision` key on different things on purpose. The revision asks
+    "is this provably the same work?", which needs the head commit and so is
+    unknowable when GitHub cannot be reached. This asks "does a later ask of
+    this kind answer this one?", which the trigger states itself: a push, an
+    auto review and a plain mention all ask for the PR as it stands whenever
+    the queue gets to it, so the newest subsumes the others whatever their
+    heads were. A steered request carries an instruction of its own that no
+    later review answers, so it waits its turn instead of being replaced - two
+    owners asking for two different focus areas are two reviews, and always
+    were: before issue #77 each mention had its own job id.
+
+    So an unresolved head changes the revision and not this. That combination
+    is deliberately the conservative one: an unprovable duplicate is held and
+    run rather than dropped, where a provable one is dropped outright.
+
+    Supersedable by *what* is `_scope`, passed as the queue's coalesce group: a
+    delta only ever answers another delta, because it covers just the commits
+    pushed since the last review and may decline to run at all.
+    """
+    return "queue" if job.extra_context else "coalesce"
 
 
 def _enqueue(
@@ -57,12 +118,18 @@ def _enqueue(
 ) -> bool:
     if isinstance(job, ReviewJob):
         async def run() -> None:
-            await run_review_job(
+            reviewed = await run_review_job(
                 settings, slug, job.repo, job.pr_number, job.installation_id, job.auto,
                 trigger_comment_id=job.trigger_comment_id,
                 extra_context=job.extra_context,
                 delta=job.delta,
             )
+            # The head resolved at trigger time is a guess about what this run
+            # would cover; this is what it actually covered. Correcting it lets
+            # the queue drop triggers - including one already waiting behind
+            # this job - for a commit this review has now answered.
+            if reviewed is not None:
+                queue.reviewed(_job_id(job), f"{_scope(job)}:{reviewed}")
     else:
         async def run() -> None:
             await run_discussion_job(
@@ -73,13 +140,18 @@ def _enqueue(
                 author_association=job.author_association,
                 author_login=job.author_login,
             )
-    # A push during a running review must not vanish: the review's summary
-    # records the sha it cloned, so commits pushed after that clone would
-    # otherwise stay unreviewed until the next push. Delta jobs re-check the
-    # PR head against the last-reviewed marker and exit cheaply when the
-    # finished review already covered it, so a follow-up is always safe.
-    followup = isinstance(job, ReviewJob) and job.delta
-    return queue.enqueue(_job_id(job), run, followup=followup)
+    # A trigger arriving during a running review must not vanish: the review's
+    # summary records the sha it cloned, so commits pushed after that clone
+    # would otherwise stay unreviewed until the next push, and a mention that
+    # asked for something the running review is not doing would go unanswered.
+    # Review jobs re-resolve the PR from GitHub when they start, so running one
+    # late is always safe; the revision keeps the genuinely redundant ones out.
+    if isinstance(job, ReviewJob):
+        return queue.enqueue(
+            _job_id(job), run, on_conflict=_on_conflict(job),
+            revision=_revision(job), coalesce_group=_scope(job),
+        )
+    return queue.enqueue(_job_id(job), run)
 
 
 def _skip_ack(job: ReviewJob | DiscussJob) -> bool:
@@ -105,16 +177,67 @@ def _repo_allowed(repo: str, allowlist: frozenset[str] | None) -> bool:
     return f"{owner}/*" in allowlist
 
 
-async def _ack(settings: Settings, job: ReviewJob | DiscussJob, **target: int) -> None:
-    """Best-effort eyes reaction on the trigger; never blocks enqueueing."""
-    try:
+JobT = TypeVar("JobT", bound=ReviewJob | DiscussJob)
+
+# GitHub records a webhook delivery as failed when the endpoint has not
+# answered within 10 seconds, and preparation is the only GitHub work on the
+# response path. It gets a fraction of that budget: what it produces is
+# enrichment (an eyes reaction, a sharper dedup key), never the trigger
+# itself, so a slow GitHub costs those and nothing else.
+TRIGGER_PREPARE_TIMEOUT = 5.0
+
+
+async def _prepare_trigger(
+    settings: Settings, job: JobT, ack: dict[str, int] | None
+) -> JobT:
+    """Fill in what the payload did not carry and acknowledge the trigger.
+
+    One installation token covers both: the eyes reaction on the trigger, and
+    - for a review whose payload has no head sha (a mention, `/api/review`) -
+    the PR head the dedup revision keys on. Everything here is best-effort and
+    never blocks enqueueing: on failure, or past the deadline, the job keeps
+    the head it arrived with (usually None), which degrades to per-comment
+    dedup rather than dropping work.
+    """
+    needs_head = isinstance(job, ReviewJob) and job.head_sha is None
+    if not needs_head and ack is None:
+        return job
+
+    async def prepare() -> None:
+        # Assigns as it goes rather than returning, so a deadline that lands
+        # mid-ack still keeps a head resolved a moment earlier.
+        nonlocal job
         app_jwt = make_app_jwt(settings.gh_app_client_id, settings.gh_app_private_key_pem)
-        async with httpx.AsyncClient(timeout=30) as auth_client:
+        async with httpx.AsyncClient(timeout=TRIGGER_PREPARE_TIMEOUT) as auth_client:
             token = await get_installation_token(auth_client, job.installation_id, app_jwt)
         async with GitHubClient(token) as gh:
-            await gh.add_reaction(job.repo, **target)
+            if needs_head:
+                try:
+                    pr = await gh.get_pr(job.repo, job.pr_number)
+                    head = (pr.get("head") or {}).get("sha")
+                    if head:
+                        job = replace(job, head_sha=head)
+                except Exception as error:
+                    logger.warning(
+                        "themis_head_sha_unresolved repo=%s pr=%s error=%s",
+                        job.repo, job.pr_number, error,
+                    )
+            if ack is not None:
+                await gh.add_reaction(job.repo, **ack)
+
+    try:
+        await asyncio.wait_for(prepare(), TRIGGER_PREPARE_TIMEOUT)
+    except TimeoutError:
+        logger.warning(
+            "themis_trigger_prepare_timeout repo=%s pr=%s seconds=%s",
+            job.repo, job.pr_number, TRIGGER_PREPARE_TIMEOUT,
+        )
     except Exception as error:
-        logger.warning("themis_ack_failed repo=%s error=%s", job.repo, error)
+        logger.warning(
+            "themis_trigger_prepare_failed repo=%s pr=%s error=%s",
+            job.repo, job.pr_number, error,
+        )
+    return job
 
 
 def _webhook_reaction_target(
@@ -155,13 +278,25 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             if not _repo_allowed(job.repo, settings.repos):
                 logger.info("themis_repo_not_allowlisted repo=%s", job.repo)
                 return {"status": "ignored"}
-            enqueued = _enqueue(settings, queue, slug, job)
+            # Before enqueueing: the dedup revision needs the PR head, which a
+            # comment payload does not carry.
+            ack = None if _skip_ack(job) else _webhook_reaction_target(event, payload, job)
+            try:
+                job = await _prepare_trigger(settings, job, ack)
+            finally:
+                # Nothing on the network may cost us the trigger. Preparation
+                # swallows its own failures, but a cancelled handler (client
+                # disconnect, shutdown) raises through it - CancelledError is a
+                # BaseException - and GitHub does not redeliver a delivery whose
+                # connection it dropped. `finally` runs during that propagation
+                # and _enqueue never awaits, so the job is queued either way;
+                # it just keeps the head it arrived with (usually None), which
+                # degrades to per-comment dedup rather than losing the request.
+                enqueued = _enqueue(settings, queue, slug, job)
             logger.info(
                 "themis_enqueued job=%s repo=%s pr=%s duplicate=%s",
                 type(job).__name__, job.repo, job.pr_number, not enqueued,
             )
-            if not _skip_ack(job):
-                await _ack(settings, job, **_webhook_reaction_target(event, payload, job))
             return {"status": "queued" if enqueued else "duplicate"}
 
     def _require_api_token(authorization: str | None) -> None:
@@ -193,7 +328,10 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             repo=body.repo, pr_number=body.pr_number,
             installation_id=installation_id, auto=False,
         )
-        enqueued = _enqueue(settings, queue, request.app.state.bot_slug, job)
+        try:
+            job = await _prepare_trigger(settings, job, None)
+        finally:  # see the webhook handler: the enqueue is not skippable
+            enqueued = _enqueue(settings, queue, request.app.state.bot_slug, job)
         return {"status": "queued" if enqueued else "duplicate"}
 
     @router.post("/api/discuss", status_code=202)
@@ -209,14 +347,17 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             in_reply_to_id=body.in_reply_to_id, mentions_bot=body.mentions_bot,
             author_association=body.author_association, author_login=body.author_login,
         )
-        enqueued = _enqueue(settings, queue, request.app.state.bot_slug, job)
+        ack = None
         if not _skip_ack(job):
-            target = (
+            ack = (
                 {"issue_comment_id": job.comment_id}
                 if job.kind == "conversation"
                 else {"review_comment_id": job.comment_id}
             )
-            await _ack(settings, job, **target)
+        try:
+            await _prepare_trigger(settings, job, ack)
+        finally:  # see the webhook handler: the enqueue is not skippable
+            enqueued = _enqueue(settings, queue, request.app.state.bot_slug, job)
         return {"status": "queued" if enqueued else "duplicate"}
 
     return router
