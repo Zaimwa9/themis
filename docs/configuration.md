@@ -19,6 +19,7 @@ Two planes:
 | `THEMIS_AGENT_URL` | no | `http://agent:8001` | internal URL of the isolated agent service |
 | `THEMIS_ENGINE` | no | `codex` | instance default review engine; `codex`, `claude`, `glm`, `kimi`, or `openrouter` |
 | `THEMIS_CONCURRENCY` | no | `1` | parallel jobs, `1`–`8`; out-of-range or non-integer values warn and fall back to `1`. Sizes the queue consumers and the engine-run slots, and must be set on both the controller and agent containers (the compose templates pass it to both). The practical limit is the operator's engine subscription quota, so keep it small |
+| `THEMIS_TRUSTED_BOTS` | no | unset | comma-separated GitHub App logins (`name` or `name[bot]`, case-insensitive) whose replies in review threads Themis answers. Every other bot sender is ignored. Covers review-thread replies only: a listed bot's PR-level comments, mention commands, and PRs stay ignored. To stop two agents looping, Themis answers a bot at most 3 times per thread; humans can still get answers after that. Its own login is never trusted. Server mode only |
 | `THEMIS_DEFAULT_REPO_CONFIG` | no | unset | `.themis/config.yaml` content (raw yaml or base64 of it) used for repos that have no `.themis/config.yaml`; see below |
 | `CODEX_HOME` | no | `/data/codex` | codex auth/state directory; its `auth.json` must be a login chain no other install uses (single-use rotating refresh tokens) |
 | `THEMIS_CODEX_SANDBOX` | no | `workspace-write` | codex sandbox mode; `danger-full-access` for runtimes without Landlock |

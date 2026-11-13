@@ -94,6 +94,9 @@ CANCELLED_COMMENT = (
     "Review was cancelled before completing (worker timeout or shutdown). "
     "Mention {mention} with `review` to retry."
 )
+# A bot reply (THEMIS_TRUSTED_BOTS) is answered only while themis has posted
+# fewer than this many replies in the thread (its own finding not counted).
+MAX_BOT_EXCHANGE_REPLIES = 3
 TITLE_SKIP_MARKER = "<!-- themis:title-skip -->"
 # Embedded in every summary comment so a later push can delta-review
 # `<last-reviewed-sha>..HEAD` (issue #11). A forged sha would silently shrink
@@ -705,6 +708,17 @@ class ReviewService:
                     return
                 if not mentions_bot and not _bot_in_thread(thread, self.bot_login):
                     return
+                if _is_app_login(author_login) and (
+                    _bot_reply_count(thread, self.bot_login)
+                    >= MAX_BOT_EXCHANGE_REPLIES
+                ):
+                    # Another bot (THEMIS_TRUSTED_BOTS) may answer every
+                    # reply: stop before the two agents ping-pong forever.
+                    logger.info(
+                        "themis_discuss_bot_exchange_capped repo=%s pr=%s comment=%s author=%s",
+                        repo, pr_number, comment_id, author_login,
+                    )
+                    return
                 if not mentions_bot:
                     # The router skips the ack for unmentioned thread replies
                     # (relevance unknown until now); react here now that the
@@ -1156,6 +1170,20 @@ def _find_thread(
 def _bot_logins(bot_login: str) -> set[str]:
     # GraphQL reports App authors without the [bot] suffix; REST includes it.
     return {bot_login, bot_login.removesuffix("[bot]")}
+
+
+def _is_app_login(login: str) -> bool:
+    # REST payloads suffix every GitHub App account's login with [bot].
+    return login.endswith("[bot]")
+
+
+def _bot_reply_count(thread: dict[str, Any], bot_login: str) -> int:
+    """Comments the bot posted in the thread, excluding a root it opened."""
+    logins = _bot_logins(bot_login)
+    replies = thread.get("comments", {}).get("nodes", [])[1:]
+    return sum(
+        1 for node in replies if (node.get("author") or {}).get("login", "") in logins
+    )
 
 
 def _bot_in_thread(thread: dict[str, Any], bot_login: str) -> bool:

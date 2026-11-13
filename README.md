@@ -390,6 +390,7 @@ volume: key in `.env`, done.
 | PR comment says the usage limit was reached | The subscription of whichever engine ran the job has hit its usage window. Mention the bot again once it resets. |
 | Auth that worked starts failing months later | Run `codex login` locally, then refresh the persistent agent credential using the command in [Automated setup: Refreshing Codex authentication](docs/bootstrap.md#refreshing-codex-authentication). |
 | Review comment says engine credentials missing | Set `CLAUDE_CODE_OAUTH_TOKEN` (claude), `GLM_API_KEY` (glm), `KIMI_API_KEY` (kimi), `OPENROUTER_API_KEY` (openrouter), or seed the codex auth volume (codex), or change `THEMIS_ENGINE` / the repo's `engine:` key. |
+| A bot replied in a Themis thread, no answer | Bot senders are ignored unless their login is in `THEMIS_TRUSTED_BOTS`. A trusted bot gets at most 3 answers per thread. |
 | Webhook deliveries show 401 in the App's settings | `THEMIS_GH_WEBHOOK_SECRET` doesn't match the App's webhook secret. |
 | Where are the logs | `docker compose logs -f themis` |
 | A job queued right before a restart never ran | The in-memory queue doesn't survive restarts; mention the bot again to re-trigger. |

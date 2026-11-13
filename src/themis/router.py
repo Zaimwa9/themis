@@ -145,7 +145,9 @@ def create_router(settings: Settings, queue: InMemoryJobQueue) -> APIRouter:
             event = request.headers.get("x-github-event", "")
             try:
                 payload = json.loads(body)
-                job = parse_event(event, payload, f"@{slug}")
+                job = parse_event(
+                    event, payload, f"@{slug}", settings.trusted_bots
+                )
             except (json.JSONDecodeError, KeyError) as error:
                 logger.warning("themis_malformed_payload event=%s error=%s", event, error)
                 return {"status": "ignored"}

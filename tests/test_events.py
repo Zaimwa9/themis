@@ -30,14 +30,17 @@ def _issue_comment_payload(
     }
 
 
-def _review_comment_payload(body: str, in_reply_to: int | None = None) -> dict:
-    comment = {"id": 601, "body": body, "user": {"login": "dev"}}
+def _review_comment_payload(
+    body: str, in_reply_to: int | None = None, sender: dict | None = None
+) -> dict:
+    sender = sender or {"type": "User", "login": "dev"}
+    comment = {"id": 601, "body": body, "user": {"login": sender["login"]}}
     if in_reply_to is not None:
         comment["in_reply_to_id"] = in_reply_to
     return {
         "action": "created",
         "installation": {"id": 42},
-        "sender": {"type": "User"},
+        "sender": sender,
         "repository": {"full_name": REPO},
         "pull_request": {"number": 7},
         "comment": comment,
@@ -321,3 +324,48 @@ def test_parse_event__missing_association__defaults_untrusted():
     job = parse_event("issue_comment", payload, MENTION)
     assert job.author_association == "NONE"
     assert job.author_login == ""
+
+
+TRUSTED = frozenset({"fixer-bot"})
+FIXER = {"type": "Bot", "login": "fixer-bot[bot]"}
+
+
+def test_parse_event__untrusted_bot_thread_reply__none():
+    payload = _review_comment_payload("no change", in_reply_to=600, sender=FIXER)
+    assert parse_event("pull_request_review_comment", payload, MENTION) is None
+
+
+def test_parse_event__trusted_bot_thread_reply__discuss_job():
+    payload = _review_comment_payload("no change", in_reply_to=600, sender=FIXER)
+    job = parse_event("pull_request_review_comment", payload, MENTION, TRUSTED)
+    assert isinstance(job, DiscussJob)
+    assert job.kind == "thread"
+    assert job.author_login == "fixer-bot[bot]"
+
+
+def test_parse_event__trusted_bot_matches_case_insensitively():
+    sender = {"type": "Bot", "login": "Fixer-Bot[bot]"}
+    payload = _review_comment_payload("no change", in_reply_to=600, sender=sender)
+    job = parse_event("pull_request_review_comment", payload, MENTION, TRUSTED)
+    assert isinstance(job, DiscussJob)
+
+
+def test_parse_event__trusted_bot_conversation_comment__none():
+    # Trust covers review-thread replies only: a PR-level comment from the
+    # bot (e.g. quoting a mention) has no per-thread cap to stop a loop.
+    payload = _issue_comment_payload(f"{MENTION} why?", sender_type="Bot")
+    payload["sender"]["login"] = "fixer-bot[bot]"
+    assert parse_event("issue_comment", payload, MENTION, TRUSTED) is None
+
+
+def test_parse_event__trusted_bot_pull_request__none():
+    payload = _pr_payload()
+    payload["sender"] = FIXER
+    assert parse_event("pull_request", payload, MENTION, TRUSTED) is None
+
+
+def test_parse_event__own_bot_listed_as_trusted__still_none():
+    sender = {"type": "Bot", "login": "test-reviewer[bot]"}
+    payload = _review_comment_payload("answer", in_reply_to=600, sender=sender)
+    trusted = frozenset({"test-reviewer"})
+    assert parse_event("pull_request_review_comment", payload, MENTION, trusted) is None

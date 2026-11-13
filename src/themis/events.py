@@ -47,11 +47,25 @@ class DiscussJob:
     author_login: str = ""
 
 
+def normalize_bot_login(login: str) -> str:
+    """Case-folded login without the ``[bot]`` suffix REST adds to App users."""
+    return login.strip().lower().removesuffix("[bot]")
+
+
 def parse_event(
-    event: str, payload: dict[str, Any], mention: str
+    event: str,
+    payload: dict[str, Any],
+    mention: str,
+    trusted_bots: frozenset[str] = frozenset(),
 ) -> ReviewJob | DiscussJob | None:
-    # Bot senders (Dependabot etc.) never trigger an auto-review of their own PRs/comments.
-    if payload.get("sender", {}).get("type") == "Bot":
+    # Bot senders (Dependabot etc.) never trigger an auto-review of their own
+    # PRs/comments. The one exception is a thread reply from an operator-
+    # trusted bot (THEMIS_TRUSTED_BOTS), so an agent that answers findings can
+    # get an answer back; the worker caps how long such an exchange runs.
+    sender = payload.get("sender") or {}
+    if sender.get("type") == "Bot" and not _trusted_bot_thread_reply(
+        event, sender, mention, trusted_bots
+    ):
         return None
     if event == "pull_request":
         return _parse_pull_request(payload)
@@ -60,6 +74,18 @@ def parse_event(
     if event == "pull_request_review_comment":
         return _parse_review_comment(payload, mention)
     return None
+
+
+def _trusted_bot_thread_reply(
+    event: str, sender: dict[str, Any], mention: str, trusted_bots: frozenset[str]
+) -> bool:
+    if event != "pull_request_review_comment" or not trusted_bots:
+        return False
+    login = normalize_bot_login(sender.get("login") or "")
+    # Never let the bot's own comments back in, even if an operator lists it.
+    if not login or login == normalize_bot_login(mention.lstrip("@")):
+        return False
+    return login in trusted_bots
 
 
 def _installation_id(payload: dict[str, Any]) -> int:
