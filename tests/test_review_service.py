@@ -1482,6 +1482,65 @@ async def test_discuss__mentioned_in_human_thread__answers(service, gh):
     gh.post_reply.assert_awaited_once_with(REPO, 7, in_reply_to=21, body="here is the answer")
 
 
+def _bot_exchange_thread(bot_replies: int) -> dict:
+    nodes = [{"author": {"login": "test-reviewer"}, "body": "bug", "databaseId": 11}]
+    for i in range(bot_replies):
+        nodes.append(
+            {"author": {"login": "fixer-bot"}, "body": "no", "databaseId": 100 + 2 * i}
+        )
+        nodes.append(
+            {"author": {"login": "test-reviewer"}, "body": "yes", "databaseId": 101 + 2 * i}
+        )
+    nodes.append({"author": {"login": "fixer-bot"}, "body": "no", "databaseId": 99})
+    return {"id": "T_9", "isResolved": False, "path": "a.py", "line": 3,
+            "comments": {"nodes": nodes}}
+
+
+async def test_discuss__bot_reply_under_exchange_cap__answers(service, gh):
+    gh.list_review_threads.return_value = [_bot_exchange_thread(bot_replies=2)]
+    service.resolve_engine = _resolver(_reply_agent())
+
+    await service.discuss(
+        repo=REPO, pr_number=7, installation_id=42, comment_id=99,
+        body="no", kind="thread", in_reply_to_id=11, mentions_bot=False,
+        author_login="fixer-bot[bot]",
+    )
+
+    gh.post_reply.assert_awaited_once_with(REPO, 7, in_reply_to=11, body="here is the answer")
+
+
+async def test_discuss__bot_reply_at_exchange_cap__skipped(service, gh, caplog):
+    gh.list_review_threads.return_value = [_bot_exchange_thread(bot_replies=3)]
+
+    async def agent(**kwargs):
+        raise AssertionError("agent must not run")
+    service.resolve_engine = _resolver(agent)
+
+    with caplog.at_level(logging.INFO):
+        await service.discuss(
+            repo=REPO, pr_number=7, installation_id=42, comment_id=99,
+            body="no", kind="thread", in_reply_to_id=11, mentions_bot=False,
+            author_login="fixer-bot[bot]",
+        )
+
+    gh.add_reaction.assert_not_awaited()
+    gh.post_reply.assert_not_awaited()
+    assert "themis_discuss_bot_exchange_capped" in caplog.text
+
+
+async def test_discuss__human_reply_past_exchange_cap__still_answers(service, gh):
+    gh.list_review_threads.return_value = [_bot_exchange_thread(bot_replies=3)]
+    service.resolve_engine = _resolver(_reply_agent())
+
+    await service.discuss(
+        repo=REPO, pr_number=7, installation_id=42, comment_id=99,
+        body="and now?", kind="thread", in_reply_to_id=11, mentions_bot=False,
+        author_login="dev",
+    )
+
+    gh.post_reply.assert_awaited_once()
+
+
 async def test_discuss__reaction_fails__reply_still_posted(service, gh):
     gh.list_review_threads.return_value = [_bot_thread()]
     gh.add_reaction.side_effect = _http_error(500)

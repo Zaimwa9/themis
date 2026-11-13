@@ -30,7 +30,7 @@ def _set_env(monkeypatch, extra=None, omit=()):
         "THEMIS_CODEX_SANDBOX", "THEMIS_PUBLIC_URL", "THEMIS_TUNNEL_API",
         "THEMIS_WEBHOOK_ENABLED", "THEMIS_API_TOKEN", "THEMIS_WORKSPACE_ROOT", "THEMIS_ENGINE",
         "THEMIS_AGENT_URL", "THEMIS_AGENT_TOKEN", "THEMIS_DATA_ROOT",
-        "THEMIS_DEFAULT_REPO_CONFIG", "THEMIS_CONCURRENCY",
+        "THEMIS_DEFAULT_REPO_CONFIG", "THEMIS_CONCURRENCY", "THEMIS_TRUSTED_BOTS",
     ):
         monkeypatch.delenv(key, raising=False)
     for key, value in {**REQUIRED, **(extra or {})}.items():
@@ -441,6 +441,19 @@ def test_repo_config__learnings_threshold_below_one_clamps(caplog):
     config = parse_repo_config("learnings:\n  digest_threshold: 0\n")
     assert config.learnings.digest_threshold == 10
     assert "themis_invalid_digest_threshold" in caplog.text
+
+
+def test_load_settings__trusted_bots_unset__empty(monkeypatch):
+    _set_env(monkeypatch)
+    assert load_settings().trusted_bots == frozenset()
+
+
+def test_load_settings__trusted_bots__normalized(monkeypatch):
+    _set_env(
+        monkeypatch,
+        extra={"THEMIS_TRUSTED_BOTS": " Fixer-Bot[bot], helper ,, "},
+    )
+    assert load_settings().trusted_bots == frozenset({"fixer-bot", "helper"})
 
 
 def test_load_settings__data_root_from_env(monkeypatch):

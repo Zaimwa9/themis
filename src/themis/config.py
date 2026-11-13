@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from themis.engines import ENGINE_NAMES
+from themis.events import normalize_bot_login
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +373,18 @@ class Settings:
     data_root: Path = field(default_factory=lambda: Path.home() / ".themis")
     default_repo_config: str | None = None  # fallback .themis/config.yaml text
     repos: frozenset[str] | None = None  # THEMIS_REPOS allowlist; None = all
+    # THEMIS_TRUSTED_BOTS: normalized bot logins whose review-thread replies
+    # may start a discussion job; every other bot sender stays ignored.
+    trusted_bots: frozenset[str] = frozenset()
     concurrency: int = 1  # parallel queue consumers, 1..MAX_CONCURRENCY
+
+def _env_trusted_bots() -> frozenset[str]:
+    """THEMIS_TRUSTED_BOTS: comma-separated bot logins, ``[bot]`` optional."""
+    raw = os.getenv("THEMIS_TRUSTED_BOTS") or ""
+    return frozenset(
+        login for part in raw.split(",") if (login := normalize_bot_login(part))
+    )
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -499,4 +511,5 @@ def load_settings() -> Settings:
             else None
         ),
         concurrency=_env_concurrency(),
+        trusted_bots=_env_trusted_bots(),
     )
